@@ -62,15 +62,83 @@ register a dataset -> confirm the mapping -> preprocess -> build the panel
 | Data | pandas, Polars, NumPy, PyArrow, streaming `pyxlsb` / `openpyxl` readers |
 | Tests | pytest (backend), Vitest + React Testing Library (frontend) |
 
-## Quick start
+## Setup
 
-One-time setup:
+### Prerequisites
+
+| Tool | Version used | Note |
+|---|---|---|
+| Python | 3.12.10 | 3.12 specifically — `pmdarima` and the TensorFlow CPU wheel are pinned against it |
+| Node.js | 24.19.0 | 20+ is enough for Vite 6 |
+| npm | 11.17.0 | ships with Node |
+| OS | Windows | the helper scripts are PowerShell; the commands underneath are plain `python` / `npm` and run anywhere |
+
+### What a clone does not contain
+
+Three things are deliberately gitignored, and the application will not serve
+data until you supply the first two:
+
+| Missing | Why | What to do |
+|---|---|---|
+| `data/source/` | Five AIS client files, ~151 MB, not ours to publish | Obtain them from AIS and place them in `data/source/` with their original names (see **Source files** below) |
+| `backend/.env` | Holds an API key | `cp backend/.env.example backend/.env` |
+| `runtime/` | Generated — database, MLflow, Parquet, logs | Created on first run |
+
+`data/scoped/*.parquet` **is** committed: a 2-branch × 20-SKU derived slice.
+It is a convenience export, not the system of record, and nothing reads it at
+runtime.
+
+#### Source files
+
+Exact filenames, because the readers match on them:
+
+```
+data/source/Location Master.csv
+data/source/Orders & Receipts (Lead Time).xlsx
+data/source/Sales Data FY 24~26.xlsb
+data/source/Stock in Hand as on 1st Aug'26.xlsx
+data/source/Substitution Mapping.xlsx
+```
+
+These are read-only. Nothing in this repository writes to them.
+
+### 1. Install
 
 ```bash
 powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
 ```
 
-Then, in two terminals:
+Creates `backend/.venv`, installs `requirements.txt`, then runs `npm install`.
+Equivalent by hand:
+
+```bash
+cd backend && python -m venv .venv && ./.venv/Scripts/python.exe -m pip install -r requirements.txt
+```
+
+```bash
+cd frontend && npm install
+```
+
+### 2. Configure
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+Then read it. Two settings decide what the application shows:
+
+- **`AIS_WORKSPACE_BRANCHES` / `AIS_WORKSPACE_SKUS`** — the slice every page
+  reports on. Shipped set to the POC's two branches and twenty SKUs. Leave both
+  blank for the whole network. This is not a UI filter; it is stated on every
+  payload as `workspace_scope` (D-049).
+- **`OPENAI_API_KEY`** — optional. Blank is fine: the AI Assistant and AI
+  Recommendations pages fall back to templates and **say so on the page**.
+  Every other page is unaffected. The key never reaches the browser — React
+  calls this backend, and the backend calls OpenAI.
+
+### 3. Start
+
+Two terminals:
 
 ```bash
 powershell -ExecutionPolicy Bypass -File scripts/start_backend.ps1
@@ -84,7 +152,55 @@ powershell -ExecutionPolicy Bypass -File scripts/start_frontend.ps1
 - API docs — http://127.0.0.1:8000/api/docs
 - Health — http://127.0.0.1:8000/api/health
 
-Tests:
+Migrations run at startup; there is no separate `alembic upgrade` step.
+
+### 4. Load the data
+
+A fresh database is empty, and the pages will render honest empty states until
+it is not. The chain is nine POSTs against the running API — there is no UI
+route for it, because the pages that drove it were unrouted (D-052, D-057).
+
+```
+POST /api/datasets                              register + ingest the five files
+POST /api/datasets/{id}/mapping/versions        create a column mapping
+POST /api/mappings/{id}/validate                run the structural controls
+POST /api/mappings/{id}/confirm                 accept the mapping
+POST /api/mappings/{id}/preprocess              -> preprocessing_run_id
+POST /api/panel/builds                          -> panel_build_id
+POST /api/training                              -> training_run_id
+POST /api/models/champions/select               pick a champion per scope
+POST /api/forecasts/runs                        refit, quantiles, reconcile
+```
+
+Each returns **202** with an id and runs on the background job runner; poll the
+matching `GET` for `status` and `progress_pct`. Nothing long-running happens
+inside a request handler.
+
+Two of these have a trap worth knowing before you hit it:
+
+- **`champions/select` defaults to every scope kind except `series`.** On a
+  49-scope run that selects 9, returns success, and leaves Forecasting serving
+  an older run's champions. Pass them explicitly:
+  `{"scope_kinds": ["overall","region","branch","value_class","product_group","series"]}`
+  (D-084).
+- **`forecasts/runs` takes `horizons` as a list**, not a count:
+  `{"horizons": [1,2,3,4,5,6], "reconciliation": "mint_shrinkage"}`.
+
+Measured timings on the POC slice — 2 branches, 20 SKUs, 49 scopes:
+
+```
+ingestion    ~475 s   streams ~2.6 M rows (docs/API_CONTRACT.md)
+training      469 s   833 fits = 17 candidates x 49 scopes
+forecast       84 s   294 rows = 49 scopes x 6 months
+```
+
+A full-network run is very much larger. `POST /api/training/estimate` returns a
+cost projection before you commit to one; it currently runs about **54% high**
+on the aggregate tier, which is the safe direction for a warning.
+
+Training can also be started from the **Training** tab once a panel exists.
+
+### 5. Tests
 
 ```bash
 powershell -ExecutionPolicy Bypass -File scripts/run_tests.ps1
@@ -97,13 +213,18 @@ cd backend && ./.venv/Scripts/python.exe -m pytest
 ```
 
 ```bash
-cd frontend && npm run test
+cd frontend && npm run test && npx tsc --noEmit
 ```
+
+915 backend, 233 frontend. **The tests need no database, no API key and no
+`data/source/`** — every model path is exercised against a stub — so a clone
+can verify itself before any client file arrives. That is the fastest way to
+confirm an install is sound.
 
 ## Layout
 
 ```
-data/source/     the five client files, read-only, never modified
+data/source/     the five client files, read-only, gitignored (see Setup)
 docs/            architecture, contracts, model inventory, decisions, validation
 backend/
   app/
@@ -119,7 +240,7 @@ backend/
   tests/
 frontend/src/
   api/           the single HTTP client
-  features/      ten pages, one folder each
+  features/      one folder per page; 7 are routed, the rest kept but unrouted
   components/    layout + reusable design system
 runtime/         generated: database, MLflow, Parquet, logs (gitignored)
 scripts/         setup and start/test helpers
