@@ -73,6 +73,25 @@ register a dataset -> confirm the mapping -> preprocess -> build the panel
 | npm | 11.17.0 | ships with Node |
 | OS | Windows | the helper scripts are PowerShell; the commands underneath are plain `python` / `npm` and run anywhere |
 
+### Clone to a short path (Windows)
+
+```bash
+git clone https://github.com/vijju396/Ahai-Glass.git C:/dev/ais
+```
+
+Not a preference. `statsmodels` ships compiled extensions, and Windows applies
+the 260-character `MAX_PATH` limit when **loading a DLL** even with
+`LongPathsEnabled=1` set in the registry. Cloning under a long path was measured
+to break 29 tests with:
+
+```
+ImportError: DLL load failed while importing _innovations:
+The filename or extension is too long.
+```
+
+A clone root under ~80 characters is comfortable; 159 characters was not.
+Nothing is wrong with the checkout when this happens — move it and re-run.
+
 ### What a clone does not contain
 
 Three things are deliberately gitignored, and the application will not serve
@@ -200,6 +219,28 @@ on the aggregate tier, which is the safe direction for a warning.
 
 Training can also be started from the **Training** tab once a panel exists.
 
+#### What the pages show before any of this has run
+
+Verified against a fresh clone with an empty database. Nothing is broken here —
+these are the honest empty states, each carrying its own remediation:
+
+| Page | Before data |
+|---|---|
+| Overall Analysis, Per Branch & SKU | `409` — "No completed panel build exists yet. **What to do:** register a dataset, confirm the mapping…" |
+| Supply Intelligence | `409` — "No completed preprocessing run exists yet." |
+| Training, Forecasting, AI Assistant, AI Recommendations | Render; their data sections stay empty |
+
+`GET /api/health` returns **200** with `status: "error"` and names the component
+at fault — `source_data: "data/source is missing."` — so a misconfigured install
+is distinguishable from a merely empty one. `model_registry` reports
+`13 of 13 models registered` either way.
+
+One thing to know: the frontend reaches the API through **Vite's same-origin
+proxy** (`/api` → `127.0.0.1:8000`, in `vite.config.ts`). Pointing
+`VITE_API_BASE` at an absolute cross-origin URL instead will fail CORS, and
+every page will then claim the backend is unreachable. Change the proxy target,
+not the base URL.
+
 ### 5. Tests
 
 ```bash
@@ -220,6 +261,10 @@ cd frontend && npm run test && npx tsc --noEmit
 `data/source/`** — every model path is exercised against a stub — so a clone
 can verify itself before any client file arrives. That is the fastest way to
 confirm an install is sound.
+
+Measured on a fresh clone of this repository: `setup.ps1` exited 0, then 915
+backend tests passed in 78 s and 233 frontend tests in 15 s, with `backend/.env`
+copied straight from the example and `OPENAI_API_KEY` left blank.
 
 ## Layout
 
