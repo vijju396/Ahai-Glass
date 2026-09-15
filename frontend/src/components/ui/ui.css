@@ -1,0 +1,317 @@
+/* Reusable primitives. No page defines its own colours or spacing. */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+}
+.card-header {
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.card-header .sub {
+  color: var(--ink-2);
+  font-size: 12.5px;
+  margin-top: 2px;
+}
+.card-body { padding: var(--sp-5); }
+.card-body.tight { padding: var(--sp-4); }
+
+/* --- status pill: the leaderboard's core vocabulary ------------------- */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.pill::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+.pill-ok { background: var(--ok-soft); color: var(--ok); border-color: var(--ok); }
+.pill-warn { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+.pill-crit { background: var(--crit-soft); color: var(--crit); border-color: var(--crit); }
+.pill-info { background: var(--info-soft); color: var(--info); border-color: var(--info); }
+.pill-neutral { background: var(--neutral-soft); color: var(--neutral); border-color: var(--rule-2); }
+.pill-accent { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+/* --- stat tile --------------------------------------------------------- */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.tile { background: var(--surface); padding: var(--sp-4); }
+.tile .k {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+}
+.tile .v {
+  font-size: 25px;
+  font-weight: 650;
+  line-height: 1.1;
+  margin-top: var(--sp-2);
+  font-variant-numeric: tabular-nums;
+}
+.tile .s { font-size: 12px; color: var(--ink-2); margin-top: 5px; }
+.tile.is-crit .v { color: var(--crit); }
+.tile.is-ok .v { color: var(--ok); }
+.tile.is-warn .v { color: var(--warn); }
+
+/* --- table ------------------------------------------------------------- */
+.table-scroll { overflow-x: auto; }
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+table.data th,
+table.data td {
+  padding: 9px var(--sp-3);
+  text-align: left;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+table.data th {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+  background: var(--surface-2);
+  position: sticky;
+  top: 0;
+  white-space: nowrap;
+}
+table.data td.num,
+table.data th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.data tbody tr:hover { background: var(--surface-2); }
+table.data tbody tr:last-child td { border-bottom: none; }
+table.data .dim { color: var(--ink-3); }
+
+/* --- button ------------------------------------------------------------ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule-2);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 550;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--ink-3); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+/* --- skeleton ---------------------------------------------------------- */
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* --- empty / error states ---------------------------------------------- */
+.state {
+  padding: var(--sp-7) var(--sp-5);
+  text-align: center;
+  color: var(--ink-2);
+}
+.state h3 { color: var(--ink); margin-bottom: var(--sp-2); }
+.state p { max-width: 62ch; margin: 0 auto var(--sp-3); }
+.state .mark {
+  width: 34px; height: 34px; margin: 0 auto var(--sp-4);
+  border-radius: 50%; display: grid; place-items: center;
+  background: var(--surface-2); border: 1px solid var(--rule);
+  font-size: 16px;
+}
+.state-error .mark { background: var(--crit-soft); border-color: var(--crit); color: var(--crit); }
+
+/* --- callout ----------------------------------------------------------- */
+.callout {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-4);
+  font-size: 13px;
+}
+.callout.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+.callout.crit { border-left-color: var(--crit); background: var(--crit-soft); }
+.callout .h { font-weight: 650; margin-bottom: 5px; }
+.callout p:last-child { margin-bottom: 0; }
+
+/* --- toast ------------------------------------------------------------- */
+.toast-region {
+  position: fixed;
+  right: var(--sp-5);
+  bottom: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  z-index: 60;
+  max-width: 380px;
+}
+.toast {
+  background: var(--surface);
+  border: 1px solid var(--rule-2);
+  border-left: 3px solid var(--info);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: 13px;
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+.toast.ok { border-left-color: var(--ok); }
+.toast.error { border-left-color: var(--crit); }
+.toast .close {
+  background: none; border: none; color: var(--ink-3);
+  padding: 0 2px; font-size: 15px; line-height: 1;
+}
+
+/* --- forms and controls ------------------------------------------------ */
+/* Added for the Phase 11 pages: run submission, filters and selectors. The
+   focus ring is never removed - keyboard operation is a requirement, not a
+   preference. */
+.field-group {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-4);
+  margin: 0 0 var(--sp-4);
+  display: grid;
+  gap: var(--sp-3);
+}
+.check-row {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+  cursor: pointer;
+  font-size: 13px;
+}
+.check-row input { margin-top: 3px; flex: none; }
+.check-row strong { display: block; }
+.field {
+  display: grid;
+  gap: 4px;
+  margin-bottom: var(--sp-4);
+  max-width: 42ch;
+  font-size: 12px;
+  font-weight: 600;
+}
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  align-items: flex-end;
+  margin-bottom: var(--sp-4);
+}
+.field-row .field { margin-bottom: 0; }
+.field input,
+.field select,
+.field textarea {
+  font: inherit;
+  font-weight: 400;
+  padding: 7px 9px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-1);
+  min-width: 16ch;
+}
+.field input:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible,
+.check-row input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.hint {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--ink-3);
+  line-height: 1.45;
+  margin: 4px 0 0;
+}
+.actions {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  margin-top: var(--sp-4);
+}
+
+/* --- inline metric strip ----------------------------------------------- */
+/* Lighter than `.tiles`, for a run's live counters. */
+.metric-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-5);
+  margin: 0 0 var(--sp-4);
+}
+.metric { display: grid; gap: 2px; }
+.metric-label {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.metric-value {
+  font-size: 17px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.estimate {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+.estimate .metric-row { margin-bottom: var(--sp-3); }
+
+/* --- chart frame ------------------------------------------------------- */
+.chart { width: 100%; min-height: 260px; }
+.chart-note {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  margin-top: var(--sp-2);
+}

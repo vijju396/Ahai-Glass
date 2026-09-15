@@ -1,0 +1,1790 @@
+<title>Forecasting the AIS Glass Network</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --ground:#f7f8f6; --surface:#ffffff; --surface-2:#eef1ee; --surface-3:#e3e8e4;
+  --ink:#111614; --ink-2:#4e5a55; --ink-3:#77837d;
+  --rule:#d5dcd7; --rule-2:#c2ccc5;
+  --accent:#0f6f5c; --accent-soft:#e0efe9;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+  --good:#1baf7a; --warn:#eda100; --crit:#e34948; --crit-soft:#fbeaea;
+  --grid:#e6ebe7;
+  --shadow:0 1px 2px rgba(17,22,20,.05),0 8px 24px -12px rgba(17,22,20,.14);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#121614; --surface:#181d1b; --surface-2:#1f2523; --surface-3:#28302d;
+    --ink:#f2f5f3; --ink-2:#b3bfb9; --ink-3:#8b9791;
+    --rule:#2c3532; --rule-2:#3a4440;
+    --accent:#4fbfa4; --accent-soft:#16302a;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+    --good:#199e70; --warn:#c98500; --crit:#e66767; --crit-soft:#33201f;
+    --grid:#242c29;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#121614; --surface:#181d1b; --surface-2:#1f2523; --surface-3:#28302d;
+  --ink:#f2f5f3; --ink-2:#b3bfb9; --ink-3:#8b9791;
+  --rule:#2c3532; --rule-2:#3a4440;
+  --accent:#4fbfa4; --accent-soft:#16302a;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+  --good:#199e70; --warn:#c98500; --crit:#e66767; --crit-soft:#33201f;
+  --grid:#242c29;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);
+  font-family:"Newsreader",Georgia,"Times New Roman",serif;
+  font-size:17px;line-height:1.62;-webkit-font-smoothing:antialiased;}
+h1,h2,h3,h4,.ui{font-family:"Archivo","Helvetica Neue",Arial,sans-serif;}
+.mono,code,th,.num,.eyebrow,figcaption,.tag,svg text{font-family:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;}
+.num{font-variant-numeric:tabular-nums;}
+
+/* ---------- shell ---------- */
+.wrap{max-width:1240px;margin:0 auto;padding:0 28px;}
+.layout{display:grid;grid-template-columns:1fr;gap:0;}
+@media(min-width:1080px){.layout{grid-template-columns:216px minmax(0,1fr);gap:56px;align-items:start;}}
+nav.toc{display:none;}
+@media(min-width:1080px){
+  nav.toc{display:block;position:sticky;top:24px;padding:24px 0 40px;font-family:"Archivo",sans-serif;font-size:12.5px;line-height:1.45;}
+}
+nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:toc;}
+nav.toc li{counter-increment:toc;margin:0 0 3px;}
+nav.toc a{display:flex;gap:9px;padding:5px 8px;border-radius:4px;color:var(--ink-2);text-decoration:none;border-left:2px solid transparent;}
+nav.toc a::before{content:counter(toc,decimal-leading-zero);color:var(--ink-3);font-family:"IBM Plex Mono",monospace;font-size:10.5px;padding-top:1px;}
+nav.toc a:hover{background:var(--surface-2);color:var(--ink);}
+nav.toc a:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+nav.toc a.on{color:var(--accent);border-left-color:var(--accent);background:var(--accent-soft);}
+main{min-width:0;padding-bottom:96px;}
+section{scroll-margin-top:20px;}
+.col{max-width:68ch;}
+
+/* ---------- masthead ---------- */
+header.mast{padding:52px 0 30px;border-bottom:1px solid var(--rule);margin-bottom:44px;}
+.eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600;}
+h1{font-size:clamp(34px,5.4vw,58px);line-height:1.02;font-weight:700;letter-spacing:-.028em;
+   margin:16px 0 0;text-wrap:balance;max-width:16ch;}
+.standfirst{font-size:20px;line-height:1.5;color:var(--ink-2);max-width:58ch;margin:20px 0 0;}
+.mast-meta{display:flex;flex-wrap:wrap;gap:10px 26px;margin-top:28px;font-size:11.5px;
+  letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);font-family:"IBM Plex Mono",monospace;}
+
+/* ---------- type ---------- */
+h2{font-size:clamp(25px,3vw,33px);line-height:1.13;font-weight:700;letter-spacing:-.02em;margin:0;text-wrap:balance;}
+h3{font-size:19px;font-weight:600;letter-spacing:-.008em;margin:38px 0 10px;text-wrap:balance;}
+h4{font-size:14px;font-weight:600;letter-spacing:.02em;margin:26px 0 8px;color:var(--ink-2);}
+p{margin:0 0 17px;}
+a{color:var(--accent);}
+strong{font-weight:600;color:var(--ink);}
+.lede{font-size:19px;line-height:1.55;color:var(--ink-2);}
+ul,ol{margin:0 0 18px;padding-left:20px;}
+li{margin-bottom:8px;}
+li::marker{color:var(--ink-3);}
+code{background:var(--surface-2);border:1px solid var(--rule);border-radius:3px;
+  padding:1px 5px;font-size:.83em;color:var(--ink);}
+.sechead{display:flex;align-items:baseline;gap:16px;border-top:2px solid var(--ink);
+  padding-top:14px;margin:76px 0 22px;}
+.sechead .n{font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:600;color:var(--accent);padding-top:6px;}
+section:first-of-type .sechead{margin-top:0;}
+.deck{color:var(--ink-2);font-size:17.5px;max-width:66ch;margin:-6px 0 26px;}
+
+/* ---------- components ---------- */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:1px;
+  background:var(--rule);border:1px solid var(--rule);border-radius:7px;overflow:hidden;margin:26px 0 30px;}
+.tile{background:var(--surface);padding:16px 17px 15px;}
+.tile .k{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:9px;}
+.tile .v{font-family:"Archivo",sans-serif;font-size:27px;font-weight:700;letter-spacing:-.02em;
+  line-height:1;font-variant-numeric:tabular-nums;}
+.tile .s{font-size:12.5px;color:var(--ink-2);margin-top:7px;line-height:1.4;font-family:"Archivo",sans-serif;}
+.tile.hot .v{color:var(--crit);}
+.tile.good .v{color:var(--accent);}
+
+figure{margin:34px 0;background:var(--surface);border:1px solid var(--rule);
+  border-radius:8px;padding:22px 22px 16px;box-shadow:var(--shadow);}
+figure .ftitle{font-family:"Archivo",sans-serif;font-size:15px;font-weight:600;letter-spacing:-.005em;margin-bottom:3px;}
+figure .fsub{font-size:13px;color:var(--ink-2);margin-bottom:18px;font-family:"Archivo",sans-serif;line-height:1.45;}
+figcaption{font-size:11.5px;color:var(--ink-3);line-height:1.5;margin-top:14px;
+  padding-top:11px;border-top:1px solid var(--rule);}
+.scroller{overflow-x:auto;}
+svg{display:block;max-width:100%;height:auto;}
+svg text{fill:var(--ink-2);font-size:11px;}
+svg .axlab{fill:var(--ink-3);font-size:10px;}
+svg .val{fill:var(--ink);font-size:11px;font-weight:600;}
+.gridline{stroke:var(--grid);stroke-width:1;}
+.axis{stroke:var(--rule-2);stroke-width:1;}
+
+.legend{display:flex;flex-wrap:wrap;gap:7px 18px;margin:0 0 14px;
+  font-family:"Archivo",sans-serif;font-size:12px;color:var(--ink-2);}
+.legend span{display:inline-flex;align-items:center;gap:7px;}
+.sw{width:11px;height:11px;border-radius:2.5px;flex:none;}
+.sw.line{height:3px;border-radius:2px;width:16px;}
+
+table{border-collapse:collapse;width:100%;font-size:13px;margin:6px 0 8px;
+  font-family:"Archivo",sans-serif;}
+th{text-align:left;font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--ink-3);font-weight:500;
+  padding:0 12px 9px;border-bottom:1px solid var(--rule-2);white-space:nowrap;}
+td{padding:9px 12px;border-bottom:1px solid var(--rule);vertical-align:top;line-height:1.45;}
+tbody tr:last-child td{border-bottom:none;}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;font-family:"IBM Plex Mono",monospace;}
+tr.total td{font-weight:600;border-top:1.5px solid var(--rule-2);background:var(--surface-2);}
+.tbl{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+  padding:18px 8px 8px;margin:26px 0;overflow-x:auto;box-shadow:var(--shadow);}
+.tbl .ftitle{font-family:"Archivo",sans-serif;font-size:15px;font-weight:600;margin:0 12px 3px;}
+.tbl .fsub{font-size:13px;color:var(--ink-2);margin:0 12px 16px;font-family:"Archivo",sans-serif;}
+
+.tag{display:inline-block;font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  padding:2.5px 7px;border-radius:3px;font-weight:500;white-space:nowrap;}
+.tag.g{background:var(--accent-soft);color:var(--accent);}
+.tag.r{background:var(--crit-soft);color:var(--crit);}
+.tag.n{background:var(--surface-3);color:var(--ink-2);}
+
+.callout{border-left:3px solid var(--accent);background:var(--accent-soft);
+  padding:16px 20px;border-radius:0 6px 6px 0;margin:26px 0;font-size:16px;}
+.callout.warn{border-left-color:var(--crit);background:var(--crit-soft);}
+.callout .h{font-family:"Archivo",sans-serif;font-weight:600;font-size:13px;
+  letter-spacing:.02em;margin-bottom:6px;}
+.callout p:last-child{margin-bottom:0;}
+
+.split{display:grid;gap:20px;margin:26px 0;}
+@media(min-width:760px){.split.two{grid-template-columns:1fr 1fr;}}
+@media(min-width:760px){.split3{grid-template-columns:1fr 1fr 1fr;}}
+.split3{display:grid;gap:18px;margin:26px 0;}
+.split>div>.h,.split3>div>.h{font-family:"Archivo",sans-serif;font-weight:600;font-size:13px;
+  letter-spacing:.02em;margin-bottom:8px;color:var(--ink);}
+.split>div>ul,.split3>div>ul{padding-left:18px;margin:0;}
+.split>div>ul li,.split3>div>ul li{margin-bottom:6px;}
+.flowcard{background:var(--surface);border:1px solid var(--rule);border-radius:8px;
+  padding:16px 18px;box-shadow:var(--shadow);}
+.flowcard ol{padding-left:18px;margin:0;font-size:14px;}
+.flowcard ol li{margin-bottom:7px;}
+.flowcard .fnote{margin:12px 0 0;font-size:12px;color:var(--ink-3);font-style:italic;}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:8px;padding:18px 20px;}
+.card h4{margin-top:0;}
+.card p:last-child,.card ul:last-child{margin-bottom:0;}
+.card ul{padding-left:18px;}
+
+.tip{position:fixed;pointer-events:none;z-index:60;background:var(--ink);color:var(--ground);
+  border-radius:5px;padding:7px 10px;font-family:"IBM Plex Mono",monospace;font-size:11px;
+  line-height:1.5;white-space:nowrap;opacity:0;transition:opacity .1s;box-shadow:0 6px 20px rgba(0,0,0,.28);}
+.tip.on{opacity:1;}
+.hit{cursor:crosshair;}
+footer{border-top:1px solid var(--rule);margin-top:70px;padding:26px 0 60px;
+  font-size:12px;color:var(--ink-3);font-family:"Archivo",sans-serif;}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important;}}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px;}
+</style>
+
+<div class="tip" id="tip"></div>
+<div class="wrap">
+<header class="mast">
+  <div class="eyebrow">AIS Consumer Glass Solutions &middot; Demand forecasting by location and SKU</div>
+  <h1>How We Will Forecast the Network</h1>
+  <p class="standfirst">What the data says, the method we will use to predict demand by branch and
+  SKU, the platform it runs on, and what it costs to run.</p>
+  <div class="mast-meta">
+    <span>Prepared for ACI Infotech</span><span>Data received 27 Aug 2026</span>
+    <span>51 branches &middot; 2,260 SKUs &middot; 63,210 series</span><span>Every figure recomputed from source</span>
+  </div>
+</header>
+
+<div class="layout">
+<nav class="toc" aria-label="Contents"><ol>
+  <li><a href="#s1">The data</a></li>
+  <li><a href="#s2">Demand structure</a></li>
+  <li><a href="#s3">Service &amp; stock</a></li>
+  <li><a href="#s4">How the forecast works</a></li>
+  <li><a href="#s5">Accuracy to plan for</a></li>
+  <li><a href="#s6">Why these choices</a></li>
+  <li><a href="#s7">Platform &amp; architecture</a></li>
+  <li><a href="#s8">Cost</a></li>
+  <li><a href="#s9">Open decisions</a></li>
+</ol></nav>
+
+<main>
+
+<section id="s0">
+  <p class="lede">The task is to predict demand for the coming months, per branch and per SKU. This
+  document sets out the method we will use and why, the platform it runs on, and what it costs.
+  The approach is settled rather than speculative: we have already built and validated it against
+  your own history. What remains is to run it in your tenancy, on a schedule, writing output your
+  planners can use.</p>
+
+  <div class="callout">
+    <div class="h">Where this stands today</div>
+    <p><strong>Done.</strong> The five files are parsed and joined, the defects catalogued, and the
+    63,210-series monthly panel built and reconciled to the sheet totals. A global model has been
+    trained on 948,150 rows and validated six months forward with no retraining, together with the
+    q80/q90/q95 stocking models. The accuracy in &sect;5 is measured, not estimated.</p>
+    <p><strong>Not done.</strong> None of this is in your environment. There is no scheduled job, no
+    registered model, no serving store, and no planner-facing output. That is the build described in &sect;7 &mdash; it is a matter of days, not months, because the hard
+    question of whether the approach works is already answered.</p>
+  </div>
+
+  <div class="tiles">
+    <div class="tile"><div class="k">Forecast grain</div><div class="v num">63,210</div>
+      <div class="s">branch &times; SKU series, monthly</div></div>
+    <div class="tile"><div class="k">Horizon per run</div><div class="v num">6 months</div>
+      <div class="s">one model, no retraining between</div></div>
+    <div class="tile"><div class="k">Retrain cadence</div><div class="v num">Quarterly</div>
+      <div class="s">measured decay justifies it</div></div>
+    <div class="tile good"><div class="k">Branch-level accuracy</div><div class="v num">10.9%</div>
+      <div class="s">WMAPE over the six-month plan</div></div>
+    <div class="tile"><div class="k">Run cost</div><div class="v num">$15/mo</div>
+      <div class="s">plus $9 once to build it</div></div>
+  </div>
+
+  <div class="callout">
+    <div class="h">The four facts that shaped the design</div>
+    <p><strong>1.</strong> Demand is a power law &mdash; 61 of 2,260 SKUs make half the volume, so the
+    model only has to be excellent on a small core and merely sensible on the tail.
+    <strong>2.</strong> Aggregate demand is stable and mildly seasonal, but individual series are 62%
+    intermittent, so accuracy is quoted per segment and never as one headline number.
+    <strong>3.</strong> 43% of stock value sits where there has been no demand for six months, while
+    20,945 combinations with live demand hold zero stock &mdash; a placement problem a forecast fixes.
+    <strong>4.</strong> One training run holds its accuracy across six months, which is what makes
+    a small, cheap, quarterly-cadence platform the right answer rather than a compromise.</p>
+  </div>
+</section>
+
+<section id="s1">
+  <div class="sechead"><span class="n">01</span><h2>The data and how it joins</h2></div>
+  <p class="deck">Five files, 150 MB, of which two carry the substance. Everything below was
+  recomputed from source rather than read off the sheets' own totals.</p>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>File</th><th class="num">Rows</th><th>Grain &amp; period</th><th>Use</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Sales Data FY 24~26</strong> <span style="color:var(--ink-3)">.xlsb</span></td>
+            <td class="num">1,703,042</td><td>Invoice line, Apr 2024 &ndash; Mar 2026</td><td>Training target &mdash; 24 months</td></tr>
+        <tr><td><strong>Orders &amp; Receipts</strong> <span style="color:var(--ink-3)">.xlsx</span></td>
+            <td class="num">775,912</td><td>Order line, Apr 2025 &ndash; Jul 2026</td><td>True demand + lead times</td></tr>
+        <tr><td><strong>Stock in Hand</strong> <span style="color:var(--ink-3)">.xlsx</span></td>
+            <td class="num">144,921</td><td>Branch &times; SKU, 1 Aug 2026</td><td>Opening position</td></tr>
+        <tr><td><strong>Substitution Mapping</strong> <span style="color:var(--ink-3)">.xlsx</span></td>
+            <td class="num">2,417</td><td>SKU master</td><td>Covariates &mdash; joins 99.9% of order lines</td></tr>
+        <tr><td><strong>Location Master</strong> <span style="color:var(--ink-3)">.csv</span></td>
+            <td class="num">57</td><td>Branch master</td><td>Hierarchy, lead times</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The join key</h3>
+  <p><code>UPPER(branch) &times; oracle_no &times; month</code> links all five tables. The order file's
+  depot field looks like 110 distinct depots but is only case-inconsistent &mdash;
+  <code>Jaipur</code>, <code>JAIPUR</code>, <code>JODhPUR</code>. Uppercasing collapses it to
+  <strong>53</strong>, all matching Location Master branch codes. <code>Product Code</code> carries an
+  <code>.AFM</code> suffix that <code>Oracle No</code> does not; strip it before joining.</p>
+
+  <div class="tbl">
+    <div class="ftitle">Defects to handle in the load step</div>
+    <table>
+      <thead><tr><th>Issue</th><th>Extent</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Columns transposed between sales sheets</strong></td><td>FY 25-26 sheet</td>
+          <td><code>Product Name</code> and <code>HSN Code</code> are swapped relative to the header; FY 24-25 is correct. Detect by type, not position.</td></tr>
+        <tr><td>Extra column in FY 24-25</td><td><code>Doc Series</code></td><td>Union by name, never by position</td></tr>
+        <tr><td>Case variants</td><td>110 &rarr; 53 depots</td><td>Uppercase on landing; same for <code>Tempered</code>/<code>TEMPERED</code></td></tr>
+        <tr><td>Excel serial dates</td><td>.xlsb only</td><td>Convert on the 1899-12-30 epoch</td></tr>
+        <tr><td>Missing GRN dates</td><td class="num">24,304</td><td>Coded <code>00-00-0000</code> on 49% of stocked rows</td></tr>
+        <tr><td>Unclassified stock</td><td class="num">44,016</td><td>33% of stock value has no A/B/C/D class</td></tr>
+        <tr><td>Dead columns</td><td class="num">3</td><td><code>Replenishment A/B/C</code> are zero for all 57 branches</td></tr>
+        <tr><td>Negative stock</td><td class="num">2</td><td>Clamp and flag</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="s2">
+  <div class="sechead"><span class="n">02</span><h2>Demand structure</h2></div>
+  <p class="deck">The parameters that decide what kind of model is appropriate. Several of these
+  span orders of magnitude, so they are drawn on logarithmic axes &mdash; on a linear axis the tail
+  that carries most of the SKUs would be an invisible smear against the baseline.</p>
+
+  <h3>Demand is a power law</h3>
+  <p>Ranking all 2,260 SKUs by volume produces an almost perfectly straight line on log-log axes,
+  the signature of a power-law distribution. <strong>61 SKUs &mdash; 2.7% of the range &mdash; make half of
+  all units.</strong> 297 make 80%. The bottom 1,049 SKUs together account for 1% of volume. The
+  practical consequence is that a model only has to be genuinely good on a few hundred series;
+  the tail should be managed by policy, not prediction.</p>
+
+  <figure>
+    <div class="ftitle">SKU volume by rank &mdash; log-log</div>
+    <div class="fsub">Both axes logarithmic. A straight line on these axes means a power law:
+    each tenfold step down the rank order costs roughly a fixed fraction of volume.</div>
+    <div class="scroller"><div id="c-pareto"></div></div>
+    <figcaption>2,260 SKUs, FY 2024&ndash;26 combined. Markers show the 50 / 80 / 90 / 95 / 99%
+    cumulative-volume thresholds.</figcaption>
+  </figure>
+
+  <figure>
+    <div class="ftitle">Where the series are, and where the units are</div>
+    <div class="fsub">63,210 branch&times;SKU series grouped into logarithmic volume bands. The
+    count of series and the share of units they carry point in opposite directions.</div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--s1)"></i>number of series (log axis)</span>
+      <span><i class="sw" style="background:var(--s3)"></i>share of total units</span>
+    </div>
+    <div class="scroller"><div id="c-hist"></div></div>
+    <figcaption>13,308 series sold 1&ndash;2 units in two years and account for 0.58% of volume.
+    The 448 series above 3,000 units carry 8.7%. One series exceeds 10,000.</figcaption>
+  </figure>
+
+  <h3>Two populations</h3>
+  <p>On the Syntetos&ndash;Boylan scheme (&sect;6), <strong>14.9% of series are smooth and carry 80% of
+  value</strong>; <strong>62.4% are intermittent and carry 14.5%</strong>. Median average demand interval
+  is 4.0 months and median CV&sup2; of non-zero sizes is 0.13. Only 31.7% of series have twelve or
+  more months of non-zero history &mdash; but those carry 92.0% of value.</p>
+
+  <figure>
+    <div class="ftitle">Demand character against commercial weight</div>
+    <div class="fsub">Share of series versus share of MRP value, by Syntetos&ndash;Boylan class.</div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--s1)"></i>share of series</span>
+      <span><i class="sw" style="background:var(--s3)"></i>share of MRP value</span>
+    </div>
+    <div class="scroller"><div id="c-sbc"></div></div>
+    <figcaption>Almost all A-class series are smooth (4,974 of 5,825); almost all C-class series
+    are intermittent or single-month. The two populations need different treatment.</figcaption>
+  </figure>
+
+  <h3>Growth is steady, seasonality is shallow but repeatable</h3>
+  <p>FY&nbsp;25-26 grew <strong>7.9% in volume</strong> and 9.4% in value on FY&nbsp;24-25. The seasonal
+  index runs 86 (April) to 106 (June&ndash;July), and the two years' profiles correlate at
+  <strong>r&nbsp;=&nbsp;0.886</strong>. Because the swings are small relative to the level, the chart below
+  omits the empty space beneath the data and adds a year-on-year panel &mdash; on a zero-based axis
+  these movements would be invisible.</p>
+
+  <figure>
+    <div class="ftitle">Monthly volume and year-on-year change</div>
+    <div class="fsub">Upper panel: monthly units, axis cropped to the data range so the movement
+    is legible. Lower panel: each month against the same month a year earlier.</div>
+    <div class="legend">
+      <span><i class="sw line" style="background:var(--s1)"></i>FY 2024&ndash;25</span>
+      <span><i class="sw line" style="background:var(--s2)"></i>FY 2025&ndash;26</span>
+      <span><i class="sw" style="background:var(--s3)"></i>year-on-year change</span>
+    </div>
+    <div class="scroller"><div id="c-monthly"></div></div>
+    <figcaption>Every month of FY 25-26 grew on its prior-year counterpart, between +4% and +12%.
+    Growth is broad, not driven by one or two months.</figcaption>
+  </figure>
+
+  <figure>
+    <div class="ftitle">Seasonal index by calendar month</div>
+    <div class="fsub">Each year's monthly volume as a percentage of its own average.</div>
+    <div class="legend">
+      <span><i class="sw line" style="background:var(--s1)"></i>FY 2024&ndash;25</span>
+      <span><i class="sw line" style="background:var(--s2)"></i>FY 2025&ndash;26</span>
+    </div>
+    <div class="scroller"><div id="c-season"></div></div>
+    <figcaption>Amplitude 86&ndash;106, correlation 0.886. Real and learnable, but too shallow to
+    carry a forecast on its own.</figcaption>
+  </figure>
+
+  <h3>Useful covariates already present in the data</h3>
+  <p>The substitution master carries attributes that map onto 99.8% of demand and are strong
+  grouping variables for a global model &mdash; particularly vehicle age category, which is the
+  closest available proxy for the size of the vehicle parc in each replacement cohort.</p>
+
+  <figure>
+    <div class="ftitle">Demand mix across the available covariates</div>
+    <div class="fsub">Share of units by vehicle age category, glass type, vehicle category and
+    OEM status. These are the categorical features the model groups on.</div>
+    <div class="scroller"><div id="c-mix"></div></div>
+    <figcaption>Demand peaks in the 9&ndash;15 year cohort (29.1%) and stays high beyond 15 years
+    (25.7%) &mdash; replacement demand tracks the ageing parc, not new sales. Laminated windscreens are
+    64.8% of units; 93.8% of demand is OEM-specification glass.</figcaption>
+  </figure>
+
+  <h3>Concentration by branch</h3>
+  <figure>
+    <div class="ftitle">Branch value concentration</div>
+    <div class="fsub">Top 18 of 51 selling branches by MRP value, FY 2024&ndash;26.</div>
+    <div class="scroller"><div id="c-branch"></div></div>
+    <figcaption>The ten largest branches take 40% of network value; Bengaluru alone 6.4%.</figcaption>
+  </figure>
+</section>
+
+<section id="s3">
+  <div class="sechead"><span class="n">03</span><h2>Service and stock: what the forecast is for</h2></div>
+  <p class="deck">Two measurements that establish why a forecast is worth building here, and both
+  come from comparing files rather than reading any one of them.</p>
+
+  <h3>One in five ordered units is never shipped</h3>
+  <p>Across sixteen months branches ordered <strong>2,602,392 units</strong> and received
+  <strong>2,133,961</strong>. The gap &mdash; <strong>504,052 units, 19.4% of demand</strong>, roughly
+  <strong>&#8377;166 crore</strong> at MRP &mdash; is visible only because the order file records both
+  numbers. Monthly shortfall sat between 10% and 17% through FY 2025-26, then stepped up sharply
+  from March 2026 and reached <strong>37.1% in June 2026</strong>.</p>
+
+  <figure>
+    <div class="ftitle">Ordered versus despatched, and the fill rate</div>
+    <div class="fsub">Upper panel: monthly units ordered and despatched. Lower panel: the ratio,
+    on a cropped axis so the deterioration is legible.</div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--s1)"></i>ordered</span>
+      <span><i class="sw" style="background:var(--s3)"></i>despatched</span>
+      <span><i class="sw line" style="background:var(--s2)"></i>fill rate</span>
+    </div>
+    <div class="scroller"><div id="c-fill"></div></div>
+    <figcaption>Source: 775,912 order lines. 30.0% of depot&times;SKU&times;month cells had some
+    shortfall; 19.3% were served nothing at all.</figcaption>
+  </figure>
+
+  <div class="callout warn">
+    <div class="h">This makes invoiced sales a censored signal</div>
+    <p>Sales record what was available to sell, not what was wanted. A model trained on sales
+    learns the supply constraint and forecasts the stockout forward. <strong>Use the order book as
+    the target</strong> where it exists (Apr 2025 onward) and treat the FY 2024-25 sales period as
+    censored observations. This single choice matters more than the algorithm.</p>
+  </div>
+
+  <h3>The stock is not short &mdash; it is in the wrong places</h3>
+  <p>This is the finding that makes the forecast actionable. Branches hold a <strong>median 75 days
+  of cover</strong>, and 32 of 53 hold more than 60 days. Yet 19.4% of orders go unfilled. Splitting
+  the &#8377;20.91 crore of closing stock against the last six months of demand at the same
+  branch&times;SKU explains why:</p>
+
+  <figure>
+    <div class="ftitle">Stock value against recent demand at the same branch and SKU</div>
+    <div class="fsub">Every rupee of closing stock on 1 Aug 2026, classified by whether that exact
+    branch&times;SKU combination sold anything in the previous six months.</div>
+    <div class="scroller"><div id="c-stockhealth"></div></div>
+    <figcaption>Alongside this, <strong>20,945 branch&times;SKU combinations hold zero stock despite
+    281,937 units of demand in the same six months.</strong> Stock and demand are simply not in the
+    same places.</figcaption>
+  </figure>
+
+  <div class="callout">
+    <div class="h">How much of the shortfall is placement, and how much is genuine shortage</div>
+    <p>Of 1,892 SKUs short somewhere in the network, the same SKUs held
+    <strong>94,522 units in stock elsewhere</strong> against <strong>499,357 units short</strong>. So
+    <strong>about 19% of the shortfall could be met by moving existing stock</strong> &mdash; that part is
+    a forecasting and allocation problem, and it is worth roughly &#8377;31 crore of MRP a year.
+    The remaining 81% does not exist anywhere in the network and needs upstream supply. Both
+    conclusions matter: the forecast is worth building, and it is not sufficient on its own.</p>
+  </div>
+
+  <figure>
+    <div class="ftitle">Days of cover by branch &mdash; log axis</div>
+    <div class="fsub">Closing stock divided by average monthly demand, in days. Logarithmic,
+    because the range runs from under two weeks to over nine months.</div>
+    <div class="scroller"><div id="c-cover"></div></div>
+    <figcaption>Median 75 days, 10th percentile 42, 90th percentile 164. A well-run network with
+    4-day lead times and monthly review would sit far below most of this range.</figcaption>
+  </figure>
+
+  <figure>
+    <div class="ftitle">Unmet demand by depot</div>
+    <div class="fsub">Percentage of ordered units never despatched. Worst eight and best five of 53.</div>
+    <div class="scroller"><div id="c-short"></div></div>
+    <figcaption>The pattern is regional: the north is starved (Rudrapur 54.3%, Jammu 30.1%,
+    Chandigarh 29.7%) while the east is fine (Bhubaneswar 6.6%, Kolkata 9.5%).</figcaption>
+  </figure>
+
+  <h3>Lead times are short and stable</h3>
+  <p>Order-to-despatch runs a <strong>median of 3 days</strong>, 95th percentile 6, maximum 27. Hub
+  means sit in a narrow band: Kolkata 2.6 days, Pune 3.0, Dharuhera 3.2, Kadi 3.4, Chennai 3.5,
+  Roorkee 3.5, with standard deviations of 1.3&ndash;1.8 days. Replenishment risk is therefore
+  dominated by the review period, not transit &mdash; which is good news for a monthly forecast, and
+  means moving to weekly review would cut safety stock further.</p>
+</section>
+
+<section id="s4">
+  <div class="sechead"><span class="n">04</span><h2>How the forecast works</h2></div>
+  <p class="deck">Nine decisions define the method. Each one is settled, and each is here with the
+  reason it was chosen &mdash; the supporting literature is in &sect;6.</p>
+
+  <figure>
+    <div class="ftitle">The pipeline &mdash; one training run per quarter, six months of output per run</div>
+    <div class="fsub">Five stages from order lines to a stocking level per branch and SKU.</div>
+    <div class="scroller"><div id="d-model"></div></div>
+  </figure>
+
+  <h3>1. We forecast what was ordered, not what was shipped</h3>
+  <p>The target variable is <strong>ordered quantity</strong>. This matters more here than in most
+  engagements: 19.4% of ordered units were never despatched (&sect;3), so a model trained on
+  despatches learns to reproduce the stockouts and quietly recommends the stock levels that caused
+  them. Cells where an order went short are flagged as censored, because the true demand there is
+  <em>at least</em> what was ordered and possibly more.</p>
+
+  <h3>2. One global model across all 63,210 series, always</h3>
+  <p>A single model is trained on every series at once rather than one model per branch&times;SKU.
+  With 24 monthly observations per series &mdash; 62% of them zero &mdash; there is not enough local
+  history to fit anything per-series; pooled, there are 948,150 training rows. Sparse series borrow
+  strength from similar ones through the shared branch, region, hub, glass-type and vehicle-class
+  features.</p>
+  <div class="callout">
+    <div class="h">This holds for pilots too</div>
+    <p>If the first phase is scoped to a few branches, <strong>scope the reporting, not the
+    training</strong>. Train on all 63,210 series and publish a scorecard for the pilot branches
+    only. We tested the alternative on your data: training on one branch alone cost 2.6 points of
+    accuracy overall and 8.9 points on its slow-moving lines, and saved no meaningful time &mdash;
+    the full training run is under ten minutes either way.</p>
+    <p>The same property means <strong>a new branch or a newly listed SKU is forecastable
+    immediately</strong>, from its attributes, with no waiting period to accumulate history. Given
+    churn across 2,260 SKU codes, this is a recurring practical benefit rather than an edge case.</p>
+  </div>
+
+  <h3>3. Horizon is a feature, so one model covers all six months</h3>
+  <p>Rather than chaining a one-month model into itself six times &mdash; which compounds its own
+  errors &mdash; the number of months ahead is passed to the model as an input. One fitted model
+  answers &ldquo;what will this branch need in four months?&rdquo; directly. This is the
+  <em>direct multi-horizon</em> strategy, and it is the single design choice that makes one training
+  run per quarter sufficient.</p>
+
+  <h3>4. Twenty-nine features, all computable at the moment of forecast</h3>
+  <div class="split two">
+    <div>
+      <div class="h">History</div>
+      <ul>
+        <li>Lags at 1&ndash;6, 9 and 12 months</li>
+        <li>Rolling mean and standard deviation over 3, 6, 12 months</li>
+        <li>Non-zero counts over 6 and 12 months</li>
+        <li>Length of the current run of zero months</li>
+        <li>Trend as the 3-month mean minus the 6-month mean</li>
+        <li>The same calendar month one year earlier</li>
+      </ul>
+    </div>
+    <div>
+      <div class="h">Attributes</div>
+      <ul>
+        <li>Branch, region, zone, supply hub, branch tier</li>
+        <li>Product group and sub-group, OEM status</li>
+        <li>Vehicle class, glass type, vehicle age band</li>
+        <li>MRP as a continuous feature</li>
+        <li>Months ahead, and calendar month of the target</li>
+      </ul>
+    </div>
+  </div>
+  <p>Nothing in the list uses information unavailable at the time the forecast is made. This is
+  enforced in code by building features only from months strictly before the cut.</p>
+
+  <h3>5. The method is routed by value class, not chosen once</h3>
+  <p>No single method wins everywhere, and pretending otherwise costs accuracy. A-class series are
+  smooth and high-volume, where classical exponential smoothing is genuinely hard to beat; B and C
+  are sparse, where the pooled model's ability to borrow across series pays off.</p>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Class</th><th class="num">Series</th><th class="num">Share of units</th><th>Method</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><strong>A</strong></td><td class="num">5,825</td><td class="num">66%</td><td>Exponential smoothing</td><td>Smooth, dense history; beats the pooled model by 2.0 points</td></tr>
+        <tr><td><strong>B</strong></td><td class="num">13,425</td><td class="num">20%</td><td>Gradient boosting</td><td>Wins by 2.1 points</td></tr>
+        <tr><td><strong>C</strong></td><td class="num">43,960</td><td class="num">13%</td><td>Gradient boosting</td><td>Wins by 5.8 points &mdash; the sparser the series, the larger the gain</td></tr>
+        <tr><td><strong>No history</strong></td><td class="num">&mdash;</td><td class="num">&mdash;</td><td>Attribute-based cold start</td><td>Predicted from the pooled model's attribute features alone</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>6. The output is a set of stocking levels, not a single number</h3>
+  <p>A point forecast cannot answer the question replenishment actually asks, which is
+  &ldquo;how much do I hold to cover this line 90% of the time?&rdquo; So four models are fitted
+  &mdash; the central estimate plus the 80th, 90th and 95th percentiles &mdash; using a quantile loss.
+  The planner consumes a service level; the quantile is the number that delivers it.</p>
+
+  <h3>7. Forecasts are reconciled up the hierarchy</h3>
+  <p>Individually accurate series forecasts do not add up to an accurate branch total, and branch
+  totals do not add to a good national number. Because branch and national plans are what
+  procurement actually uses, the forecasts are made <em>coherent</em> across the hierarchy using
+  MinT reconciliation with a shrinkage covariance estimate and a non-negativity constraint. Without
+  this step the three levels of the business disagree with each other by construction.</p>
+
+  <h3>8. Quantiles become order-up-to levels using each branch's own lead time</h3>
+  <p>The final conversion multiplies the chosen quantile by the branch's replenishment lead time
+  from Location Master &mdash; median 3 days, 95th percentile 6, but varying by hub &mdash; and
+  subtracts stock on hand and on order. The deliverable a planner opens is a quantity to order, not
+  a statistic.</p>
+
+  <h3>9. Retraining is quarterly, and gated</h3>
+  <p>The model is refitted once a quarter and scored against the frozen benchmarks before it is
+  allowed to replace the incumbent. If a new model does not beat the standing one on the holdout,
+  it is not registered. Monthly scoring continues against whichever model currently holds the
+  registry tag.</p>
+</section>
+
+<section id="s5">
+  <div class="sechead"><span class="n">05</span><h2>Accuracy to plan for</h2></div>
+  <p class="deck">These are measured figures from the validation run on your own history &mdash;
+  trained through September 2025, scored against October 2025 to March 2026 with no retraining in
+  between. Plan against them.</p>
+
+  <figure>
+    <div class="ftitle">Accuracy over the six months following a single training run</div>
+    <div class="fsub">Error at branch&times;SKU by months ahead. The axis is cropped to the data band
+    so the decay is visible; the flat seasonal-naive line is the comparison.</div>
+    <div class="scroller"><div id="c-horizon"></div></div>
+    <figcaption>Error grows from 0.552 at one month to 0.616 at six &mdash; 12% over half a year.
+    This is the measurement that justifies a quarterly retrain rather than a monthly one, and with
+    it the entire cost structure in &sect;8.</figcaption>
+  </figure>
+
+  <h3>Quote accuracy at the level the decision is made</h3>
+  <p>A single accuracy number for a network like this is meaningless, because error falls by a
+  factor of twenty between an individual line and the national plan. Planners do not order month by
+  month against a single-month forecast; they place a six-month plan, and month-to-month errors
+  partly cancel within it.</p>
+
+  <figure>
+    <div class="ftitle">Accuracy improves sharply with aggregation &mdash; log axis</div>
+    <div class="fsub">The same six-month forecasts scored at three levels of the hierarchy.
+    Logarithmic, because the range spans 1.8% to 38%.</div>
+    <div class="scroller"><div id="c-agg"></div></div>
+    <figcaption>63,210 series &rarr; 51 branches &rarr; 1 national total. This spread is why
+    reconciliation (&sect;4.7) is not optional.</figcaption>
+  </figure>
+
+  <div class="tbl">
+    <div class="ftitle">What to expect, by decision</div>
+    <table>
+      <thead><tr><th>Decision</th><th>Level</th><th class="num">Expected error</th><th>Usable for</th></tr></thead>
+      <tbody>
+        <tr><td>National procurement plan</td><td>1 series</td><td class="num">1.8%</td><td>Volume commitments to plants</td></tr>
+        <tr><td>Branch six-month plan</td><td>51 branches</td><td class="num">10.9%</td><td>Allocation and depot budgets</td></tr>
+        <tr><td>A-class line replenishment</td><td>5,825 series</td><td class="num">25.7%</td><td>Direct reorder quantities</td></tr>
+        <tr><td>B-class line replenishment</td><td>13,425 series</td><td class="num">46.3%</td><td>Reorder with a q90 buffer</td></tr>
+        <tr><td>C-class line</td><td>43,960 series</td><td class="num">76.2%</td><td>Stock policy only &mdash; not line-level ordering</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <figure>
+    <div class="ftitle">Where machine learning helps, and where it does not</div>
+    <div class="fsub">Six-month cumulative error by value class. A-class carries 66% of units.
+    Lower is better; the winning method per class is labelled.</div>
+    <div class="scroller"><div id="c-abc"></div></div>
+    <figcaption>This is the evidence behind the routing rule in &sect;4.5 &mdash; smoothing on A,
+    boosting on B and C.</figcaption>
+  </figure>
+
+  <h3>The stocking levels stay calibrated</h3>
+  <p>The most important property is not the point accuracy but whether a &ldquo;90% service
+  level&rdquo; actually delivers 90% service six months after the model was fitted. It does.</p>
+
+  <figure>
+    <div class="ftitle">Quantile calibration six months forward</div>
+    <div class="fsub">Target coverage against achieved coverage, for the per-month forecast and for
+    the six-month cumulative plan. The diagonal is perfect calibration.</div>
+    <div class="scroller"><div id="c-calib"></div></div>
+    <figcaption>q90 achieved 89.3% per month and 94.1% cumulative; q95 achieved 93.4% and 96.9%.
+    Cumulative coverage runs slightly conservative, which is the safe direction for stock.</figcaption>
+  </figure>
+
+  <div class="callout warn">
+    <div class="h">How this must be reported</div>
+    <p>Per segment, always. A headline &ldquo;the model is 62% accurate&rdquo; is both true and
+    useless: it averages an A-class line that can be ordered against with a C-class line that cannot.
+    The scorecard is WMAPE by value class and by aggregation level, pinball loss for the quantiles,
+    and achieved coverage against target &mdash; reported every month against the frozen baselines,
+    so drift is visible before it becomes a stockout.</p>
+  </div>
+</section>
+
+<section id="s6">
+  <div class="sechead"><span class="n">06</span><h2>Why these choices</h2></div>
+  <p class="deck">The reasoning and the published evidence behind each decision in &sect;4, with
+  sources. Where our own measurement on AIS data differs from the literature, that is said plainly.</p>
+
+  <h3>Why demand is classified the way it is</h3>
+  <p>The smooth / intermittent / erratic / lumpy split used throughout is the
+  <strong>Syntetos&ndash;Boylan classification</strong>, which splits on average demand interval (ADI)
+  and the squared coefficient of variation of non-zero demand sizes (CV&sup2;), at thresholds of
+  ADI&nbsp;=&nbsp;1.32 and CV&sup2;&nbsp;=&nbsp;0.49
+  <a href="https://www.ias.ac.in/public/Volumes/sadh/045/00/0051.pdf">[1]</a>. Kostenko and Hyndman
+  later showed the optimal boundary between methods is non-linear rather than a rectangular cut,
+  though the original scheme remains the practical standard
+  <a href="https://openforecast.org/2024/07/16/intermittent-demand-classifications-is-that-what-you-need/">[2]</a>.
+  The AIS panel sits at median ADI 4.0 and median CV&sup2; 0.13 &mdash; deeply intermittent, with low
+  size variability.</p>
+
+  <h3>Why not Croston, the classic intermittent-demand method</h3>
+  <p>Croston's method (1972) separates a series into demand sizes and inter-arrival intervals,
+  smooths each independently and forecasts their ratio
+  <a href="https://www.sciencedirect.com/science/article/abs/pii/S0925527307001478">[3]</a>. Syntetos
+  and Boylan showed this is positively biased and proposed the SBA correction, multiplying by
+  (1&nbsp;&minus;&nbsp;&alpha;/2), which became the standard benchmark
+  <a href="https://www.sciencedirect.com/science/article/abs/pii/S0169207004000792">[4]</a>. TSB
+  updates demand <em>probability</em> in every period rather than interval, which handles
+  obsolescence far better <a href="https://www.sciencedirect.com/science/article/abs/pii/S0925527311000909">[5]</a>.</p>
+  <p>We tested this family and it was the weakest of the nine methods tried. That is not a
+  contradiction of the literature but a mismatch of purpose: <strong>Croston estimates a demand
+  rate per period</strong>, which is the right object for a continuous-review reorder point and the
+  wrong one for the discrete monthly bucket a planner orders in. We therefore use
+  <strong>TSB for obsolescence detection</strong> &mdash; flagging the 22,643 dead branch&times;SKU
+  rows found in &sect;3 &mdash; and not SBA for quantity forecasting.</p>
+
+  <h3>Why one global model rather than one model per series</h3>
+  <p>The M5 competition established the modern default for large retail panels: a single
+  <strong>global</strong> gradient-boosted model trained across all series, sharing parameters.
+  LightGBM featured in most top solutions in both tracks, and the best machine-learning method was
+  22.4% more accurate than the best statistical benchmark
+  <a href="https://www.sciencedirect.com/science/article/pii/S0169207021001874">[6]</a>.</p>
+  <p>The deeper result is Montero-Manso and Hyndman, <em>Principles and Algorithms for Forecasting
+  Groups of Time Series: Locality and Globality</em>, which proves global models are
+  <strong>not restricted to related or homogeneous series</strong>
+  <a href="https://arxiv.org/abs/2008.00444">[18]</a>. A global model can always fit at least as
+  well as a collection of local ones given enough capacity, and generalises better because it has
+  far more data per parameter. Relatedness is not the mechanism; sample size is. With 24
+  observations per series, 62% of them zero, that argument is decisive here &mdash; and it is why
+  &sect;4.2 trains globally even for a scoped pilot.</p>
+
+  <div class="callout">
+    <div class="h">The caveat that shapes &sect;4.7</div>
+    <p>A robustness check on M5 found that global models &ldquo;performed very well for the bottom
+    levels, but lacked robustness when the bottom forecasts were added up to aggregate level&rdquo;
+    <a href="https://www.sciencedirect.com/science/article/pii/S0169207021001990">[7]</a>. We
+    reproduced this exactly: the pooled model wins on B- and C-class series but loses to plain
+    exponential smoothing at branch level (10.9% vs 13.9%) and nationally (1.8% vs 7.5%). It is a
+    known property of the method, not a defect &mdash; and it is why reconciliation is mandatory
+    rather than a refinement.</p>
+  </div>
+
+  <p>One further caution on transferring M5 results: it ran on daily data with 1,941 observations
+  per series. We have 24 monthly ones. The advantage of machine learning over statistical methods
+  shrinks as history shortens, which is why our measured gap is modest and, on A-class, negative.
+  Expecting an M5-scale improvement here would be a mistake.</p>
+
+  <h3>Why forecasts are reconciled</h3>
+  <p>Given that error falls from 38% to 1.8% between the base and national levels, forecasts must
+  be made coherent across the hierarchy rather than simply summed. The standard is
+  <strong>MinT (minimum trace) reconciliation</strong>, from Wickramasuriya, Athanasopoulos and
+  Hyndman, <em>JASA</em> 114(526), 2019, which uses the covariance matrix of base forecast errors to
+  produce coherent forecasts minimising total mean squared error
+  <a href="https://robjhyndman.com/publications/mint/">[8]</a>. A shrinkage estimator of that
+  covariance is required in practice, because the full matrix is not estimable from 24 observations
+  <a href="https://otexts.com/fpp3/reconciliation.html">[9]</a>. The non-negative variant matters
+  here specifically, since reconciliation can otherwise produce negative demand
+  <a href="https://www.monash.edu/business/ebs/research/publications/ebs/wp15-2020.pdf">[10]</a>.</p>
+
+  <h3>Why the output is quantiles</h3>
+  <p>Replenishment consumes a service level, not a point estimate. Gradient boosting with a
+  <strong>pinball (quantile) loss</strong> produces these directly and scales to panels of this size
+  <a href="https://arxiv.org/abs/2311.00993">[11]</a>. To make coverage guarantees rigorous rather
+  than empirical, <strong>Conformalized Quantile Regression</strong> (Romano, Patterson and
+  Cand&egrave;s, NeurIPS 2019) wraps any quantile regressor and attains valid finite-sample coverage
+  without distributional assumptions
+  <a href="https://arxiv.org/abs/1905.03222">[12]</a>, with extensions to the time-series setting
+  where independence fails <a href="https://arxiv.org/abs/2010.09107">[13]</a>. Our raw quantiles
+  were already calibrated to within four points at six months, so conformal wrapping is a phase-two
+  refinement rather than a necessity.</p>
+
+  <h3>Why quarterly retraining is enough</h3>
+  <p>This single decision determines the cost structure in &sect;8. The question is studied directly
+  in Zanotti, <em>On the retraining frequency of global models in retail demand forecasting</em>
+  (2025), which finds clear diminishing returns to frequent updates
+  <a href="https://arxiv.org/abs/2505.00356">[14]</a>. Our own measurement is the stronger evidence:
+  <strong>12% error growth over six months with no retraining at all</strong>. Quarterly is
+  comfortably sufficient, and the monthly-retrain MLOps machinery that dominates most cost estimates
+  is not needed.</p>
+
+  <h3>What we assessed and rejected for phase one</h3>
+  <p><strong>Deep learning.</strong> DeepAR, N-BEATS, N-HiTS, TFT, PatchTST and TiDE all require long
+  histories to justify their parameter counts <a href="https://arxiv.org/abs/2401.13912">[15]</a>.
+  With 24 monthly points there is very little temporal structure for an attention mechanism to
+  exploit, while training and serving cost rise by one to two orders of magnitude.</p>
+  <p><strong>Time-series foundation models</strong> are the more interesting option, because they
+  need no training run at all. Chronos-Bolt is roughly 5% more accurate than the original Chronos,
+  up to 250&times; faster and 20&times; more memory-efficient
+  <a href="https://www.amazon.science/code-and-datasets/chronos-learning-the-language-of-time-series">[16]</a>,
+  and Chronos-2 adds covariate-informed zero-shot forecasting. These are worth a zero-shot
+  evaluation in phase two &mdash; specifically for the 10,200 single-month series where no
+  time-series model can be fitted at all. But published evidence on intermittent monthly data is
+  thin and benchmarking practice is still contested
+  <a href="https://arxiv.org/abs/2503.20441">[17]</a>. An experiment, not a plan.</p>
+
+  <div class="tbl">
+    <div class="ftitle">References</div>
+    <table>
+      <tbody>
+        <tr><td class="num">1</td><td>Syntetos &amp; Boylan classification and thresholds &mdash; <a href="https://www.ias.ac.in/public/Volumes/sadh/045/00/0051.pdf">Intermittent demand forecasting: a guideline for method selection</a>, <em>Sādhanā</em> 45</td></tr>
+        <tr><td class="num">2</td><td>Kostenko &amp; Hyndman on non-linear method boundaries &mdash; <a href="https://openforecast.org/2024/07/16/intermittent-demand-classifications-is-that-what-you-need/">Intermittent demand classifications: is that what you need?</a></td></tr>
+        <tr><td class="num">3</td><td>Croston (1972), <em>Operational Research Quarterly</em> &mdash; <a href="https://diogoribeiro7.github.io/time-series/intermittent_demand_forecasting_croston/">Croston's method and its successors</a></td></tr>
+        <tr><td class="num">4</td><td>Syntetos &amp; Boylan (2005), <em>IJF</em> &mdash; <a href="https://www.academia.edu/1527249/On_the_bias_of_intermittent_demand_estimates">On the bias of intermittent demand estimates</a></td></tr>
+        <tr><td class="num">5</td><td>Teunter, Syntetos &amp; Babai &mdash; <a href="https://www.sciencedirect.com/science/article/abs/pii/S0925527318300562">Forecasting intermittent demand with inventory obsolescence</a></td></tr>
+        <tr><td class="num">6</td><td>Makridakis, Spiliotis &amp; Assimakopoulos &mdash; <a href="https://researchportal.bath.ac.uk/files/233855891/IJF_2022_M5_Conclusions_post_print_.pdf">The M5 competition: conclusions</a>, <em>IJF</em> 2022</td></tr>
+        <tr><td class="num">7</td><td><a href="https://www.sciencedirect.com/science/article/abs/pii/S0169207021001400">The performance of the global bottom-up approach in the M5 accuracy competition: a robustness check</a>, <em>IJF</em></td></tr>
+        <tr><td class="num">8</td><td>Wickramasuriya, Athanasopoulos &amp; Hyndman (2019), <em>JASA</em> 114(526):804&ndash;819 &mdash; <a href="https://robjhyndman.com/publications/mint/">Optimal forecast reconciliation through trace minimization (MinT)</a></td></tr>
+        <tr><td class="num">9</td><td>Hyndman &amp; Athanasopoulos &mdash; <a href="https://otexts.com/fpp2/reconciliation.html">Forecasting: Principles and Practice</a>, §10.7</td></tr>
+        <tr><td class="num">10</td><td><a href="https://www.monash.edu/business/ebs/research/publications/ebs/wp15-2019.pdf">Optimal non-negative forecast reconciliation</a>, Monash EBS</td></tr>
+        <tr><td class="num">11</td><td><a href="https://arxiv.org/pdf/2311.00993">Scalable probabilistic forecasting in retail with gradient boosted trees</a></td></tr>
+        <tr><td class="num">12</td><td>Romano, Patterson &amp; Candès (2019), NeurIPS &mdash; <a href="https://papers.neurips.cc/paper/8613-conformalized-quantile-regression.pdf">Conformalized Quantile Regression</a></td></tr>
+        <tr><td class="num">13</td><td>Stankevičiūtė et al. (2021), NeurIPS &mdash; <a href="https://proceedings.neurips.cc/paper/2021/file/312f1ba2a72318edaaa995a67835fad5-Paper.pdf">Conformal time-series forecasting</a></td></tr>
+        <tr><td class="num">14</td><td>Zanotti (2025) &mdash; <a href="https://arxiv.org/pdf/2505.00356">On the retraining frequency of global models in retail demand forecasting</a>, arXiv:2505.00356</td></tr>
+        <tr><td class="num">15</td><td><a href="https://arxiv.org/pdf/2401.13912">A survey of deep learning and foundation models for time series forecasting</a>, arXiv:2401.13912</td></tr>
+        <tr><td class="num">16</td><td>Amazon Science &mdash; <a href="https://github.com/amazon-science/chronos-forecasting">Chronos / Chronos-Bolt pretrained forecasting models</a></td></tr>
+        <tr><td class="num">17</td><td><a href="https://arxiv.org/html/2510.13654v2">Challenges and requirements for benchmarking time series foundation models</a></td></tr>
+        <tr><td class="num">18</td><td>Montero-Manso &amp; Hyndman (2021), <em>IJF</em> 37(4):1632&ndash;1653 &mdash; <a href="https://arxiv.org/abs/2008.00444">Principles and algorithms for forecasting groups of time series: locality and globality</a></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+<section id="s7">
+  <div class="sechead"><span class="n">07</span><h2>Platform and architecture</h2></div>
+  <p class="deck">Scoped to three jobs: hold the data, train the model, serve the numbers. No
+  application platform, no streaming, no always-on infrastructure.</p>
+
+  <div class="tiles">
+    <div class="tile"><div class="k">Source files</div><div class="v num">150 MB</div>
+      <div class="s">all five, as delivered</div></div>
+    <div class="tile"><div class="k">Modelling panel</div><div class="v num">32 MB</div>
+      <div class="s">1.5 M rows &mdash; fits in memory</div></div>
+    <div class="tile"><div class="k">Training run</div><div class="v num">&lt;10 min</div>
+      <div class="s">8 vCPU, 4 models, no GPU</div></div>
+    <div class="tile"><div class="k">Retrain</div><div class="v num">Quarterly</div>
+      <div class="s">12% decay over 6 months</div></div>
+    <div class="tile"><div class="k">Scoring</div><div class="v num">Monthly</div>
+      <div class="s">~15 min, writes to the database</div></div>
+  </div>
+
+  <h3>The data is small, so a database is the right home for it</h3>
+  <p>The five source files total 150 MB and the modelling panel is 32 MB. This is not big data. The
+  usual justifications for a data lake &mdash; volume, schema-on-read, unstructured content &mdash;
+  apply to none of it, and a lake would impose file-handling work on a team that already knows SQL.
+  <strong>So the design uses a relational database for the working data</strong>, with blob storage
+  kept for one specific job.</p>
+
+  <div class="split two">
+    <div>
+      <div class="h">Why a database, for silver and gold</div>
+      <ul>
+        <li><strong>Point lookups.</strong> &ldquo;What is the forecast for this branch and this
+        SKU?&rdquo; is an indexed key lookup &mdash; trivial in SQL, slow against Parquet files.</li>
+        <li><strong>The masters are relational.</strong> Location Master is 57 rows; Substitution
+        Mapping is 2,417. These are dimension tables with foreign keys.</li>
+        <li><strong>Constraints catch defects on load.</strong> A format check on HSN Code would
+        have flagged the transposed column in the FY&nbsp;25-26 sheet automatically, rather than it
+        being found by hand.</li>
+        <li><strong>Power BI, Excel and any future application connect natively</strong>, with no
+        intermediate export step.</li>
+      </ul>
+    </div>
+    <div>
+      <div class="h">Why blob storage stays, for one job only</div>
+      <ul>
+        <li><strong>The original workbooks, byte for byte.</strong> This is what let us prove the
+        column transposition was in the source rather than in our parsing. It is the audit trail
+        and it must never be edited.</li>
+        <li>Costs about two cents a month and needs no server that has to be running.</li>
+        <li>Forecast output is also written as a dated Parquet file alongside the database table, so
+        every month's run is independently reproducible.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Which database</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Option</th><th class="num">USD/month</th><th>Pauses when idle</th><th>Assessment</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Azure SQL Database</strong> serverless, auto-pause</td><td class="num">~5&ndash;8</td><td><span class="tag g">yes</span></td><td><strong>Recommended.</strong> Pauses after an hour idle, which suits a workload that touches the database for minutes a month. Costed as the base case in &sect;8.</td></tr>
+        <tr><td><strong>Azure SQL Database</strong> Basic, 5 DTU</td><td class="num">4.90</td><td>no</td><td>Marginally cheaper if the database is queried continuously. The 2 GB ceiling is 60&times; what the panel needs.</td></tr>
+        <tr><td><strong>PostgreSQL Flexible Server</strong> B1ms</td><td class="num">~13&ndash;25</td><td>stop/start only</td><td>Choose this if the team is a Postgres team &mdash; the extra $10 a month is not worth arguing about. Can be stopped, but auto-restarts after 7 days.</td></tr>
+        <tr><td><strong>Files only</strong>, no database</td><td class="num">0.15</td><td>n/a</td><td>Viable if Power BI reads Parquet directly and nothing else ever queries by key. Cheapest, least flexible.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><em>Amazon RDS is the AWS equivalent and is not applicable on Azure; the two managed options
+  above are its direct counterparts.</em> At this data size the decision should be made on who
+  maintains it, not on architecture. The answer would change if the panel were 32&nbsp;GB rather
+  than 32&nbsp;MB, or if weekly buckets and several years of history pushed it past a few hundred
+  million rows &mdash; neither is on the horizon.</p>
+
+  <figure>
+    <div class="ftitle">Store &rarr; train &rarr; serve on Azure</div>
+    <div class="fsub">Everything except the database and the container registry scales to zero
+    between runs. Azure ML pipeline schedules replace a separate orchestrator, which removes Data
+    Factory from the design entirely.</div>
+    <div class="scroller"><div id="d-arch"></div></div>
+    <figcaption>Region: Central India. The database holds the working schemas; blob storage holds
+    only the immutable originals and the dated forecast files.</figcaption>
+  </figure>
+
+  <h3>Azure services used</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Service</th><th>Purpose</th><th>SKU / setting</th><th>Billing</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Azure SQL Database</strong></td><td>The <code>raw</code>, <code>staging</code> and <code>mart</code> schemas &mdash; panel, masters, forecasts</td><td>Serverless, 0.5&ndash;2 vCore, auto-pause 1 hr</td><td>per vCore-second; pauses to storage-only</td></tr>
+        <tr><td><strong>Azure Blob Storage</strong></td><td>Immutable source workbooks; dated forecast Parquet files</td><td>Standard, hot, LRS</td><td><span class="tag n">continuous</span> per GB &mdash; pennies</td></tr>
+        <tr><td><strong>Azure Machine Learning</strong> workspace</td><td>Experiments, pipelines, model registry, MLflow tracking</td><td>Basic</td><td><span class="tag g">no charge</span> for the workspace itself</td></tr>
+        <tr><td><strong>Azure ML compute cluster</strong></td><td>The quarterly training run and the monthly scoring job</td><td>Standard_D8as_v5, <strong>min 0</strong> / max 2 nodes</td><td>per second, <span class="tag g">zero when idle</span></td></tr>
+        <tr><td><strong>Azure ML pipeline schedule</strong></td><td>Triggers the monthly score and the quarterly retrain</td><td>Built-in cron schedule</td><td><span class="tag g">no charge</span></td></tr>
+        <tr><td><strong>Azure ML batch endpoint</strong></td><td>Runs the model over all 63,210 series and writes results</td><td>Backed by the same cluster</td><td>only while running</td></tr>
+        <tr><td><strong>Azure Container Registry</strong></td><td>Holds the training and scoring environment image</td><td>Basic, 10 GiB included</td><td><span class="tag n">continuous</span> flat fee</td></tr>
+        <tr><td><strong>Azure Key Vault</strong></td><td>Secrets and managed-identity backing</td><td>Standard</td><td>per operation &mdash; negligible</td></tr>
+        <tr><td><strong>Application Insights</strong></td><td>Job logs and failure alerts</td><td>Default, 1 GB/month free</td><td><span class="tag g">free at this volume</span></td></tr>
+        <tr><td><strong>Power BI</strong> <span class="tag n">optional</span></td><td>Planner-facing dashboard, reading the database directly</td><td>Desktop is free; Pro only to share</td><td>per user, if sharing</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <div class="h">Deliberately not included</div>
+    <p><strong>A data lake and its medallion layering</strong> &mdash; the layering is a naming
+    convention for transformation stages, not a technology; at 32 MB it is three schemas in the
+    database.
+    <strong>Azure Data Factory</strong> &mdash; Azure ML pipelines have their own schedules, so a
+    separate orchestrator adds cost without adding capability at this cadence.
+    <strong>Databricks</strong> &mdash; a 32 MB panel does not need a distributed engine.
+    <strong>Microsoft Fabric</strong> &mdash; an F-capacity bills continuously whether or not you use it.
+    <strong>GPU compute</strong> &mdash; nothing in &sect;4 requires one.
+    <strong>Managed online endpoint</strong> &mdash; an always-on endpoint costs more per month than
+    the entire rest of this design; a monthly batch job needs no real-time serving.</p>
+  </div>
+
+  <h3>The three flows</h3>
+  <div class="split3">
+    <div class="flowcard">
+      <div class="h">Flow 1 &mdash; Load</div>
+      <ol>
+        <li>Upload the source workbooks to blob &mdash; unchanged, immutable</li>
+        <li>A pipeline job parses them, normalises keys, fixes the transposed columns and converts
+        Excel serials, writing to <code>staging</code></li>
+        <li>Aggregate to the branch&times;SKU&times;month panel and join covariates &rarr;
+        <code>mart.panel</code>, 1.5 M rows</li>
+        <li>Constraint checks and a reconciliation against the source totals must both pass</li>
+      </ol>
+      <p class="fnote">Runs whenever a new extract arrives &mdash; monthly, in minutes.</p>
+    </div>
+    <div class="flowcard">
+      <div class="h">Flow 2 &mdash; Train, quarterly</div>
+      <ol>
+        <li>Cluster scales 0&nbsp;&rarr;&nbsp;1 node on job submission</li>
+        <li>Reads <code>mart.panel</code>, builds the direct multi-horizon training set (~950k rows)</li>
+        <li>Fits the point model plus q80, q90 and q95</li>
+        <li>Runs the rolling backtest and logs WMAPE by segment to MLflow</li>
+        <li>Registers the model <em>only if</em> it beats the frozen baseline</li>
+        <li>Cluster scales back to 0</li>
+      </ol>
+      <p class="fnote">Four times a year, about ten minutes each.</p>
+    </div>
+    <div class="flowcard">
+      <div class="h">Flow 3 &mdash; Serve, monthly</div>
+      <ol>
+        <li>Schedule triggers the batch endpoint</li>
+        <li>Scores all 63,210 series &times; 6 horizons &times; 4 quantiles</li>
+        <li>Reconciles to branch and national totals</li>
+        <li>Converts quantiles to order-up-to levels using Location Master lead times</li>
+        <li>Upserts to <code>mart.forecast</code> and writes a dated Parquet copy to blob</li>
+        <li>Power BI refreshes against the database</li>
+      </ol>
+      <p class="fnote">Once a month, about fifteen minutes.</p>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <div class="h">Security and operations</div>
+    <p>Managed identity throughout &mdash; no connection strings in code. <strong>The data carries
+    GSTIN, PAN and customer contact details</strong>: restrict the raw container and the
+    <code>raw</code> schema, and mask these columns in anything shared with planners or embedded in
+    a dashboard. Private endpoints if policy requires, adding about $37/month for five. Alerts on
+    job failure and on input drift. Infrastructure as code from day one &mdash; the whole estate is
+    a short Bicep file.</p>
+  </div>
+</section>
+
+<section id="s8">
+  <div class="sechead"><span class="n">08</span><h2>Cost</h2></div>
+  <p class="deck">List prices, Central India, September 2026, USD, converted at &#8377;88/USD.
+  Split the way the work splits: one-time setup and training, then a small monthly bill to hold the
+  data and score it.</p>
+
+  <div class="tiles">
+    <div class="tile"><div class="k">One-time</div><div class="v num">$9</div>
+      <div class="s">data prep and training, including experimentation</div></div>
+    <div class="tile good"><div class="k">Monthly, recommended</div><div class="v num">$15</div>
+      <div class="s">SQL serverless, storage, scoring</div></div>
+    <div class="tile"><div class="k">Monthly, files only</div><div class="v num">$5</div>
+      <div class="s">no database &mdash; Power BI reads Parquet</div></div>
+    <div class="tile"><div class="k">Monthly, with Power BI</div><div class="v num">$43</div>
+      <div class="s">plus 2 Pro licences for sharing</div></div>
+    <div class="tile"><div class="k">First-year total</div><div class="v num">$189</div>
+      <div class="s">&asymp; &#8377;16,600 for the full year</div></div>
+  </div>
+
+  <figure>
+    <div class="ftitle">Where the money goes &mdash; log axis</div>
+    <div class="fsub">Monthly cost per component. Logarithmic, because the largest line is more than
+    a thousand times the smallest and a linear axis would show only one bar.</div>
+    <div class="scroller"><div id="c-cost"></div></div>
+    <figcaption>Compute &mdash; the actual machine learning &mdash; is the smallest recurring item at
+    about 12 cents a month. The database and the flat container-registry fee are the whole bill.</figcaption>
+  </figure>
+
+  <h3>One-time costs</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Item</th><th>Basis</th><th class="num">Hours</th><th class="num">USD</th></tr></thead>
+      <tbody>
+        <tr><td>Data preparation runs</td><td>D8as_v5 @ $0.222/hr</td><td class="num">6</td><td class="num">1.33</td></tr>
+        <tr><td>Model development &amp; experimentation</td><td>D8as_v5, iterating on features</td><td class="num">30</td><td class="num">6.66</td></tr>
+        <tr><td>Final training run</td><td>4 models, &lt;10 minutes</td><td class="num">0.2</td><td class="num">0.04</td></tr>
+        <tr><td>Backtest validation</td><td>6 origins &times; 6 horizons</td><td class="num">4</td><td class="num">0.89</td></tr>
+        <tr><td>Initial data upload</td><td>150 MB ingress</td><td class="num">&mdash;</td><td class="num">0.00</td></tr>
+        <tr><td colspan="3"><strong>One-time Azure cost</strong></td><td class="num"><strong>$8.92</strong> &middot; &#8377;785</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Recurring monthly cost</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Component</th><th>Basis</th><th class="num">A &middot; files</th><th class="num">B &middot; database</th><th class="num">C &middot; + Power BI</th></tr></thead>
+      <tbody>
+        <tr><td>Azure Container Registry</td><td>Basic, flat</td><td class="num">5.00</td><td class="num">5.00</td><td class="num">5.00</td></tr>
+        <tr><td><strong>Azure SQL serverless</strong></td><td>0.5 vCore, auto-pause after 1 hr idle</td><td class="num">&mdash;</td><td class="num">9.50</td><td class="num">9.50</td></tr>
+        <tr><td>Blob storage</td><td>2 GB hot + transactions</td><td class="num">0.15</td><td class="num">0.15</td><td class="num">0.15</td></tr>
+        <tr><td>Monthly scoring compute</td><td>15 min @ $0.222/hr</td><td class="num">0.06</td><td class="num">0.06</td><td class="num">0.06</td></tr>
+        <tr><td>Quarterly retrain, amortised</td><td>1 hr per quarter</td><td class="num">0.06</td><td class="num">0.06</td><td class="num">0.06</td></tr>
+        <tr><td>Key Vault</td><td>~2,000 operations</td><td class="num">0.01</td><td class="num">0.01</td><td class="num">0.01</td></tr>
+        <tr><td>Application Insights</td><td>under the 1 GB free grant</td><td class="num">0.00</td><td class="num">0.00</td><td class="num">0.00</td></tr>
+        <tr><td>Azure ML workspace</td><td>no platform fee</td><td class="num">0.00</td><td class="num">0.00</td><td class="num">0.00</td></tr>
+        <tr><td>Power BI Pro</td><td>2 licences @ $14</td><td class="num">&mdash;</td><td class="num">&mdash;</td><td class="num">28.00</td></tr>
+        <tr><td colspan="2"><strong>Monthly total</strong></td><td class="num"><strong>$5.28</strong></td><td class="num"><strong>$14.78</strong></td><td class="num"><strong>$42.78</strong></td></tr>
+        <tr><td colspan="2">In rupees</td><td class="num">&#8377;465</td><td class="num">&#8377;1,301</td><td class="num">&#8377;3,765</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The SQL serverless figure assumes the database is genuinely idle most of the month &mdash; it
+  bills per vCore-second and pauses after an hour without a connection. If Power BI holds a live
+  connection or a dashboard is refreshed continuously, it will not pause, and the number rises
+  toward $30. Import mode in Power BI rather than DirectQuery keeps it paused; a Basic-tier database
+  at a flat $4.90 removes the variability entirely if that behaviour proves annoying.</p>
+
+  <h3>First-year total</h3>
+  <p>Configuration B &mdash; storage, database, training, monthly scoring &mdash; costs $8.92 once
+  plus $14.78 a month: about <strong>$186 for the first year, roughly &#8377;16,400</strong>. Power BI
+  licences, if planners need to share dashboards, are the largest single decision in the whole
+  budget and are a per-seat licensing question rather than an infrastructure one.</p>
+  <p>The Azure bill is not a meaningful constraint on this project. The real cost is engineering effort, and the only cloud lines worth watching are the two below.</p>
+
+  <h3>Optional extras, if requirements grow</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Addition</th><th>When it becomes necessary</th><th class="num">$/month</th></tr></thead>
+      <tbody>
+        <tr><td>Private endpoints (5)</td><td>If security policy forbids public service endpoints</td><td class="num">+37</td></tr>
+        <tr><td>PostgreSQL instead of Azure SQL</td><td>If the team is a Postgres team &mdash; a preference worth paying for</td><td class="num">+5&ndash;10</td></tr>
+        <tr><td>Self-hosted integration runtime</td><td>If data must be pulled from an on-premises ERP automatically</td><td class="num">+61</td></tr>
+        <tr><td>AML compute instance (dev box)</td><td>Per data scientist, with auto-shutdown; zero if they work locally</td><td class="num">+18</td></tr>
+        <tr><td>Managed online endpoint</td><td>Only if a live what-if API is genuinely required</td><td class="num">+73</td></tr>
+        <tr><td>Weekly instead of monthly buckets</td><td>4&times; the scoring runs and a larger panel</td><td class="num">+2</td></tr>
+        <tr><td>Geo-redundant storage</td><td>If DR policy requires it</td><td class="num">+0.15</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout warn">
+    <div class="h">The two ways this budget gets blown</div>
+    <p>A compute cluster with <code>min_nodes</code> above zero costs <strong>$160/month doing
+    nothing</strong> &mdash; ten times the entire base design. An always-on managed online endpoint
+    costs <strong>$73&ndash;$300/month</strong> to answer a question that is asked once a month. Both
+    are default-looking settings, and both are the most common Azure ML billing mistakes. Set a
+    budget alert at $50 and either will surface immediately.</p>
+  </div>
+</section>
+
+<section id="s9">
+  <div class="sechead"><span class="n">09</span><h2>Open decisions</h2></div>
+  <p class="deck">The modelling question is answered. What is still open is not engineering &mdash;
+  it is a small number of decisions only AIS can make, each of which changes the design.</p>
+
+  <h3>Questions for the business</h3>
+  <ul>
+    <li><strong>Is the 19.4% shortfall an allocation problem or a supply shortage?</strong> Our analysis says about 19% of it could be covered by moving existing stock and 81% could not.
+    Confirm this with the supply team, because it sets the realistic ceiling on the benefit.</li>
+    <li><strong>Can we get a monthly stock history</strong> rather than a single snapshot? This is the
+    highest-value additional data, and it is almost certainly already being produced.</li>
+    <li><strong>Is vehicle parc data available by geography?</strong> Demand peaks in the 9&ndash;15 year
+    cohort, so a count of registered vehicles by model and age per catchment is the strongest
+    covariate not currently in the data.</li>
+    <li><strong>Is the substitution map complete?</strong> Only 132 of 2,417 SKUs have a substitute.
+    Either the map is unfinished or substitution genuinely does not happen &mdash; these imply very
+    different inventory policies.</li>
+    <li><strong>What accuracy target will this be judged against?</strong> Agree the segment-level and
+    quantile metrics in &sect;5 now. A target of "95% SKU-level accuracy" cannot be met by any method
+    on this data and would make an otherwise successful project look like a failure.</li>
+  </ul>
+
+  <div class="callout">
+    <div class="h">The four-month gap</div>
+    <p>Sales end March 2026; the stock snapshot is dated 1 August 2026. April to July 2026 has
+    orders but no invoiced sales. When the next extract is requested, ask for sales through the
+    current month so the demand and stock views line up.</p>
+  </div>
+</section>
+
+<footer>
+  <p>All statistics recomputed from the five files in <em>Data Sharing to ACI Infotech dt.
+  27.08.2026</em>. The headline forecast result is a single training run on Apr 2024 &ndash; Sep 2025
+  scored against Oct 2025 &ndash; Mar 2026 with no retraining, across 63,210 branch&times;SKU series;
+  benchmarks were frozen at the same cut. Azure prices are Central India list, September 2026,
+  converted at &#8377;88/USD &mdash; verify in the Azure pricing calculator before committing a budget.
+  Method references are linked in &sect;6.</p>
+</footer>
+</main></div></div>
+
+<script>
+const D = {"sales_monthly": [{"m": "2024-04", "qty": 117103, "cr": 36.3}, {"m": "2024-05", "qty": 132863, "cr": 41.7}, {"m": "2024-06", "qty": 140635, "cr": 44.1}, {"m": "2024-07", "qty": 140077, "cr": 42.4}, {"m": "2024-08", "qty": 132574, "cr": 41.1}, {"m": "2024-09", "qty": 128489, "cr": 39.7}, {"m": "2024-10", "qty": 126535, "cr": 39.3}, {"m": "2024-11", "qty": 124733, "cr": 38.1}, {"m": "2024-12", "qty": 135873, "cr": 41.7}, {"m": "2025-01", "qty": 130164, "cr": 40.1}, {"m": "2025-02", "qty": 123234, "cr": 37.8}, {"m": "2025-03", "qty": 130837, "cr": 41.0}, {"m": "2025-04", "qty": 121337, "cr": 38.4}, {"m": "2025-05", "qty": 146712, "cr": 46.8}, {"m": "2025-06", "qty": 149400, "cr": 47.3}, {"m": "2025-07", "qty": 148503, "cr": 46.1}, {"m": "2025-08", "qty": 141191, "cr": 44.5}, {"m": "2025-09", "qty": 143888, "cr": 45.2}, {"m": "2025-10", "qty": 135803, "cr": 41.9}, {"m": "2025-11", "qty": 137343, "cr": 42.7}, {"m": "2025-12", "qty": 142679, "cr": 44.0}, {"m": "2026-01", "qty": 137972, "cr": 42.9}, {"m": "2026-02", "qty": 135997, "cr": 42.5}, {"m": "2026-03", "qty": 146202, "cr": 46.7}], "orders_monthly": [{"m": "2025-04", "ordered": 139283, "desp": 120364, "fill": 0.864}, {"m": "2025-05", "ordered": 160086, "desp": 142227, "fill": 0.888}, {"m": "2025-06", "ordered": 170344, "desp": 150564, "fill": 0.884}, {"m": "2025-07", "ordered": 168096, "desp": 147365, "fill": 0.877}, {"m": "2025-08", "ordered": 154470, "desp": 137388, "fill": 0.889}, {"m": "2025-09", "ordered": 159291, "desp": 134106, "fill": 0.842}, {"m": "2025-10", "ordered": 143953, "desp": 120845, "fill": 0.839}, {"m": "2025-11", "ordered": 156772, "desp": 139025, "fill": 0.887}, {"m": "2025-12", "ordered": 156556, "desp": 137999, "fill": 0.881}, {"m": "2026-01", "ordered": 147257, "desp": 132692, "fill": 0.901}, {"m": "2026-02", "ordered": 149924, "desp": 130413, "fill": 0.87}, {"m": "2026-03", "ordered": 157100, "desp": 118291, "fill": 0.753}, {"m": "2026-04", "ordered": 162888, "desp": 124459, "fill": 0.764}, {"m": "2026-05", "ordered": 182337, "desp": 135759, "fill": 0.745}, {"m": "2026-06", "ordered": 193349, "desp": 123560, "fill": 0.639}, {"m": "2026-07", "ordered": 200686, "desp": 138904, "fill": 0.692}], "sbc": [{"k": "Erratic", "combos": 932, "qty_pct": 3.4, "val_pct": 2.7}, {"k": "Intermittent", "combos": 39424, "qty_pct": 17.8, "val_pct": 14.5}, {"k": "Lumpy", "combos": 3253, "qty_pct": 3.3, "val_pct": 2.4}, {"k": "Single/None", "combos": 10200, "qty_pct": 0.4, "val_pct": 0.4}, {"k": "Smooth", "combos": 9401, "qty_pct": 75.2, "val_pct": 80.0}], "abc": [{"k": "A", "combos": 5825, "val_pct": 80.0}, {"k": "B", "combos": 13425, "val_pct": 15.0}, {"k": "C", "combos": 43960, "val_pct": 5.0}], "seg": [{"segment": "abc=A", "cells": 34950, "units": 554977.0, "MA6": 0.3481, "SES": 0.3377, "GBM": 0.341, "GBM_pois": 0.3638}, {"segment": "abc=B", "cells": 80550, "units": 169991.0, "MA6": 0.758, "SES": 0.7492, "GBM": 0.7396, "GBM_pois": 0.7412}, {"segment": "abc=C", "cells": 263760, "units": 111028.0, "MA6": 1.2404, "SES": 1.2394, "GBM": 1.3711, "GBM_pois": 1.3222}, {"segment": "sbc=Smooth", "cells": 56406, "units": 607305.0, "MA6": 0.3587, "SES": 0.3523, "GBM": 0.3535, "GBM_pois": 0.3738}, {"segment": "sbc=Erratic", "cells": 5592, "units": 29494.0, "MA6": 0.7208, "SES": 0.7057, "GBM": 0.6933, "GBM_pois": 0.6954}, {"segment": "sbc=Lumpy", "cells": 19518, "units": 29670.0, "MA6": 1.0933, "SES": 1.0755, "GBM": 1.071, "GBM_pois": 1.0572}, {"segment": "sbc=Intermittent", "cells": 236544, "units": 164855.0, "MA6": 1.0903, "SES": 1.0746, "GBM": 1.1054, "GBM_pois": 1.0944}, {"segment": "sbc=Single/None", "cells": 61200, "units": 4672.0, "MA6": 1.8073, "SES": 1.831, "GBM": 3.8649, "GBM_pois": 3.2931}], "level": [{"level": "branch x SKU (base)", "series": 63210, "MA6": 0.5499, "SES": 0.5411, "GBM": 0.5589, "GBM_pois": 0.5678}, {"level": "branch x product-group", "series": 101, "MA6": 0.1075, "SES": 0.0955, "GBM": 0.0999, "GBM_pois": 0.1062}, {"level": "branch total", "series": 51, "MA6": 0.1071, "SES": 0.0951, "GBM": 0.0994, "GBM_pois": 0.1058}, {"level": "SKU national", "series": 2260, "MA6": 0.1495, "SES": 0.1426, "GBM": 0.1614, "GBM_pois": 0.1638}, {"level": "national total", "series": 1, "MA6": 0.033, "SES": 0.0309, "GBM": 0.0522, "GBM_pois": 0.051}], "valband": [{"band": "top 10%", "cells": 37932, "units": 566766.0, "share_units%": 67.8, "MA6": 0.3538, "SES": 0.3434, "GBM": 0.3462}, {"band": "70-90%", "cells": 75858, "units": 156221.0, "share_units%": 18.7, "MA6": 0.7656, "SES": 0.7571, "GBM": 0.7483}, {"band": "40-70%", "cells": 113814, "units": 83300.0, "share_units%": 10.0, "MA6": 1.1139, "SES": 1.1126, "GBM": 1.1282}, {"band": "bottom 40%", "cells": 151656, "units": 29709.0, "share_units%": 3.6, "MA6": 1.5756, "SES": 1.5748, "GBM": 2.0227}], "backtest": {"Naive": {"wmape": 0.6327494382858276, "bias": -0.0027679558843374252}, "MA3": {"wmape": 0.5579912066459656, "bias": 0.00557299330830574}, "MA6": {"wmape": 0.5499321818351746, "bias": 0.015678901225328445}, "SeasonalNaive": {"wmape": 0.6804553866386414, "bias": -0.07729701697826385}, "CrostonSBA": {"wmape": 0.7087081670761108, "bias": 0.1786237210035324}, "SES03": {"wmape": 0.541146993637085, "bias": 0.004245443735271692}, "GBM_global": {"wmape": 0.5588516755248427, "bias": 0.04352716215055958}, "GBM_poisson": {"wmape": 0.5678413540440445, "bias": 0.037964966495272576}}, "hybrid": {"SES": 0.541146993637085, "GBM": 0.5588516755248427, "Hybrid_ABC": 0.5413629373517449, "Hybrid_SBC": 0.5415663126853681}, "branches": [{"b": "BENGALURU", "cr": 64.9, "qty": 194495}, {"b": "SECUNDRABAD", "cr": 52.2, "qty": 163974}, {"b": "AHMEDABAD", "cr": 50.6, "qty": 158342}, {"b": "JAIPUR", "cr": 46.6, "qty": 158450}, {"b": "LUDHIANA", "cr": 36.3, "qty": 104776}, {"b": "KARNAL", "cr": 35.0, "qty": 113769}, {"b": "PUNE", "cr": 33.5, "qty": 106137}, {"b": "SURAT", "cr": 30.5, "qty": 88002}, {"b": "NOIDA", "cr": 28.0, "qty": 93640}, {"b": "RAJKOT", "cr": 27.7, "qty": 87003}, {"b": "DELHI-1", "cr": 27.4, "qty": 89272}, {"b": "COIMBATORE", "cr": 26.6, "qty": 86337}, {"b": "CHENNAI", "cr": 25.6, "qty": 74740}, {"b": "AURANGABAD", "cr": 24.1, "qty": 79505}, {"b": "ANDHERI", "cr": 23.5, "qty": 63174}, {"b": "JALANDHAR", "cr": 22.2, "qty": 68619}, {"b": "KOPERKHANE", "cr": 21.7, "qty": 67032}, {"b": "DELHI-2", "cr": 21.5, "qty": 67636}], "branch_n": 51, "short_depot": [{"d": "RUDRAPUR", "pct": 54.3, "ordered": 3688}, {"d": "MANDI", "pct": 36.6, "ordered": 647}, {"d": "DELHI-E1", "pct": 33.5, "ordered": 24049}, {"d": "JAMMU", "pct": 30.1, "ordered": 35554}, {"d": "CHANDIGARH", "pct": 29.7, "ordered": 41329}, {"d": "LUDHIANA", "pct": 27.6, "ordered": 78159}, {"d": "JALANDHAR", "pct": 27.2, "ordered": 54683}, {"d": "DEHRADUN", "pct": 26.7, "ordered": 19064}, {"d": "SILIGURI", "pct": 11.7, "ordered": 14553}, {"d": "ANDHERI", "pct": 10.7, "ordered": 48019}, {"d": "KOPERKHANE", "pct": 9.7, "ordered": 47330}, {"d": "KOLKATTA", "pct": 9.5, "ordered": 23825}, {"d": "BHUBANESWAR", "pct": 6.6, "ordered": 31336}], "seasonality": [{"mon": "04", "a": 89.9, "b": 86.3}, {"mon": "05", "a": 102.0, "b": 104.4}, {"mon": "06", "a": 108.0, "b": 106.3}, {"mon": "07", "a": 107.5, "b": 105.6}, {"mon": "08", "a": 101.8, "b": 100.4}, {"mon": "09", "a": 98.6, "b": 102.3}, {"mon": "10", "a": 97.1, "b": 96.6}, {"mon": "11", "a": 95.8, "b": 97.7}, {"mon": "12", "a": 104.3, "b": 101.5}, {"mon": "01", "a": 99.9, "b": 98.1}, {"mon": "02", "a": 94.6, "b": 96.7}, {"mon": "03", "a": 100.4, "b": 104.0}], "frontier": [{"policy": "Rule of thumb 1.0x MA3", "fill": 0.779, "cr": 9.99, "kind": "rule"}, {"policy": "Rule of thumb 1.5x MA3", "fill": 0.883, "cr": 20.57, "kind": "rule"}, {"policy": "Rule of thumb 2.0x MA3", "fill": 0.923, "cr": 34.49, "kind": "rule"}, {"policy": "Model q90", "fill": 0.927, "cr": 24.31, "kind": "model"}, {"policy": "Model q95", "fill": 0.956, "cr": 33.39, "kind": "model"}, {"policy": "Model A:q95 B:q90 C:cap", "fill": 0.9, "cr": 26.32, "kind": "model"}, {"policy": "Model A:q95 B:q90 C:MTO", "fill": 0.83, "cr": 22.45, "kind": "model"}], "calib": [{"q": 0.5, "cov": 0.619}, {"q": 0.9, "cov": 0.9}, {"q": 0.95, "cov": 0.945}], "stock_class": [{"k": "Unclassified", "cr": 6.9}, {"k": "Cat D", "cr": 5.01}, {"k": "Cat A", "cr": 3.84}, {"k": "Cat C", "cr": 3.05}, {"k": "Cat B", "cr": 2.11}], "sku_pareto": [{"r": 1, "q": 127355.0, "cum": 3.92}, {"r": 2, "q": 96254.0, "cum": 6.88}, {"r": 3, "q": 88972.0, "cum": 9.62}, {"r": 4, "q": 68856.0, "cum": 11.74}, {"r": 5, "q": 64453.0, "cum": 13.72}, {"r": 6, "q": 58071.0, "cum": 15.51}, {"r": 7, "q": 49017.0, "cum": 17.01}, {"r": 8, "q": 48477.0, "cum": 18.51}, {"r": 9, "q": 47490.0, "cum": 19.97}, {"r": 10, "q": 44763.0, "cum": 21.34}, {"r": 11, "q": 40407.0, "cum": 22.59}, {"r": 12, "q": 39880.0, "cum": 23.81}, {"r": 13, "q": 38212.0, "cum": 24.99}, {"r": 14, "q": 36667.0, "cum": 26.12}, {"r": 15, "q": 34645.0, "cum": 27.18}, {"r": 16, "q": 27681.0, "cum": 28.04}, {"r": 17, "q": 27628.0, "cum": 28.89}, {"r": 18, "q": 26894.0, "cum": 29.71}, {"r": 19, "q": 26623.0, "cum": 30.53}, {"r": 20, "q": 26458.0, "cum": 31.35}, {"r": 21, "q": 26037.0, "cum": 32.15}, {"r": 22, "q": 24710.0, "cum": 32.91}, {"r": 23, "q": 23621.0, "cum": 33.63}, {"r": 24, "q": 22266.0, "cum": 34.32}, {"r": 25, "q": 21651.0, "cum": 34.99}, {"r": 26, "q": 21506.0, "cum": 35.65}, {"r": 27, "q": 19757.0, "cum": 36.26}, {"r": 28, "q": 19563.0, "cum": 36.86}, {"r": 29, "q": 19003.0, "cum": 37.44}, {"r": 30, "q": 18803.0, "cum": 38.02}, {"r": 31, "q": 18106.0, "cum": 38.58}, {"r": 32, "q": 16428.0, "cum": 39.08}, {"r": 33, "q": 15848.0, "cum": 39.57}, {"r": 34, "q": 15713.0, "cum": 40.05}, {"r": 35, "q": 15531.0, "cum": 40.53}, {"r": 36, "q": 15391.0, "cum": 41.01}, {"r": 37, "q": 15165.0, "cum": 41.47}, {"r": 38, "q": 13913.0, "cum": 41.9}, {"r": 39, "q": 13766.0, "cum": 42.32}, {"r": 40, "q": 13663.0, "cum": 42.74}, {"r": 42, "q": 13463.0, "cum": 43.57}, {"r": 43, "q": 13347.0, "cum": 43.98}, {"r": 44, "q": 13192.0, "cum": 44.39}, {"r": 45, "q": 12757.0, "cum": 44.78}, {"r": 47, "q": 12416.0, "cum": 45.55}, {"r": 48, "q": 12391.0, "cum": 45.93}, {"r": 50, "q": 11493.0, "cum": 46.66}, {"r": 51, "q": 11341.0, "cum": 47.01}, {"r": 53, "q": 10975.0, "cum": 47.69}, {"r": 54, "q": 10965.0, "cum": 48.03}, {"r": 56, "q": 10383.0, "cum": 48.67}, {"r": 58, "q": 10060.0, "cum": 49.28}, {"r": 59, "q": 10048.0, "cum": 49.59}, {"r": 61, "q": 10007.0, "cum": 50.21}, {"r": 63, "q": 9738.0, "cum": 50.81}, {"r": 65, "q": 9171.0, "cum": 51.38}, {"r": 67, "q": 9078.0, "cum": 51.93}, {"r": 69, "q": 8792.0, "cum": 52.48}, {"r": 71, "q": 8561.0, "cum": 53.0}, {"r": 73, "q": 8469.0, "cum": 53.53}, {"r": 75, "q": 8387.0, "cum": 54.04}, {"r": 78, "q": 8011.0, "cum": 54.79}, {"r": 80, "q": 7945.0, "cum": 55.28}, {"r": 83, "q": 7526.0, "cum": 55.99}, {"r": 85, "q": 7167.0, "cum": 56.43}, {"r": 88, "q": 6942.0, "cum": 57.08}, {"r": 90, "q": 6811.0, "cum": 57.51}, {"r": 93, "q": 6422.0, "cum": 58.11}, {"r": 96, "q": 6034.0, "cum": 58.67}, {"r": 99, "q": 5840.0, "cum": 59.22}, {"r": 102, "q": 5588.0, "cum": 59.74}, {"r": 105, "q": 5525.0, "cum": 60.25}, {"r": 108, "q": 5436.0, "cum": 60.76}, {"r": 111, "q": 5399.0, "cum": 61.26}, {"r": 115, "q": 5195.0, "cum": 61.91}, {"r": 118, "q": 5179.0, "cum": 62.39}, {"r": 122, "q": 4934.0, "cum": 63.02}, {"r": 125, "q": 4736.0, "cum": 63.46}, {"r": 129, "q": 4600.0, "cum": 64.03}, {"r": 133, "q": 4506.0, "cum": 64.59}, {"r": 137, "q": 4327.0, "cum": 65.12}, {"r": 141, "q": 4235.0, "cum": 65.65}, {"r": 145, "q": 4195.0, "cum": 66.17}, {"r": 150, "q": 4149.0, "cum": 66.81}, {"r": 154, "q": 3952.0, "cum": 67.3}, {"r": 159, "q": 3818.0, "cum": 67.89}, {"r": 164, "q": 3747.0, "cum": 68.47}, {"r": 169, "q": 3653.0, "cum": 69.04}, {"r": 174, "q": 3615.0, "cum": 69.6}, {"r": 179, "q": 3581.0, "cum": 70.15}, {"r": 185, "q": 3505.0, "cum": 70.8}, {"r": 190, "q": 3364.0, "cum": 71.33}, {"r": 196, "q": 3300.0, "cum": 71.95}, {"r": 202, "q": 3109.0, "cum": 72.55}, {"r": 208, "q": 3027.0, "cum": 73.11}, {"r": 214, "q": 2992.0, "cum": 73.67}, {"r": 221, "q": 2929.0, "cum": 74.31}, {"r": 227, "q": 2763.0, "cum": 74.83}, {"r": 234, "q": 2683.0, "cum": 75.41}, {"r": 241, "q": 2620.0, "cum": 75.99}, {"r": 249, "q": 2546.0, "cum": 76.62}, {"r": 256, "q": 2477.0, "cum": 77.16}, {"r": 264, "q": 2413.0, "cum": 77.77}, {"r": 272, "q": 2331.0, "cum": 78.35}, {"r": 280, "q": 2228.0, "cum": 78.91}, {"r": 289, "q": 2128.0, "cum": 79.51}, {"r": 298, "q": 2045.0, "cum": 80.09}, {"r": 307, "q": 1957.0, "cum": 80.64}, {"r": 316, "q": 1891.0, "cum": 81.17}, {"r": 325, "q": 1809.0, "cum": 81.68}, {"r": 335, "q": 1735.0, "cum": 82.23}, {"r": 345, "q": 1662.0, "cum": 82.75}, {"r": 356, "q": 1598.0, "cum": 83.3}, {"r": 367, "q": 1538.0, "cum": 83.83}, {"r": 378, "q": 1461.0, "cum": 84.33}, {"r": 389, "q": 1391.0, "cum": 84.81}, {"r": 401, "q": 1337.0, "cum": 85.32}, {"r": 413, "q": 1295.0, "cum": 85.8}, {"r": 425, "q": 1264.0, "cum": 86.28}, {"r": 438, "q": 1216.0, "cum": 86.77}, {"r": 452, "q": 1164.0, "cum": 87.28}, {"r": 465, "q": 1117.0, "cum": 87.74}, {"r": 479, "q": 1086.0, "cum": 88.21}, {"r": 494, "q": 1025.0, "cum": 88.7}, {"r": 509, "q": 989.0, "cum": 89.16}, {"r": 524, "q": 965.0, "cum": 89.62}, {"r": 540, "q": 915.0, "cum": 90.08}, {"r": 556, "q": 880.0, "cum": 90.52}, {"r": 573, "q": 843.0, "cum": 90.97}, {"r": 591, "q": 821.0, "cum": 91.43}, {"r": 609, "q": 778.0, "cum": 91.87}, {"r": 627, "q": 748.0, "cum": 92.3}, {"r": 646, "q": 712.0, "cum": 92.72}, {"r": 666, "q": 690.0, "cum": 93.15}, {"r": 686, "q": 657.0, "cum": 93.57}, {"r": 706, "q": 622.0, "cum": 93.96}, {"r": 728, "q": 580.0, "cum": 94.37}, {"r": 750, "q": 540.0, "cum": 94.74}, {"r": 773, "q": 510.0, "cum": 95.11}, {"r": 796, "q": 480.0, "cum": 95.47}, {"r": 820, "q": 436.0, "cum": 95.8}, {"r": 845, "q": 409.0, "cum": 96.13}, {"r": 870, "q": 383.0, "cum": 96.43}, {"r": 897, "q": 355.0, "cum": 96.74}, {"r": 924, "q": 326.0, "cum": 97.02}, {"r": 952, "q": 302.0, "cum": 97.29}, {"r": 981, "q": 283.0, "cum": 97.55}, {"r": 1010, "q": 262.0, "cum": 97.79}, {"r": 1041, "q": 241.0, "cum": 98.03}, {"r": 1072, "q": 217.0, "cum": 98.25}, {"r": 1105, "q": 203.0, "cum": 98.46}, {"r": 1138, "q": 178.0, "cum": 98.65}, {"r": 1173, "q": 157.0, "cum": 98.83}, {"r": 1208, "q": 142.0, "cum": 98.99}, {"r": 1245, "q": 129.0, "cum": 99.15}, {"r": 1282, "q": 112.0, "cum": 99.28}, {"r": 1321, "q": 95.0, "cum": 99.4}, {"r": 1361, "q": 80.0, "cum": 99.51}, {"r": 1403, "q": 68.0, "cum": 99.61}, {"r": 1445, "q": 59.0, "cum": 99.69}, {"r": 1489, "q": 46.0, "cum": 99.76}, {"r": 1534, "q": 35.0, "cum": 99.82}, {"r": 1580, "q": 27.0, "cum": 99.86}, {"r": 1628, "q": 21.0, "cum": 99.89}, {"r": 1677, "q": 15.0, "cum": 99.92}, {"r": 1728, "q": 11.0, "cum": 99.94}, {"r": 1780, "q": 8.0, "cum": 99.96}, {"r": 1834, "q": 6.0, "cum": 99.97}, {"r": 1890, "q": 5.0, "cum": 99.98}, {"r": 1947, "q": 3.0, "cum": 99.98}, {"r": 2006, "q": 2.0, "cum": 99.99}, {"r": 2067, "q": 2.0, "cum": 99.99}, {"r": 2129, "q": 1.0, "cum": 100.0}, {"r": 2194, "q": 1.0, "cum": 100.0}, {"r": 2260, "q": 1.0, "cum": 100.0}], "pareto_pts": [{"p": 50, "k": 61}, {"p": 80, "k": 297}, {"p": 90, "k": 538}, {"p": 95, "k": 766}, {"p": 99, "k": 1211}], "series_hist": [{"b": "0", "n": 0, "units_pct": 0.0}, {"b": "1-2", "n": 13308, "units_pct": 0.58}, {"b": "3-9", "n": 17999, "units_pct": 3.02}, {"b": "10-29", "n": 15627, "units_pct": 8.31}, {"b": "30-99", "n": 10275, "units_pct": 16.8}, {"b": "100-299", "n": 4121, "units_pct": 21.08}, {"b": "300-999", "n": 1432, "units_pct": 22.45}, {"b": "1k-3k", "n": 387, "units_pct": 19.09}, {"b": "3k-10k", "n": 60, "units_pct": 8.35}, {"b": "10k+", "n": 1, "units_pct": 0.33}], "yoy": [{"m": "2025-04", "qty": 121337, "yoy": 3.6}, {"m": "2025-05", "qty": 146712, "yoy": 10.4}, {"m": "2025-06", "qty": 149400, "yoy": 6.2}, {"m": "2025-07", "qty": 148503, "yoy": 6.0}, {"m": "2025-08", "qty": 141191, "yoy": 6.5}, {"m": "2025-09", "qty": 143888, "yoy": 12.0}, {"m": "2025-10", "qty": 135803, "yoy": 7.3}, {"m": "2025-11", "qty": 137343, "yoy": 10.1}, {"m": "2025-12", "qty": 142679, "yoy": 5.0}, {"m": "2026-01", "qty": 137972, "yoy": 6.0}, {"m": "2026-02", "qty": 135997, "yoy": 10.4}, {"m": "2026-03", "qty": 146202, "yoy": 11.7}], "cover": [{"b": "DELHI-E1", "days": 0.0}, {"b": "BENGALURU", "days": 33.0}, {"b": "SECUNDRABAD", "days": 33.6}, {"b": "BHUBANESWAR", "days": 39.0}, {"b": "HYDERABAD", "days": 41.3}, {"b": "KARNAL", "days": 42.1}, {"b": "HUBLI", "days": 42.9}, {"b": "CHENNAI", "days": 45.0}, {"b": "NOIDA", "days": 47.8}, {"b": "VIJAYAWADA", "days": 48.2}, {"b": "MEERUT", "days": 50.0}, {"b": "AGRA", "days": 51.7}, {"b": "RAJKOT", "days": 52.0}, {"b": "VISAKHAPATNAM", "days": 54.5}, {"b": "JALANDHAR", "days": 55.0}, {"b": "LUDHIANA", "days": 55.9}, {"b": "THIRUVANANTHAPURAM", "days": 57.3}, {"b": "JAIPUR", "days": 58.1}, {"b": "PUNE", "days": 59.6}, {"b": "LUCKNOW", "days": 65.6}, {"b": "CALICUT", "days": 66.7}, {"b": "CHANDIGARH", "days": 66.7}, {"b": "GURGAON", "days": 69.1}, {"b": "COIMBATORE", "days": 69.3}, {"b": "NAGPUR", "days": 73.5}, {"b": "DELHI-2", "days": 74.5}, {"b": "COCHIN", "days": 77.4}, {"b": "PATNA", "days": 78.6}, {"b": "JAMMU", "days": 79.5}, {"b": "AURANGABAD", "days": 80.3}, {"b": "KOLKATTA", "days": 83.3}, {"b": "INDORE", "days": 84.5}, {"b": "SURAT", "days": 85.2}, {"b": "MADURAI", "days": 86.5}, {"b": "JABALPUR", "days": 87.9}, {"b": "RANCHI", "days": 88.7}, {"b": "VARANASI", "days": 89.6}, {"b": "JODHPUR", "days": 102.8}, {"b": "AHMEDABAD", "days": 104.9}, {"b": "DELHI-1", "days": 105.0}, {"b": "SILIGURI", "days": 118.9}, {"b": "DEHRADUN", "days": 124.4}, {"b": "NORTH 24 PARAGANAS", "days": 126.4}, {"b": "ANDHERI", "days": 139.5}, {"b": "GUWAHATI", "days": 150.2}, {"b": "KOPERKHANE", "days": 164.0}, {"b": "UDAIPUR", "days": 166.3}, {"b": "GWALIOR", "days": 178.8}, {"b": "KANPUR", "days": 178.9}, {"b": "GOA", "days": 216.4}, {"b": "RAIPUR", "days": 225.9}], "cover_stats": {"median": 74.5, "p10": 42.1, "p90": 164.0, "under15": 1, "over60": 32}, "mix_age": [{"k": "Category D (>9 & <=15 Years)", "qty": 944359, "pct": 29.1, "cr": 291.2}, {"k": "Category Z ( >15 Years)", "qty": 836323, "pct": 25.7, "cr": 227.7}, {"k": "Category C (>6 & <=9 Years)", "qty": 568624, "pct": 17.5, "cr": 210.1}, {"k": "Category B (>3 & <=6 years)", "qty": 551032, "pct": 17.0, "cr": 173.4}, {"k": "Category A (0 -<=3 Years)", "qty": 343843, "pct": 10.6, "cr": 106.8}, {"k": "Unmapped", "qty": 5963, "pct": 0.2, "cr": 2.9}], "mix_glass": [{"k": "Lam", "qty": 2105394, "pct": 64.8, "cr": 837.2}, {"k": "Sidelite", "qty": 721647, "pct": 22.2, "cr": 65.6}, {"k": "Backlite", "qty": 417126, "pct": 12.8, "cr": 106.5}, {"k": "Unmapped", "qty": 5963, "pct": 0.2, "cr": 2.9}, {"k": "Temp W/s", "qty": 14, "pct": 0.0, "cr": 0.0}], "mix_vehicle": [{"k": "Car & Muv", "qty": 1765536, "pct": 54.3, "cr": 715.5}, {"k": "Car & MUV", "qty": 1024838, "pct": 31.5, "cr": 164.5}, {"k": "Commercial", "qty": 329432, "pct": 10.1, "cr": 97.6}, {"k": "3W", "qty": 121049, "pct": 3.7, "cr": 26.6}, {"k": "Unmapped", "qty": 5963, "pct": 0.2, "cr": 2.9}, {"k": "High End", "qty": 3326, "pct": 0.1, "cr": 5.0}], "mix_oem": [{"k": "OEM", "qty": 3049310, "pct": 93.8, "cr": 940.5}, {"k": "Non-OEM", "qty": 194734, "pct": 6.0, "cr": 68.8}, {"k": "Unmapped", "qty": 5963, "pct": 0.2, "cr": 2.9}, {"k": "NON-OEM", "qty": 137, "pct": 0.0, "cr": 0.0}], "horizon": {"by_horizon": [{"h": 1, "GBM": 0.5524124285805794, "SES": 0.5275706648826599, "MA6": 0.5263690948486328, "SeasonalNaive": 0.6381449699401855, "actual_units": 135803.0}, {"h": 2, "GBM": 0.6007224852237489, "SES": 0.5774217844009399, "MA6": 0.5776134729385376, "SeasonalNaive": 0.6817238330841064, "actual_units": 137343.0}, {"h": 3, "GBM": 0.599096675913678, "SES": 0.5768622159957886, "MA6": 0.5801846385002136, "SeasonalNaive": 0.6933886408805847, "actual_units": 142679.0}, {"h": 4, "GBM": 0.6202974496017375, "SES": 0.5916974544525146, "MA6": 0.5929161310195923, "SeasonalNaive": 0.6940683722496033, "actual_units": 137972.0}, {"h": 5, "GBM": 0.6341007698641032, "SES": 0.6057711839675903, "MA6": 0.604759693145752, "SeasonalNaive": 0.6819047331809998, "actual_units": 135997.0}, {"h": 6, "GBM": 0.6157556796659204, "SES": 0.6012977361679077, "MA6": 0.603590726852417, "SeasonalNaive": 0.6917483806610107, "actual_units": 146202.0}], "cum": {"GBM": 0.3794355253360557, "SES": 0.3781161606311798, "MA6": 0.3774360120296478, "SeasonalNaive": 0.39831531047821045}, "levels": {"branch": {"GBM": 0.13913943014098967, "SES": 0.10942983627319336, "n": 51}, "national": {"GBM": 0.07495592320923555, "SES": 0.018286122009158134, "n": 1}}, "seg_cum": [{"seg": "A", "series": 5825, "units": 554977.0, "GBM": 0.27728594930133044, "SES": 0.25725632905960083}, {"seg": "B", "series": 13425, "units": 169991.0, "GBM": 0.46276619619378523, "SES": 0.48352697491645813}, {"seg": "C", "series": 43960, "units": 111028.0, "GBM": 0.762448829991164, "SES": 0.8208469748497009}], "coverage": {"q80": {"target": 0.8, "coverage_per_period": 0.8318356800084374, "coverage_cum": 0.774576807467173}, "q90": {"target": 0.9, "coverage_per_period": 0.8927068501819332, "coverage_cum": 0.9406581237146021}, "q95": {"target": 0.95, "coverage_per_period": 0.9338422190581659, "coverage_cum": 0.9689606074988135}}}, "misalloc": {"dead_cr": 9.0, "dead_rows": 22643, "dead_pct": 43.0, "slow_cr": 0.43, "slow_rows": 869, "slow_pct": 2.1, "ok_cr": 11.54, "ok_rows": 25687, "ok_pct": 55.2, "stockout_rows": 20945, "stockout_units": 281937, "skus_both": 1892, "units_short": 499357, "units_stocked": 94522}, "ablation": {"BENGALURU (1 branch, 1,701 series)": {"n_series": 1701, "units": 50702.0, "global": {"cum": 0.24560033004674806, "by_h": [0.37783254541887634, 0.3867333293687424, 0.3643551487535265, 0.3921616622478045, 0.4290655297138226, 0.42513384338495425]}, "local_only": {"cum": 0.2712040356400035, "by_h": [0.39891351818916354, 0.4092549406330485, 0.3916758113358523, 0.40489023657079787, 0.44219991485369897, 0.4311827743047353]}, "cold_start": {"cum": 0.2443871440869373, "by_h": [0.38277375008846753, 0.38778405319283693, 0.37919830340483474, 0.3856704143672009, 0.42312386212645536, 0.4268761993800022]}, "SES": {"cum": 0.25034230947494507, "by_h": [0.3702266216278076, 0.38191795349121094, 0.37457960844039917, 0.38785040378570557, 0.41954144835472107, 0.4207364320755005]}, "by_abc": {"A": {"n": 265, "units": 40538.0, "global": 0.17372109596528065, "local_only": 0.19312995537075806, "cold_start": 0.18154668904253712, "SES": 0.17913495004177094}, "B": {"n": 496, "units": 6923.0, "global": 0.42968332665187564, "local_only": 0.4618855865674076, "cold_start": 0.4185865995186644, "SES": 0.44323381781578064}, "C": {"n": 940, "units": 3241.0, "global": 0.7514422941619064, "local_only": 0.8404353497048764, "cold_start": 0.6582851806917035, "SES": 0.7289647459983826}}}, "Top-5 branches (7,624 series)": {"n_series": 7424, "units": 191005.0, "global": {"cum": 0.3635957273904879, "by_h": [0.43563724977548596, 0.5345106317242476, 0.5049270775593895, 0.5488035096725215, 0.5833561912615133, 0.581323769073279]}, "local_only": {"cum": 0.36656428897983756, "by_h": [0.44284172584395337, 0.534307244685894, 0.5111251418688358, 0.5511335164987925, 0.5884559135773214, 0.5824380824779645]}, "cold_start": {"cum": 0.3438128365431904, "by_h": [0.41410716330569347, 0.5175218337989987, 0.4956565585523503, 0.5336467190530264, 0.5566056650392682, 0.5639519022565849]}, "SES": {"cum": 0.3473854660987854, "by_h": [0.4099762737751007, 0.5120235681533813, 0.4868484139442444, 0.524826169013977, 0.54815274477005, 0.5601555705070496]}, "by_abc": {"A": {"n": 1118, "units": 143106.0, "global": 0.30141182647151743, "local_only": 0.30219781356924114, "cold_start": 0.2894880037903882, "SES": 0.2770686447620392}, "B": {"n": 2191, "units": 33855.0, "global": 0.4753999683307887, "local_only": 0.48237699762161745, "cold_start": 0.44023306480978497, "SES": 0.47735342383384705}, "C": {"n": 4115, "units": 14044.0, "global": 0.7277196769686917, "local_only": 0.7432653413182998, "cold_start": 0.6649394876366795, "SES": 0.7505966424942017}}}}};
+
+const NS="http://www.w3.org/2000/svg";
+const tip=document.getElementById('tip');
+function el(t,a={}){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
+function txt(s,a={}){const e=el('text',a);e.textContent=s;return e;}
+function svg(w,h){const s=el('svg',{viewBox:`0 0 ${w} ${h}`,width:w,height:h,role:'img'});
+  s.style.width='100%';s.style.maxWidth=w+'px';s.style.height='auto';return s;}
+function bindTip(node,html){
+  node.classList.add('hit');
+  node.addEventListener('mouseenter',()=>{tip.innerHTML=html;tip.classList.add('on');});
+  node.addEventListener('mousemove',e=>{const pad=14;let x=e.clientX+pad,y=e.clientY+pad;
+    if(x+tip.offsetWidth>innerWidth-8)x=e.clientX-tip.offsetWidth-pad;
+    if(y+tip.offsetHeight>innerHeight-8)y=e.clientY-tip.offsetHeight-pad;
+    tip.style.left=x+'px';tip.style.top=y+'px';});
+  node.addEventListener('mouseleave',()=>tip.classList.remove('on'));}
+const CS=getComputedStyle(document.documentElement);
+const C=n=>CS.getPropertyValue(n).trim();
+const fmt=n=>Math.round(n).toLocaleString('en-IN');
+const MONL=['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
+const LG=v=>Math.log10(Math.max(v,1e-6));
+/* decade ticks between lo and hi (values, not logs) */
+function decades(lo,hi){const out=[];for(let e=Math.floor(LG(lo));e<=Math.ceil(LG(hi));e++){
+  for(const m of [1,2,5]){const v=m*Math.pow(10,e); if(v>=lo*0.999&&v<=hi*1.001)out.push(v);}}return out;}
+const sup=v=>v>=1000?(v/1000)+'k':(v<1?String(v):String(v));
+
+/* ---------- 1. SKU Pareto, log-log ---------- */
+(function(){
+  const p=D.sku_pareto, W=860,H=340,M={t:20,r:150,b:46,l:64};
+  const iw=W-M.l-M.r, ih=H-M.t-M.b;
+  const xlo=1,xhi=2260, ylo=1,yhi=Math.max(...p.map(d=>d.q));
+  const X=v=>M.l+((LG(v)-LG(xlo))/(LG(xhi)-LG(xlo)))*iw;
+  const Y=v=>M.t+ih-((LG(v)-LG(ylo))/(LG(yhi)-LG(ylo)))*ih;
+  const s=svg(W,H);
+  decades(1,2260).forEach(v=>{s.appendChild(el('line',{x1:X(v),x2:X(v),y1:M.t,y2:M.t+ih,class:'gridline'}));
+    s.appendChild(txt(sup(v),{x:X(v),y:M.t+ih+16,'text-anchor':'middle',class:'axlab'}));});
+  decades(1,yhi).forEach(v=>{s.appendChild(el('line',{x1:M.l,x2:M.l+iw,y1:Y(v),y2:Y(v),class:'gridline'}));
+    s.appendChild(txt(sup(v),{x:M.l-8,y:Y(v)+4,'text-anchor':'end',class:'axlab'}));});
+  s.appendChild(txt('SKU rank by volume  (log)',{x:M.l+iw/2,y:H-10,'text-anchor':'middle',class:'axlab'}));
+  s.appendChild(txt('units sold (log)',{x:M.l-8,y:M.t-6,'text-anchor':'end',class:'axlab'}));
+  s.appendChild(el('path',{d:p.map((d,i)=>`${i?'L':'M'}${X(d.r)},${Y(d.q)}`).join(' '),
+    fill:'none',stroke:C('--s1'),'stroke-width':2.4,'stroke-linejoin':'round'}));
+  const marks=D.pareto_pts.map(m=>({...m,q:(p.find(z=>z.r>=m.k)||p[p.length-1]).q}));
+  marks.forEach(m=>{
+    const g=el('g');
+    g.appendChild(el('line',{x1:X(m.k),x2:X(m.k),y1:Y(m.q),y2:M.t+ih,stroke:C('--accent'),'stroke-width':1,'stroke-dasharray':'2 3'}));
+    g.appendChild(el('circle',{cx:X(m.k),cy:Y(m.q),r:5,fill:C('--accent'),stroke:C('--surface'),'stroke-width':2}));
+    bindTip(g,`<b>${m.p}% of all units</b><br>comes from the top ${fmt(m.k)} SKUs<br>${(100*m.k/2260).toFixed(1)}% of the range`);
+    s.appendChild(g);
+    s.appendChild(txt(m.p+'%',{x:X(m.k),y:Y(m.q)-11,'text-anchor':'middle','font-size':10,fill:C('--accent'),'font-weight':600}));});
+  const notes=[['61 SKUs','→ 50% of units'],['297 SKUs','→ 80%'],['538 SKUs','→ 90%'],['1,211 SKUs','→ 99%']];
+  notes.forEach((n,i)=>{s.appendChild(txt(n[0],{x:W-M.r+16,y:M.t+22+i*34,'font-size':12,'font-weight':600,fill:C('--ink')}));
+    s.appendChild(txt(n[1],{x:W-M.r+16,y:M.t+36+i*34,'font-size':10.5,fill:C('--ink-3')}));});
+  document.getElementById('c-pareto').appendChild(s);
+})();
+
+/* ---------- 2. series histogram, log counts ---------- */
+(function(){
+  const h=D.series_hist.filter(d=>d.n>0), W=860,H=330,M={t:24,r:26,b:56,l:60};
+  const iw=W-M.l-M.r, ih=H-M.t-M.b, half=ih*0.56, gap=26, lower=ih-half-gap;
+  const s=svg(W,H); const bw=iw/h.length;
+  const ymax=20000; const Y=v=>M.t+half-((LG(Math.max(v,1))-0)/(LG(ymax)))*half;
+  decades(1,ymax).forEach(v=>{s.appendChild(el('line',{x1:M.l,x2:M.l+iw,y1:Y(v),y2:Y(v),class:'gridline'}));
+    s.appendChild(txt(sup(v),{x:M.l-8,y:Y(v)+4,'text-anchor':'end',class:'axlab'}));});
+  s.appendChild(txt('series count (log)',{x:M.l-8,y:M.t-8,'text-anchor':'end',class:'axlab'}));
+  h.forEach((d,i)=>{const x=M.l+bw*i+bw*0.14, w=bw*0.72;
+    const r=el('rect',{x,y:Y(d.n),width:w,height:M.t+half-Y(d.n),rx:3.5,fill:C('--s1')});
+    bindTip(r,`<b>${d.b} units in 24 months</b><br>${fmt(d.n)} series<br>${d.units_pct}% of all units`);
+    s.appendChild(r);
+    s.appendChild(txt(fmt(d.n),{x:x+w/2,y:Y(d.n)-5,'text-anchor':'middle','font-size':9.5,fill:C('--ink-2')}));});
+  const t2=M.t+half+gap, umax=Math.max(...h.map(d=>d.units_pct));
+  const Y2=v=>t2+lower-(v/25)*lower;
+  [0,10,20].forEach(v=>{s.appendChild(el('line',{x1:M.l,x2:M.l+iw,y1:Y2(v),y2:Y2(v),class:'gridline'}));
+    s.appendChild(txt(v+'%',{x:M.l-8,y:Y2(v)+4,'text-anchor':'end',class:'axlab'}));});
+  s.appendChild(txt('share of units (linear)',{x:M.l-8,y:t2-8,'text-anchor':'end',class:'axlab'}));
+  h.forEach((d,i)=>{const x=M.l+bw*i+bw*0.14, w=bw*0.72;
+    const r=el('rect',{x,y:Y2(d.units_pct),width:w,height:t2+lower-Y2(d.units_pct),rx:3.5,fill:C('--s3')});
+    bindTip(r,`<b>${d.b} units</b><br>${d.units_pct}% of all volume<br>from ${fmt(d.n)} series`);
+    s.appendChild(r);});
+  h.forEach((d,i)=>s.appendChild(txt(d.b,{x:M.l+bw*i+bw/2,y:H-14,'text-anchor':'middle','font-size':9.5,fill:C('--ink-3')})));
+  s.appendChild(txt('units sold per series over 24 months',{x:M.l+iw/2,y:H-2,'text-anchor':'middle',class:'axlab'}));
+  document.getElementById('c-hist').appendChild(s);
+})();
+
+/* ---------- 3. SBC ---------- */
+(function(){
+  const order=['Smooth','Intermittent','Single/None','Lumpy','Erratic'];
+  const rows=order.map(k=>D.sbc.find(d=>d.k===k)).filter(Boolean);
+  const total=D.sbc.reduce((a,d)=>a+d.combos,0);
+  const W=860,rowH=54,M={t:26,r:74,b:16,l:136};
+  const H=M.t+rows.length*rowH+M.b, iw=W-M.l-M.r;
+  const s=svg(W,H); const x=p=>(p/85)*iw;
+  rows.forEach((d,i)=>{
+    const yb=M.t+i*rowH, cpct=100*d.combos/total;
+    s.appendChild(txt(d.k,{x:M.l-12,y:yb+16,'text-anchor':'end',class:'val'}));
+    s.appendChild(txt(fmt(d.combos)+' series',{x:M.l-12,y:yb+32,'text-anchor':'end',class:'axlab'}));
+    [[cpct,C('--s1'),0,'series'],[d.val_pct,C('--s3'),20,'MRP value']].forEach(([v,col,off,lab])=>{
+      const w=Math.max(x(v),2);
+      const r=el('rect',{x:M.l,y:yb+off,width:w,height:16,rx:4,fill:col});
+      bindTip(r,`<b>${d.k}</b><br>${v.toFixed(1)}% of ${lab}`);s.appendChild(r);
+      s.appendChild(txt(v.toFixed(1)+'%',{x:M.l+w+7,y:yb+off+12,class:'val'}));});});
+  document.getElementById('c-sbc').appendChild(s);
+})();
+
+/* ---------- 4. monthly + YoY ---------- */
+(function(){
+  const a=D.sales_monthly.slice(0,12).map(d=>d.qty), b=D.sales_monthly.slice(12).map(d=>d.qty);
+  const W=860,M={t:20,r:20,b:38,l:62},PH=176,GAP=42,FH=86;
+  const H=M.t+PH+GAP+FH+M.b, iw=W-M.l-M.r;
+  const s=svg(W,H);
+  const lo=110000, hi=155000;
+  const y=v=>M.t+PH-((v-lo)/(hi-lo))*PH, x=i=>M.l+(iw/11)*i;
+  for(let v=110000;v<=155000;v+=15000){
+    s.appendChild(el('line',{x1:M.l,x2:W-M.r,y1:y(v),y2:y(v),class:'gridline'}));
+    s.appendChild(txt(fmt(v/1000)+'k',{x:M.l-9,y:y(v)+4,'text-anchor':'end',class:'axlab'}));}
+  s.appendChild(txt('axis starts at 110k',{x:M.l+4,y:M.t+PH-4,class:'axlab'}));
+  [[a,C('--s1'),'FY 2024-25'],[b,C('--s2'),'FY 2025-26']].forEach(([arr,col,lab])=>{
+    s.appendChild(el('path',{d:arr.map((v,i)=>`${i?'L':'M'}${x(i)},${y(v)}`).join(' '),
+      fill:'none',stroke:col,'stroke-width':2.5,'stroke-linejoin':'round'}));
+    arr.forEach((v,i)=>{const c=el('circle',{cx:x(i),cy:y(v),r:4.5,fill:col,stroke:C('--surface'),'stroke-width':2});
+      bindTip(c,`<b>${lab} · ${MONL[i]}</b><br>${fmt(v)} units`);s.appendChild(c);});});
+  const t2=M.t+PH+GAP;
+  const Y2=v=>t2+FH-((v)/14)*FH;
+  [0,5,10].forEach(v=>{s.appendChild(el('line',{x1:M.l,x2:W-M.r,y1:Y2(v),y2:Y2(v),class:'gridline'}));
+    s.appendChild(txt('+'+v+'%',{x:M.l-9,y:Y2(v)+4,'text-anchor':'end',class:'axlab'}));});
+  s.appendChild(txt('year on year',{x:M.l-9,y:t2-6,'text-anchor':'end',class:'axlab'}));
+  const bw=iw/12;
+  b.forEach((v,i)=>{const g=100*(v/a[i]-1);
+    const r=el('rect',{x:x(i)-11,y:Y2(g),width:22,height:t2+FH-Y2(g),rx:3.5,fill:C('--s3')});
+    bindTip(r,`<b>${MONL[i]}</b><br>${fmt(a[i])} → ${fmt(v)} units<br>+${g.toFixed(1)}% year on year`);
+    s.appendChild(r);
+    s.appendChild(txt('+'+g.toFixed(0),{x:x(i),y:Y2(g)-4,'text-anchor':'middle','font-size':9.5,fill:C('--ink-2')}));});
+  MONL.forEach((m,i)=>s.appendChild(txt(m,{x:x(i),y:H-12,'text-anchor':'middle',class:'axlab'})));
+  document.getElementById('c-monthly').appendChild(s);
+})();
+
+/* ---------- 5. seasonal index ---------- */
+(function(){
+  const W=860,H=250,M={t:18,r:18,b:34,l:52};
+  const iw=W-M.l-M.r, ih=H-M.t-M.b;
+  const lo=82,hi=110; const y=v=>M.t+ih-((v-lo)/(hi-lo))*ih; const x=i=>M.l+(iw/11)*i;
+  const s=svg(W,H);
+  [85,90,95,100,105,110].forEach(v=>{
+    s.appendChild(el('line',{x1:M.l,x2:W-M.r,y1:y(v),y2:y(v),class:'gridline'}));
+    s.appendChild(txt(v,{x:M.l-9,y:y(v)+4,'text-anchor':'end',class:'axlab'}));});
+  s.appendChild(el('line',{x1:M.l,x2:W-M.r,y1:y(100),y2:y(100),stroke:C('--rule-2'),'stroke-width':1.5,'stroke-dasharray':'4 4'}));
+  MONL.forEach((m,i)=>s.appendChild(txt(m,{x:x(i),y:H-12,'text-anchor':'middle',class:'axlab'})));
+  [['a',C('--s1'),'FY 2024-25'],['b',C('--s2'),'FY 2025-26']].forEach(([k,col,lab])=>{
+    const arr=D.seasonality.map(d=>d[k]);
+    s.appendChild(el('path',{d:arr.map((v,i)=>`${i?'L':'M'}${x(i)},${y(v)}`).join(' '),
+      fill:'none',stroke:col,'stroke-width':2.5,'stroke-linejoin':'round'}));
+    arr.forEach((v,i)=>{const c=el('circle',{cx:x(i),cy:y(v),r:4,fill:col,stroke:C('--surface'),'stroke-width':2});
+      bindTip(c,`<b>${lab} · ${MONL[i]}</b><br>index ${v}`);s.appendChild(c);});});
+  document.getElementById('c-season').appendChild(s);
+})();
+
+
+/* ---------- 6. covariate mix ---------- */
+(function(){
+  const groups=[['Vehicle age category','mix_age'],['Glass type','mix_glass'],
+                ['Vehicle category','mix_vehicle'],['OEM status','mix_oem']];
+  const clean=a=>{const m={};a.forEach(d=>{const k=d.k.replace(/\s+/g,' ').trim();
+    const kk=k.toLowerCase()==='car & muv'?'Car & MUV':(k.toUpperCase()==='NON-OEM'?'Non-OEM':k);
+    m[kk]=(m[kk]||0)+d.pct;});return Object.entries(m).sort((x,y)=>y[1]-x[1]).filter(d=>d[1]>=0.05);};
+  const W=860,M={t:22,r:24,b:12,l:210}; let rows=0;
+  groups.forEach(g=>rows+=clean(D[g[1]]).length);
+  const rowH=21, hdrH=26;
+  const H=M.t+rows*rowH+groups.length*hdrH+M.b, iw=W-M.l-M.r;
+  const s=svg(W,H); const x=v=>(v/70)*iw; let yy=M.t;
+  const cols=[C('--s1'),C('--s3'),C('--s2'),C('--s4')];
+  groups.forEach((g,gi)=>{
+    s.appendChild(txt(g[0].toUpperCase(),{x:M.l-12,y:yy+12,'text-anchor':'end','font-size':9.5,
+      'font-weight':600,fill:C('--ink-3'),'letter-spacing':'.07em'}));
+    yy+=hdrH-6;
+    clean(D[g[1]]).forEach(([k,v])=>{
+      const w=Math.max(x(v),2);
+      s.appendChild(txt(k,{x:M.l-12,y:yy+12,'text-anchor':'end','font-size':11,fill:C('--ink')}));
+      const r=el('rect',{x:M.l,y:yy+2,width:w,height:13,rx:3.5,fill:cols[gi]});
+      bindTip(r,`<b>${g[0]}: ${k}</b><br>${v.toFixed(1)}% of all units`);
+      s.appendChild(r);
+      s.appendChild(txt(v.toFixed(1)+'%',{x:M.l+w+7,y:yy+13,class:'axlab'}));
+      yy+=rowH;});
+    yy+=6;});
+  document.getElementById('c-mix').appendChild(s);
+})();
+
+/* ---------- 7. branch concentration ---------- */
+(function(){
+  const b=D.branches, W=860,rowH=23,M={t:24,r:76,b:16,l:112};
+  const H=M.t+b.length*rowH+M.b, iw=W-M.l-M.r;
+  const max=70, x=v=>(v/max)*iw; const s=svg(W,H);
+  for(let v=0;v<=70;v+=17.5){
+    s.appendChild(el('line',{x1:M.l+x(v),x2:M.l+x(v),y1:M.t-6,y2:H-M.b,class:'gridline'}));
+    s.appendChild(txt('₹'+v+' Cr',{x:M.l+x(v),y:14,'text-anchor':'middle',class:'axlab'}));}
+  b.forEach((d,i)=>{const yb=M.t+i*rowH, w=Math.max(x(d.cr),2);
+    s.appendChild(txt(d.b,{x:M.l-10,y:yb+13,'text-anchor':'end',class:'val'}));
+    const r=el('rect',{x:M.l,y:yb+3,width:w,height:14,rx:3.5,fill:i<10?C('--s1'):C('--rule-2')});
+    bindTip(r,`<b>${d.b}</b><br>₹${d.cr} Cr · ${fmt(d.qty)} units`);s.appendChild(r);
+    s.appendChild(txt('₹'+d.cr,{x:M.l+w+7,y:yb+14,class:'axlab'}));});
+  document.getElementById('c-branch').appendChild(s);
+})();
+
+/* ---------- 8. fill rate ---------- */
+(function(){
+  const o=D.orders_monthly, n=o.length;
+  const W=860,M={t:20,r:20,b:38,l:60},PH=180,GAP=44,FH=104;
+  const H=M.t+PH+GAP+FH+M.b, iw=W-M.l-M.r;
+  const s=svg(W,H);
+  const ymax=210000; const y=v=>M.t+PH-(v/ymax)*PH;
+  const bw=iw/n, bar=Math.min(bw*0.38,17);
+  for(let v=0;v<=210000;v+=70000){
+    s.appendChild(el('line',{x1:M.l,x2:W-M.r,y1:y(v),y2:y(v),class:'gridline'}));
+    s.appendChild(txt(v?fmt(v/1000)+'k':'0',{x:M.l-9,y:y(v)+4,'text-anchor':'end',class:'axlab'}));}
+  o.forEach((d,i)=>{const cx=M.l+bw*i+bw/2;
+    [[d.ordered,C('--s1'),-bar-1,'ordered'],[d.desp,C('--s3'),1,'despatched']].forEach(([v,col,off,lab])=>{
+      const r=el('rect',{x:cx+off,y:y(v),width:bar,height:M.t+PH-y(v),rx:3.5,fill:col});
+      bindTip(r,`<b>${d.m}</b><br>${lab}: ${fmt(v)} units<br>fill ${(d.fill*100).toFixed(1)}%`);
+      s.appendChild(r);});});
+  s.appendChild(el('line',{x1:M.l,x2:W-M.r,y1:M.t+PH,y2:M.t+PH,class:'axis'}));
+  s.appendChild(txt('units',{x:M.l-9,y:M.t-6,'text-anchor':'end',class:'axlab'}));
+  const ft=M.t+PH+GAP, flo=0.55,fhi=1.0;
+  const fy=v=>ft+FH-((v-flo)/(fhi-flo))*FH;
+  [0.6,0.7,0.8,0.9,1.0].forEach(v=>{
+    s.appendChild(el('line',{x1:M.l,x2:W-M.r,y1:fy(v),y2:fy(v),class:'gridline'}));
+    s.appendChild(txt((v*100)+'%',{x:M.l-9,y:fy(v)+4,'text-anchor':'end',class:'axlab'}));});
+  const pts=o.map((d,i)=>[M.l+bw*i+bw/2,fy(d.fill)]);
+  s.appendChild(el('path',{d:pts.map((p,i)=>`${i?'L':'M'}${p[0]},${p[1]}`).join(' '),
+    fill:'none',stroke:C('--s2'),'stroke-width':2.5,'stroke-linejoin':'round'}));
+  o.forEach((d,i)=>{const c=el('circle',{cx:pts[i][0],cy:pts[i][1],r:4.5,
+    fill:d.fill<0.8?C('--crit'):C('--s2'),stroke:C('--surface'),'stroke-width':2});
+    bindTip(c,`<b>${d.m}</b><br>fill rate ${(d.fill*100).toFixed(1)}%<br>short ${fmt(d.ordered-d.desp)} units`);
+    s.appendChild(c);});
+  s.appendChild(txt('fill rate',{x:M.l-9,y:ft-6,'text-anchor':'end',class:'axlab'}));
+  o.forEach((d,i)=>{if(i%2===0||i===n-1)
+    s.appendChild(txt(d.m.slice(2),{x:M.l+bw*i+bw/2,y:H-14,'text-anchor':'middle',class:'axlab'}));});
+  const iMar=o.findIndex(d=>d.m==='2026-03');
+  if(iMar>0){const gx=M.l+bw*iMar;
+    s.appendChild(el('line',{x1:gx,x2:gx,y1:M.t,y2:ft+FH,stroke:C('--crit'),'stroke-width':1.2,'stroke-dasharray':'3 4',opacity:.75}));
+    s.appendChild(txt('Mar 2026',{x:gx+7,y:M.t+11,fill:C('--crit'),'font-size':10.5}));}
+  document.getElementById('c-fill').appendChild(s);
+})();
+
+/* ---------- 9. stock health ---------- */
+(function(){
+  const m=D.misalloc, W=860,H=210,M={t:34,r:26,b:16,l:26};
+  const iw=W-M.l-M.r; const s=svg(W,H);
+  const segs=[
+    {k:'Dead — no demand for 6 months',cr:m.dead_cr,pct:m.dead_pct,rows:m.dead_rows,col:C('--crit')},
+    {k:'Slow — over 12 months of cover',cr:m.slow_cr,pct:m.slow_pct,rows:m.slow_rows,col:C('--s4')},
+    {k:'Healthy — under 12 months cover',cr:m.ok_cr,pct:m.ok_pct,rows:m.ok_rows,col:C('--s3')}];
+  const tot=segs.reduce((a,d)=>a+d.cr,0); let acc=0;
+  s.appendChild(txt('₹20.91 crore of closing stock, 1 August 2026',{x:M.l,y:20,'font-size':12,'font-weight':600,fill:C('--ink')}));
+  segs.forEach(d=>{
+    const w=(d.cr/tot)*iw, x=M.l+(acc/tot)*iw;
+    const r=el('rect',{x:x+1,y:M.t,width:Math.max(w-2,1),height:52,rx:5,fill:d.col});
+    bindTip(r,`<b>${d.k}</b><br>₹${d.cr} Cr — ${d.pct}% of stock value<br>${fmt(d.rows)} branch×SKU rows`);
+    s.appendChild(r);
+    if(w>90){s.appendChild(txt('₹'+d.cr+' Cr',{x:x+w/2,y:M.t+24,'text-anchor':'middle',fill:'#fff','font-size':13,'font-weight':600}));
+      s.appendChild(txt(d.pct+'%',{x:x+w/2,y:M.t+41,'text-anchor':'middle',fill:'#fff','font-size':11,opacity:.9}));}
+    acc+=d.cr;});
+  acc=0;
+  segs.forEach((d,i)=>{const w=(d.cr/tot)*iw, x=M.l+(acc/tot)*iw;
+    const cx=x+w/2;
+    s.appendChild(txt(d.k,{x:i===0?M.l:(i===segs.length-1?M.l+iw:cx),y:M.t+70,
+      'text-anchor':i===0?'start':(i===segs.length-1?'end':'middle'),'font-size':11,fill:C('--ink-2')}));
+    s.appendChild(txt(fmt(d.rows)+' rows',{x:i===0?M.l:(i===segs.length-1?M.l+iw:cx),y:M.t+85,
+      'text-anchor':i===0?'start':(i===segs.length-1?'end':'middle'),class:'axlab'}));
+    acc+=d.cr;});
+  const g=el('g');
+  g.appendChild(el('rect',{x:M.l,y:M.t+100,width:iw,height:40,rx:6,fill:C('--crit-soft'),stroke:C('--crit'),'stroke-width':1.2}));
+  g.appendChild(txt('At the same time: '+fmt(m.stockout_rows)+' branch×SKU combinations hold ZERO stock despite '+fmt(m.stockout_units)+' units of demand in those six months.',
+    {x:M.l+14,y:M.t+125,'font-size':11.5,fill:C('--crit')}));
+  bindTip(g,`<b>Stockouts on live SKUs</b><br>${fmt(m.stockout_rows)} branch×SKU rows at zero stock<br>with ${fmt(m.stockout_units)} units of recent demand`);
+  s.appendChild(g);
+  document.getElementById('c-stockhealth').appendChild(s);
+})();
+
+/* ---------- 10. days of cover, log ---------- */
+(function(){
+  const c=D.cover.filter(d=>d.days>0&&isFinite(d.days)).sort((a,b)=>a.days-b.days);
+  const W=860,H=300,M={t:24,r:26,b:52,l:56};
+  const iw=W-M.l-M.r, ih=H-M.t-M.b;
+  const lo=10,hi=400;
+  const Y=v=>M.t+ih-((LG(v)-LG(lo))/(LG(hi)-LG(lo)))*ih;
+  const s=svg(W,H); const bw=iw/c.length;
+  [10,20,50,100,200,400].forEach(v=>{
+    s.appendChild(el('line',{x1:M.l,x2:M.l+iw,y1:Y(v),y2:Y(v),class:'gridline'}));
+    s.appendChild(txt(v+' d',{x:M.l-8,y:Y(v)+4,'text-anchor':'end',class:'axlab'}));});
+  const med=D.cover_stats.median;
+  s.appendChild(el('line',{x1:M.l,x2:M.l+iw,y1:Y(med),y2:Y(med),stroke:C('--accent'),'stroke-width':1.4,'stroke-dasharray':'4 4'}));
+  s.appendChild(txt('median '+med+' days',{x:M.l+iw,y:Y(med)-7,'text-anchor':'end','font-size':10.5,fill:C('--accent'),'font-weight':600}));
+  s.appendChild(el('line',{x1:M.l,x2:M.l+iw,y1:Y(30),y2:Y(30),stroke:C('--s3'),'stroke-width':1.2,'stroke-dasharray':'2 4'}));
+  s.appendChild(txt('30 days',{x:M.l+2,y:Y(30)-6,'font-size':10,fill:C('--s3')}));
+  c.forEach((d,i)=>{const x=M.l+bw*i+bw*0.12, w=bw*0.76;
+    const r=el('rect',{x,y:Y(d.days),width:Math.max(w,1.5),height:M.t+ih-Y(d.days),rx:2,
+      fill:d.days>120?C('--crit'):(d.days<30?C('--s4'):C('--s1'))});
+    bindTip(r,`<b>${d.b}</b><br>${d.days} days of cover`);s.appendChild(r);});
+  s.appendChild(txt('53 branches, sorted by cover  ·  bars over 120 days marked critical',
+    {x:M.l,y:H-28,class:'axlab'}));
+  s.appendChild(txt('days of stock cover (log scale)',{x:M.l-8,y:M.t-8,'text-anchor':'end',class:'axlab'}));
+  document.getElementById('c-cover').appendChild(s);
+})();
+
+/* ---------- 11. shortfall by depot ---------- */
+(function(){
+  const d0=D.short_depot, W=860,rowH=23,M={t:24,r:130,b:22,l:120};
+  const H=M.t+d0.length*rowH+M.b, iw=W-M.l-M.r;
+  const max=60, x=v=>(v/max)*iw; const s=svg(W,H);
+  [0,20,40,60].forEach(v=>{
+    s.appendChild(el('line',{x1:M.l+x(v),x2:M.l+x(v),y1:M.t-6,y2:M.t+d0.length*rowH,class:'gridline'}));
+    s.appendChild(txt(v+'%',{x:M.l+x(v),y:14,'text-anchor':'middle',class:'axlab'}));});
+  d0.forEach((d,i)=>{const yb=M.t+i*rowH, w=Math.max(x(d.pct),2);
+    s.appendChild(txt(d.d,{x:M.l-10,y:yb+13,'text-anchor':'end',class:'val'}));
+    const r=el('rect',{x:M.l,y:yb+3,width:w,height:14,rx:3.5,fill:d.pct>=20?C('--crit'):C('--s3')});
+    bindTip(r,`<b>${d.d}</b><br>${d.pct}% of ordered units never shipped<br>${fmt(d.ordered)} units ordered`);
+    s.appendChild(r);
+    s.appendChild(txt(d.pct+'%  ·  '+fmt(d.ordered)+' u',{x:M.l+w+7,y:yb+14,class:'axlab'}));});
+  s.appendChild(el('line',{x1:M.l+x(19.4),x2:M.l+x(19.4),y1:M.t-6,y2:M.t+d0.length*rowH,
+    stroke:C('--ink-3'),'stroke-width':1.2,'stroke-dasharray':'3 3'}));
+  s.appendChild(txt('network average 19.4%',{x:M.l+x(19.4)+6,y:M.t+d0.length*rowH+14,class:'axlab'}));
+  document.getElementById('c-short').appendChild(s);
+})();
+
+
+/* ---------- 12. error by horizon ---------- */
+(function(){
+  const h=D.horizon.by_horizon;
+  const W=860,H=310,M={t:26,r:150,b:46,l:60};
+  const iw=W-M.l-M.r, ih=H-M.t-M.b;
+  const lo=0.50,hi=0.72;                    // cropped band: the decay is 6 pts wide
+  const x=i=>M.l+(i/(h.length-1))*iw;
+  const y=v=>M.t+ih-((v-lo)/(hi-lo))*ih;
+  const s=svg(W,H);
+  for(let v=0.50;v<=0.72001;v+=0.04){
+    s.appendChild(el('line',{x1:M.l,x2:M.l+iw,y1:y(v),y2:y(v),class:'gridline'}));
+    s.appendChild(txt(v.toFixed(2),{x:M.l-9,y:y(v)+4,'text-anchor':'end',class:'axlab'}));}
+  s.appendChild(el('line',{x1:M.l,x2:M.l+iw,y1:M.t+ih,y2:M.t+ih,class:'axis'}));
+  h.forEach((d,i)=>s.appendChild(txt('+'+d.h,{x:x(i),y:M.t+ih+18,'text-anchor':'middle',class:'axlab'})));
+  s.appendChild(txt('months ahead of the training cut',{x:M.l+iw/2,y:H-12,'text-anchor':'middle',class:'axlab'}));
+  s.appendChild(txt('WMAPE',{x:M.l-9,y:M.t-9,'text-anchor':'end',class:'axlab'}));
+  const ser=[['GBM','Gradient boosting',C('--s1')],['SES','Exponential smoothing',C('--s3')],
+             ['SeasonalNaive','Seasonal naive',C('--s4')]];
+  ser.forEach(([k,lab,col],si)=>{
+    const pts=h.map((d,i)=>[x(i),y(d[k])]);
+    s.appendChild(el('path',{d:pts.map((p,i)=>`${i?'L':'M'}${p[0]},${p[1]}`).join(' '),
+      fill:'none',stroke:col,'stroke-width':2.5,'stroke-linejoin':'round','stroke-linecap':'round'}));
+    pts.forEach((p,i)=>{const c=el('circle',{cx:p[0],cy:p[1],r:4.5,fill:col,stroke:C('--surface'),'stroke-width':2});
+      bindTip(c,`<b>${lab}</b><br>${h[i].h} month${h[i].h>1?'s':''} ahead<br>WMAPE ${h[i][k].toFixed(4)}`);
+      s.appendChild(c);});
+    s.appendChild(txt(lab,{x:M.l+iw+12,y:pts[pts.length-1][1]+4,'font-size':11,fill:col,'font-weight':600}));});
+  s.appendChild(el('rect',{x:M.l+2,y:M.t+2,width:iw-4,height:14,fill:'none'}));
+  s.appendChild(txt('axis cropped to 0.50–0.72',{x:M.l+iw-4,y:M.t+11,'text-anchor':'end',class:'axlab'}));
+  document.getElementById('c-horizon').appendChild(s);
+})();
+
+/* ---------- 13. accuracy vs aggregation, log ---------- */
+(function(){
+  const L=D.horizon.levels, cum=D.horizon.cum;
+  const rows=[
+    {k:'branch × SKU',n:'63,210 series',SES:cum.SES,GBM:cum.GBM},
+    {k:'branch total',n:'51 branches',SES:L.branch.SES,GBM:L.branch.GBM},
+    {k:'national total',n:'1 series',SES:L.national.SES,GBM:L.national.GBM}];
+  const W=860,H=282,M={t:26,r:130,b:52,l:130};
+  const iw=W-M.l-M.r, ih=H-M.t-M.b;
+  const lo=0.01,hi=0.5;
+  const X=v=>M.l+((LG(v)-LG(lo))/(LG(hi)-LG(lo)))*iw;
+  const s=svg(W,H);
+  decades(lo,hi).forEach(v=>{
+    s.appendChild(el('line',{x1:X(v),x2:X(v),y1:M.t-8,y2:M.t+ih,class:'gridline'}));
+    s.appendChild(txt((v*100).toFixed(v<0.1?0:0)+'%',{x:X(v),y:M.t+ih+18,'text-anchor':'middle',class:'axlab'}));});
+  s.appendChild(txt('WMAPE, six-month cumulative — logarithmic',{x:M.l+iw/2,y:H-14,'text-anchor':'middle',class:'axlab'}));
+  const rowH=ih/rows.length;
+  rows.forEach((r,i)=>{
+    const yb=M.t+i*rowH+rowH/2;
+    s.appendChild(txt(r.k,{x:M.l-12,y:yb-1,'text-anchor':'end','font-size':12,fill:C('--ink'),'font-weight':600}));
+    s.appendChild(txt(r.n,{x:M.l-12,y:yb+13,'text-anchor':'end',class:'axlab'}));
+    const a=X(Math.min(r.SES,r.GBM)), b=X(Math.max(r.SES,r.GBM));
+    s.appendChild(el('line',{x1:a,x2:b,y1:yb,y2:yb,stroke:C('--rule-2'),'stroke-width':3,'stroke-linecap':'round'}));
+    [['SES','Exponential smoothing',C('--s3')],['GBM','Gradient boosting',C('--s1')]].forEach(([k,lab,col])=>{
+      const c=el('circle',{cx:X(r[k]),cy:yb,r:7,fill:col,stroke:C('--surface'),'stroke-width':2});
+      bindTip(c,`<b>${lab}</b><br>${r.k} — ${r.n}<br>six-month cumulative WMAPE ${(r[k]*100).toFixed(1)}%`);
+      s.appendChild(c);});
+    const best=r.SES<r.GBM?r.SES:r.GBM;
+    s.appendChild(txt((best*100).toFixed(1)+'%',{x:M.l+iw+14,y:yb+4,'font-size':12,'font-weight':600,fill:C('--ink')}));});
+  const lg=el('g');
+  [['Exponential smoothing',C('--s3'),0],['Gradient boosting',C('--s1'),190]].forEach(([lab,col,off])=>{
+    lg.appendChild(el('circle',{cx:M.l+off+5,cy:M.t-14,r:5,fill:col}));
+    lg.appendChild(txt(lab,{x:M.l+off+16,y:M.t-10,'font-size':11,fill:C('--ink-2')}));});
+  s.appendChild(lg);
+  document.getElementById('c-agg').appendChild(s);
+})();
+
+/* ---------- 14. six-month error by ABC ---------- */
+(function(){
+  const g=D.horizon.seg_cum;
+  const W=860,H=272,M={t:44,r:26,b:52,l:64};
+  const iw=W-M.l-M.r, ih=H-M.t-M.b;
+  const ymax=0.9; const y=v=>M.t+ih-(v/ymax)*ih;
+  const s=svg(W,H);
+  for(let v=0;v<=0.9001;v+=0.15){
+    s.appendChild(el('line',{x1:M.l,x2:M.l+iw,y1:y(v),y2:y(v),class:'gridline'}));
+    s.appendChild(txt((v*100).toFixed(0)+'%',{x:M.l-9,y:y(v)+4,'text-anchor':'end',class:'axlab'}));}
+  s.appendChild(el('line',{x1:M.l,x2:M.l+iw,y1:M.t+ih,y2:M.t+ih,class:'axis'}));
+  const gw=iw/g.length, bar=Math.min(gw*0.22,58);
+  const names={A:'A · 80% of value',B:'B · 15% of value',C:'C · 5% of value'};
+  g.forEach((d,i)=>{
+    const cx=M.l+gw*i+gw/2;
+    [['SES','Exponential smoothing',C('--s3'),-bar-3],['GBM','Gradient boosting',C('--s1'),3]].forEach(([k,lab,col,off])=>{
+      const win=(k==='SES')===(d.SES<d.GBM);
+      const r=el('rect',{x:cx+off,y:y(d[k]),width:bar,height:M.t+ih-y(d[k]),rx:4,fill:col,opacity:win?1:0.45});
+      bindTip(r,`<b>${lab}</b><br>${names[d.seg]}<br>six-month cumulative WMAPE ${(d[k]*100).toFixed(2)}%<br>${fmt(d.units)} units · ${fmt(d.series)} series`);
+      s.appendChild(r);
+      s.appendChild(txt((d[k]*100).toFixed(1)+'%',{x:cx+off+bar/2,y:y(d[k])-7,'text-anchor':'middle',
+        'font-size':11,'font-weight':win?700:400,fill:win?C('--ink'):C('--ink-3')}));});
+    s.appendChild(txt(names[d.seg],{x:cx,y:M.t+ih+18,'text-anchor':'middle','font-size':11.5,fill:C('--ink'),'font-weight':600}));
+    s.appendChild(txt(fmt(d.units)+' units · '+fmt(d.series)+' series',{x:cx,y:M.t+ih+33,'text-anchor':'middle',class:'axlab'}));
+    const w=d.SES<d.GBM?'smoothing wins':'boosting wins';
+    s.appendChild(txt(w,{x:cx,y:M.t-10,'text-anchor':'middle','font-size':10.5,
+      fill:d.SES<d.GBM?C('--s3'):C('--s1'),'font-weight':600}));});
+  document.getElementById('c-abc').appendChild(s);
+})();
+
+/* ---------- 15. quantile calibration ---------- */
+(function(){
+  const cv=D.horizon.coverage;
+  const ks=['q80','q90','q95'];
+  const W=560,H=390,M={t:26,r:110,b:52,l:60};
+  const iw=W-M.l-M.r, ih=H-M.t-M.b;
+  const lo=0.75,hi=1.0;
+  const X=v=>M.l+((v-lo)/(hi-lo))*iw, Y=v=>M.t+ih-((v-lo)/(hi-lo))*ih;
+  const s=svg(W,H);
+  [0.8,0.85,0.9,0.95,1.0].forEach(v=>{
+    s.appendChild(el('line',{x1:M.l,x2:M.l+iw,y1:Y(v),y2:Y(v),class:'gridline'}));
+    s.appendChild(el('line',{x1:X(v),x2:X(v),y1:M.t,y2:M.t+ih,class:'gridline'}));
+    s.appendChild(txt((v*100).toFixed(0)+'%',{x:M.l-9,y:Y(v)+4,'text-anchor':'end',class:'axlab'}));
+    s.appendChild(txt((v*100).toFixed(0)+'%',{x:X(v),y:M.t+ih+18,'text-anchor':'middle',class:'axlab'}));});
+  s.appendChild(el('line',{x1:X(lo),y1:Y(lo),x2:X(hi),y2:Y(hi),stroke:C('--ink-3'),'stroke-width':1.4,'stroke-dasharray':'4 4'}));
+  s.appendChild(txt('perfect calibration',{x:X(0.955),y:Y(0.945)+3,'font-size':10,fill:C('--ink-3'),transform:`rotate(-45 ${X(0.955)} ${Y(0.945)})`}));
+  s.appendChild(txt('target coverage',{x:M.l+iw/2,y:H-14,'text-anchor':'middle',class:'axlab'}));
+  s.appendChild(txt('achieved',{x:M.l-9,y:M.t-9,'text-anchor':'end',class:'axlab'}));
+  [['coverage_per_period','per-month coverage',C('--s1')],
+   ['coverage_cum','6-month cumulative coverage',C('--s3')]].forEach(([f,lab,col])=>{
+    const pts=ks.map(k=>[X(cv[k].target),Y(cv[k][f])]);
+    s.appendChild(el('path',{d:pts.map((p,i)=>`${i?'L':'M'}${p[0]},${p[1]}`).join(' '),
+      fill:'none',stroke:col,'stroke-width':2,opacity:.55}));
+    ks.forEach((k,i)=>{const c=el('circle',{cx:pts[i][0],cy:pts[i][1],r:7,fill:col,stroke:C('--surface'),'stroke-width':2});
+      bindTip(c,`<b>${k} — ${lab}</b><br>target ${(cv[k].target*100).toFixed(0)}%<br>achieved ${(cv[k][f]*100).toFixed(1)}%`);
+      s.appendChild(c);});
+    s.appendChild(txt(lab,{x:M.l+iw+10,y:pts[2][1]+4,'font-size':11,fill:col,'font-weight':600}));});
+  ks.forEach(k=>s.appendChild(txt(k,{x:X(cv[k].target),y:Y(cv[k].coverage_per_period)-12,
+    'text-anchor':'middle','font-size':11,'font-weight':600,fill:C('--ink')})));
+  document.getElementById('c-calib').appendChild(s);
+})();
+
+/* ---------- 16. monthly cost, log ---------- */
+(function(){
+  const items=[
+    {k:'Azure SQL — serverless',v:9.50,n:'0.5 vCore, auto-pause after 1 hr idle'},
+    {k:'Azure Container Registry',v:5.00,n:'Basic tier, flat fee'},
+    {k:'Blob storage',v:0.15,n:'2 GB hot + transactions'},
+    {k:'Monthly scoring compute',v:0.06,n:'15 min on D8as_v5'},
+    {k:'Quarterly retrain, amortised',v:0.06,n:'1 hr per quarter ÷ 3'},
+    {k:'Key Vault',v:0.01,n:'~2,000 operations'},
+    {k:'Application Insights',v:0.004,n:'under the 1 GB free grant — effectively zero',free:1},
+    {k:'Azure ML workspace',v:0.004,n:'no platform fee — you pay only for compute',free:1}];
+  const W=860,M={t:34,r:96,b:52,l:210},rowH=27;
+  const H=M.t+items.length*rowH+M.b, iw=W-M.l-M.r;
+  const lo=0.004,hi=10;
+  const X=v=>M.l+((LG(Math.max(v,lo))-LG(lo))/(LG(hi)-LG(lo)))*iw;
+  const s=svg(W,H);
+  [0.01,0.1,1,10].forEach(v=>{
+    s.appendChild(el('line',{x1:X(v),x2:X(v),y1:M.t-10,y2:M.t+items.length*rowH,class:'gridline'}));
+    s.appendChild(txt(v<1?('$'+v.toFixed(2)):('$'+v),{x:X(v),y:M.t+items.length*rowH+18,'text-anchor':'middle',class:'axlab'}));});
+  s.appendChild(txt('cost per month, USD — logarithmic',{x:M.l+iw/2,y:H-14,'text-anchor':'middle',class:'axlab'}));
+  items.forEach((d,i)=>{
+    const yb=M.t+i*rowH, w=Math.max(X(d.v)-M.l,2);
+    s.appendChild(txt(d.k,{x:M.l-12,y:yb+15,'text-anchor':'end','font-size':11.5,
+      fill:d.free?C('--ink-3'):C('--ink')}));
+    const r=el('rect',{x:M.l,y:yb+4,width:w,height:15,rx:4,
+      fill:d.free?C('--rule-2'):(d.v>=1?C('--s1'):C('--s3'))});
+    bindTip(r,`<b>${d.k}</b><br>${d.n}<br>${d.free?'$0.00 / month':'$'+d.v.toFixed(2)+' / month'}`);
+    s.appendChild(r);
+    s.appendChild(txt(d.free?'$0.00':'$'+d.v.toFixed(2),{x:M.l+w+8,y:yb+16,class:'axlab'}));});
+  s.appendChild(txt('CONFIGURATION B — $14.78 / MONTH',{x:M.l,y:M.t-16,'font-size':9.5,
+    'font-weight':600,fill:C('--ink-3'),'letter-spacing':'.07em'}));
+  document.getElementById('c-cost').appendChild(s);
+})();
+
+
+/* ---------- diagram helpers ---------- */
+function dbox(s,o){
+  const g=el('g');
+  g.appendChild(el('rect',{x:o.x,y:o.y,width:o.w,height:o.h,rx:o.rx||8,
+    fill:o.fill||C('--surface-2'),stroke:o.stroke||C('--rule'),'stroke-width':o.sw||1.2,
+    'stroke-dasharray':o.dash||''}));
+  if(o.eyebrow) g.appendChild(txt(o.eyebrow,{x:o.x+12,y:o.y+16,'font-size':8.5,'font-weight':600,
+    fill:o.ecol||C('--ink-3'),'letter-spacing':'.09em'}));
+  if(o.title) g.appendChild(txt(o.title,{x:o.x+12,y:o.y+(o.eyebrow?32:20),'font-size':o.ts||12,
+    'font-weight':600,fill:o.tcol||C('--ink')}));
+  let yy=o.y+(o.eyebrow?32:20)+(o.title?15:0);
+  (o.lines||[]).forEach(t=>{g.appendChild(txt(t,{x:o.x+12,y:yy,'font-size':10,fill:C('--ink-2')}));yy+=13.5;});
+  if(o.tip) bindTip(g,o.tip);
+  s.appendChild(g); return g;
+}
+function arrow(s,x1,y1,x2,y2,o){
+  o=o||{};
+  const col=o.col||C('--ink-3');
+  const d=o.curve?`M${x1},${y1} C${(x1+x2)/2},${y1} ${(x1+x2)/2},${y2} ${x2},${y2}`:`M${x1},${y1} L${x2},${y2}`;
+  s.appendChild(el('path',{d,fill:'none',stroke:col,'stroke-width':o.sw||1.4,
+    'stroke-dasharray':o.dash||'','marker-end':'url(#ah)'}));
+  if(o.label){const mx=(x1+x2)/2,my=(y1+y2)/2;
+    s.appendChild(txt(o.label,{x:mx,y:my-6,'text-anchor':'middle','font-size':9,fill:C('--ink-3')}));}
+}
+function arrowhead(s){
+  const defs=el('defs');
+  const m=el('marker',{id:'ah',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'});
+  m.appendChild(el('path',{d:'M0,1 L9,5 L0,9 z',fill:C('--ink-3')}));
+  defs.appendChild(m); s.appendChild(defs);
+}
+
+/* ---------- 17. Azure architecture ---------- */
+(function(){
+  const W=880,H=560, s=svg(W,H); arrowhead(s);
+  const S1=C('--s1'),S2=C('--s2'),S3=C('--s3');
+  const lanes=[['STORE',196,214,S1],['TRAIN',424,214,S2],['SERVE',652,212,S3]];
+  lanes.forEach(([lab,x,w,col])=>{
+    s.appendChild(el('rect',{x,y:56,width:w,height:398,rx:12,fill:'none',
+      stroke:col,'stroke-width':1.1,'stroke-dasharray':'5 5',opacity:.55}));
+    s.appendChild(txt(lab,{x:x+w/2,y:48,'text-anchor':'middle','font-size':10,'font-weight':700,
+      fill:col,'letter-spacing':'.14em'}));});
+
+  dbox(s,{x:14,y:78,w:166,h:150,eyebrow:'SOURCE FILES',fill:C('--surface'),
+    lines:['Sales FY24–26  ·  82 MB .xlsb','Orders & Receipts  ·  67 MB','Stock in hand  ·  7 MB',
+           'Substitution mapping','Location master','','150 MB in total','1.70 M sales lines'],
+    tip:'<b>The five files as delivered</b><br>150 MB. Uploaded once, then only<br>a monthly incremental extract.'});
+
+  /* STORE — blob for the originals, database for everything worked on */
+  dbox(s,{x:210,y:78,w:186,h:62,eyebrow:'BLOB STORAGE',title:'Source workbooks',ts:11.5,
+    fill:C('--surface'),stroke:S1,ecol:S1,lines:['exactly as received · immutable'],
+    tip:'<b>Blob storage — the audit trail</b><br>Never edited. This is what let us prove<br>the HSN column transposition was in<br>the source, not in our parsing.<br>About $0.02/month.'});
+  dbox(s,{x:210,y:154,w:186,h:104,eyebrow:'AZURE SQL — SERVERLESS',title:'Three schemas',ts:11.5,
+    fill:C('--surface'),stroke:S1,ecol:S1,
+    lines:['raw — parsed, untouched','staging — keys normalised,','   columns repaired','mart.panel — 1.5 M rows, 32 MB'],
+    tip:'<b>Azure SQL Database</b><br>Serverless, auto-pauses after 1 hr idle.<br>The medallion layering as three schemas —<br>same discipline, no lake required.<br>~$9.50/month.'});
+  dbox(s,{x:210,y:274,w:186,h:62,eyebrow:'AZURE ML',title:'Load & validate',ts:11.5,
+    fill:C('--surface-2'),lines:['fixes transposition, uppercases','depots, checks against totals'],
+    tip:'<b>Load job</b><br>A pipeline step, not a separate ETL<br>product. Constraint checks and a<br>reconciliation to source totals must<br>both pass before mart is updated.'});
+
+  /* TRAIN */
+  dbox(s,{x:438,y:78,w:186,h:86,eyebrow:'AZURE ML',title:'Compute cluster',ts:11.5,
+    fill:C('--surface'),stroke:S2,ecol:S2,
+    lines:['Standard_D8as_v5','min 0 / max 2 nodes','948,150 training rows','< 10 min, 4 models'],
+    tip:'<b>Compute cluster</b><br>min_nodes = 0 is the critical setting:<br>zero cost between runs. Leaving it<br>at 1 costs $160/month idle.'});
+  dbox(s,{x:438,y:178,w:186,h:72,eyebrow:'AZURE ML',title:'MLflow registry',ts:11.5,
+    fill:C('--surface'),stroke:S2,ecol:S2,
+    lines:['point + q80 + q90 + q95','WMAPE by segment logged','registers only if it beats','the frozen baseline'],
+    tip:'<b>Model registry</b><br>Versioned models with their metrics.<br>The gate on frozen benchmarks stops<br>a worse model ever shipping.'});
+  dbox(s,{x:438,y:264,w:186,h:56,eyebrow:'AZURE ML',title:'Pipeline schedule',ts:11.5,
+    fill:C('--surface'),stroke:S2,ecol:S2,lines:['quarterly retrain · monthly score'],
+    tip:'<b>Pipeline schedules</b><br>Built-in cron. This is what removes<br>Azure Data Factory from the design.'});
+  dbox(s,{x:438,y:334,w:186,h:56,eyebrow:'ACR',title:'Container registry',ts:11.5,
+    fill:C('--surface-2'),lines:['Basic, 10 GiB · the environment image'],
+    tip:'<b>Azure Container Registry</b><br>$5/month flat — the only line besides<br>the database that does not scale to zero.'});
+
+  /* SERVE */
+  dbox(s,{x:666,y:78,w:186,h:86,eyebrow:'AZURE ML',title:'Batch endpoint',ts:11.5,
+    fill:C('--surface'),stroke:S3,ecol:S3,
+    lines:['63,210 series × 6 horizons','× 4 quantiles','MinT reconciliation','~15 min per month'],
+    tip:'<b>Batch endpoint</b><br>Runs on the same cluster, billed only<br>while running. A managed <i>online</i><br>endpoint would cost $73–300/month.'});
+  dbox(s,{x:666,y:178,w:186,h:72,eyebrow:'AZURE SQL',title:'mart.forecast',ts:11.5,
+    fill:C('--surface'),stroke:S3,ecol:S3,
+    lines:['quantiles per branch × SKU','order-up-to levels','indexed — queryable by key'],
+    tip:'<b>mart.forecast</b><br>The deliverable, as an indexed table.<br>“What do I order for this branch and<br>SKU?” is a primary-key lookup.'});
+  dbox(s,{x:666,y:264,w:186,h:56,eyebrow:'BLOB STORAGE',title:'forecast_YYYYMM.parquet',ts:10.5,
+    fill:C('--surface-2'),lines:['dated copy — every run reproducible'],
+    tip:'<b>Dated file copy</b><br>Written alongside the table so any<br>past month can be reproduced exactly.'});
+  dbox(s,{x:666,y:334,w:186,h:56,eyebrow:'OPTIONAL',title:'Power BI',ts:11.5,
+    fill:C('--surface-2'),dash:'4 4',lines:['reads the database · Pro $14/user to share'],
+    tip:'<b>Power BI</b><br>Import mode, not DirectQuery — a live<br>connection keeps the database awake<br>and roughly triples its cost.'});
+
+  /* platform band */
+  dbox(s,{x:210,y:406,w:642,h:44,fill:C('--surface-2'),rx:8,
+    tip:'<b>Platform services</b><br>Managed identity throughout — no<br>connection strings anywhere in code.'});
+  [['Azure Key Vault','secrets · managed identity',232],
+   ['Application Insights','job logs · failure alerts',450],
+   ['Microsoft Entra ID','RBAC — GSTIN and PAN restricted',650]].forEach(([t,sub,x])=>{
+    s.appendChild(txt(t,{x,y:426,'font-size':11,'font-weight':600,fill:C('--ink')}));
+    s.appendChild(txt(sub,{x,y:440,'font-size':9.5,fill:C('--ink-3')}));});
+
+  /* flows */
+  arrow(s,180,150,208,110,{label:'upload once'});
+  arrow(s,303,336,303,262,{});
+  arrow(s,303,140,303,152,{});
+  s.appendChild(el('path',{d:'M210,300 C192,300 192,206 208,206',fill:'none',stroke:C('--ink-3'),
+    'stroke-width':1.4,'stroke-dasharray':'3 3','marker-end':'url(#ah)'}));
+  arrow(s,398,206,436,121,{curve:1,label:'panel'});
+  arrow(s,626,214,664,121,{curve:1,label:'model'});
+  arrow(s,626,292,664,121,{curve:1});
+  arrow(s,759,164,759,176,{});
+  arrow(s,759,250,759,262,{});
+  s.appendChild(el('path',{d:'M759,250 C636,250 636,362 664,362',fill:'none',stroke:C('--ink-3'),
+    'stroke-width':1.4,'marker-end':'url(#ah)'}));
+  arrow(s,531,320,531,332,{});
+
+  s.appendChild(txt('Region: Central India  ·  compute scales to zero between runs; the database pauses when idle',
+    {x:W/2,y:H-38,'text-anchor':'middle','font-size':10.5,fill:C('--ink-3')}));
+  s.appendChild(txt('$14.78 per month in this configuration  ·  $8.92 one-time to build it',
+    {x:W/2,y:H-20,'text-anchor':'middle','font-size':11,'font-weight':600,fill:C('--accent')}));
+  document.getElementById('d-arch').appendChild(s);
+})();
+
+/* ---------- 18. forecast pipeline ---------- */
+(function(){
+  const W=880,H=310, s=svg(W,H); arrowhead(s);
+  const cols=[C('--s1'),C('--s2'),C('--s3'),C('--s4'),C('--s1')];
+  const stages=[
+    {n:'1',t:'Assemble',l:['order lines → branch ×','SKU × month panel','target = ordered, not','despatched'],
+     tip:'<b>Stage 1 — Assemble</b><br>Forecasting despatches teaches the model<br>to reproduce the stockouts. 19.4% of<br>ordered units never shipped.'},
+    {n:'2',t:'Features',l:['lags 1–6, 9, 12','rolling mean/std 3, 6, 12','zero-run length, ADI, CV²','horizon as a feature'],
+     tip:'<b>Stage 2 — Features</b><br>29 features. Horizon as a feature is what<br>makes one fitted model cover all six<br>months — direct multi-horizon.'},
+    {n:'3',t:'Route',l:['A-class → smoothing','B and C → boosting','no history → attribute','cold start'],
+     tip:'<b>Stage 3 — Route by segment</b><br>Measured in §4: smoothing wins A by 2.0<br>points, boosting wins B by 2.1 and C by<br>5.8. Route rather than pick one.'},
+    {n:'4',t:'Quantiles',l:['q50 / q80 / q90 / q95','pinball loss','coverage checked against','the holdout'],
+     tip:'<b>Stage 4 — Quantiles</b><br>Replenishment consumes a service level,<br>not a point number. q90 held 89.3%<br>coverage six months out.'},
+    {n:'5',t:'Reconcile & convert',l:['MinT, shrinkage,','non-negative','+ lead time and service','factor → order-up-to'],
+     tip:'<b>Stage 5 — Reconcile</b><br>Base forecasts do not sum to the branch<br>and national totals that planning uses.<br>MinT makes the hierarchy coherent.'}];
+  const bw=158, gap=(W-40-bw*5)/4;
+  stages.forEach((st,i)=>{
+    const x=20+i*(bw+gap);
+    const g=dbox(s,{x,y:60,w:bw,h:150,fill:C('--surface'),stroke:cols[i],sw:1.4,
+      eyebrow:'STAGE '+st.n,ecol:cols[i],title:st.t,ts:12.5,lines:st.l,tip:st.tip});
+    if(i<4) arrow(s,x+bw+4,135,x+bw+gap-6,135,{});});
+  s.appendChild(txt('ONE TRAINING RUN PER QUARTER  ·  SIX MONTHS OF OUTPUT PER RUN',
+    {x:20,y:36,'font-size':9.5,'font-weight':700,fill:C('--ink-3'),'letter-spacing':'.1em'}));
+  // feedback loop
+  s.appendChild(el('path',{d:`M${20+4*(bw+gap)+bw/2},214 C${20+4*(bw+gap)+bw/2},262 ${20+bw/2},262 ${20+bw/2},218`,
+    fill:'none',stroke:C('--ink-3'),'stroke-width':1.3,'stroke-dasharray':'4 4','marker-end':'url(#ah)'}));
+  s.appendChild(txt('score against actuals · retrain only if WMAPE degrades past the frozen baseline',
+    {x:W/2,y:279,'text-anchor':'middle','font-size':10,fill:C('--ink-3')}));
+  document.getElementById('d-model').appendChild(s);
+})();
+
+/* ---------- TOC scrollspy ---------- */
+(function(){
+  const links=[...document.querySelectorAll('.toc a')];
+  const secs=links.map(a=>document.querySelector(a.getAttribute('href'))).filter(Boolean);
+  if(!secs.length) return;
+  const sync=()=>{
+    const y=window.scrollY+160; let cur=0;
+    secs.forEach((s,i)=>{if(s.offsetTop<=y) cur=i;});
+    links.forEach((a,i)=>a.classList.toggle('on',i===cur));};
+  window.addEventListener('scroll',sync,{passive:true});
+  window.addEventListener('resize',sync); sync();
+})();
+
+
+</script>

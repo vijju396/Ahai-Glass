@@ -1,0 +1,271 @@
+/* Design tokens. Every colour used anywhere in the app is defined here once,
+   with a light and dark value, so a component never hardcodes a hex.
+   Contrast: all text tokens meet WCAG AA against their intended surface. */
+
+:root {
+  color-scheme: light;
+
+  /* surfaces */
+  --ground: #f6f7f6;
+  --surface: #ffffff;
+  --surface-2: #eef1ef;
+  --surface-3: #e2e7e4;
+  --overlay: rgba(17, 22, 20, 0.42);
+
+  /* ink */
+  --ink: #111614;
+  --ink-2: #4c5854;
+  --ink-3: #74807b;
+  --ink-inverse: #ffffff;
+
+  /* lines */
+  --rule: #d6ddd8;
+  --rule-2: #c0cac4;
+  --focus: #0f6f5c;
+
+  /* brand */
+  --accent: #0f6f5c;
+  --accent-hover: #0c5b4c;
+  --accent-soft: #e2efeb;
+  --accent-ink: #ffffff;
+
+  /* status - also used for model-run states */
+  --ok: #17805c;
+  --ok-soft: #e2f2ec;
+  --warn: #9a6700;
+  --warn-soft: #fdf3dd;
+  --crit: #b42432;
+  --crit-soft: #fbeaec;
+  --info: #1f5fa8;
+  --info-soft: #e6effa;
+  --neutral: #6b7671;
+  --neutral-soft: #ecefed;
+
+  /* series palette - categorical, colour-blind safe ordering */
+  --s1: #2a6fd6;
+  --s2: #e0682f;
+  --s3: #17805c;
+  --s4: #b8860b;
+  --s5: #7a55c4;
+  --s6: #0e8f9e;
+
+  /* quantile bands */
+  --band-80: rgba(42, 111, 214, 0.26);
+  --band-90: rgba(42, 111, 214, 0.16);
+  --band-95: rgba(42, 111, 214, 0.09);
+
+  /* type */
+  --font-ui: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* spacing scale */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --shadow-1: 0 1px 2px rgba(17, 22, 20, 0.06);
+  --shadow-2: 0 1px 2px rgba(17, 22, 20, 0.05), 0 8px 24px -12px rgba(17, 22, 20, 0.16);
+
+  --nav-width: 248px;
+  --header-height: 60px;
+}
+
+/* System preference is the default. Guarded with :not([data-theme='light'])
+   so an explicit light choice still wins, and the explicit-dark block below
+   wins in the other direction. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --ground: #101413;
+    --surface: #171c1a;
+    --surface-2: #1e2422;
+    --surface-3: #272f2c;
+    --overlay: rgba(0, 0, 0, 0.62);
+
+    --ink: #f1f4f2;
+    --ink-2: #b2beb8;
+    --ink-3: #8a9691;
+    --ink-inverse: #101413;
+
+    --rule: #2b3431;
+    --rule-2: #39433f;
+    --focus: #57c5a9;
+
+    --accent: #4fbfa4;
+    --accent-hover: #6bcfb6;
+    --accent-soft: #15302a;
+    --accent-ink: #08201b;
+
+    --ok: #43b58c;
+    --ok-soft: #142c24;
+    --warn: #d5a02c;
+    --warn-soft: #2e2410;
+    --crit: #e8737f;
+    --crit-soft: #331c20;
+    --info: #6aa5e8;
+    --info-soft: #14243a;
+    --neutral: #8a9691;
+    --neutral-soft: #222927;
+
+    --s1: #63a3ec;
+    --s2: #ef8b57;
+    --s3: #43b58c;
+    --s4: #d5a02c;
+    --s5: #a385e0;
+    --s6: #3fb3c1;
+
+    --band-80: rgba(99, 163, 236, 0.3);
+    --band-90: rgba(99, 163, 236, 0.19);
+    --band-95: rgba(99, 163, 236, 0.1);
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+    --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --ground: #101413;
+  --surface: #171c1a;
+  --surface-2: #1e2422;
+  --surface-3: #272f2c;
+  --overlay: rgba(0, 0, 0, 0.62);
+
+  --ink: #f1f4f2;
+  --ink-2: #b2beb8;
+  --ink-3: #8a9691;
+  --ink-inverse: #101413;
+
+  --rule: #2b3431;
+  --rule-2: #39433f;
+  --focus: #57c5a9;
+
+  --accent: #4fbfa4;
+  --accent-hover: #6bcfb6;
+  --accent-soft: #15302a;
+  --accent-ink: #08201b;
+
+  --ok: #43b58c;
+  --ok-soft: #142c24;
+  --warn: #d5a02c;
+  --warn-soft: #2e2410;
+  --crit: #e8737f;
+  --crit-soft: #331c20;
+  --info: #6aa5e8;
+  --info-soft: #14243a;
+  --neutral: #8a9691;
+  --neutral-soft: #222927;
+
+  --s1: #63a3ec;
+  --s2: #ef8b57;
+  --s3: #43b58c;
+  --s4: #d5a02c;
+  --s5: #a385e0;
+  --s6: #3fb3c1;
+
+  --band-80: rgba(99, 163, 236, 0.3);
+  --band-90: rgba(99, 163, 236, 0.19);
+  --band-95: rgba(99, 163, 236, 0.1);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  letter-spacing: -0.014em;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 650;
+}
+h2 {
+  font-size: 17px;
+  font-weight: 620;
+}
+h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+p {
+  margin: 0 0 var(--sp-3);
+}
+
+a {
+  color: var(--accent);
+}
+
+code,
+.mono,
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+/* One visible, consistent focus ring everywhere. Never removed. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,89 @@
+/* Reference-parity token layer.
+   ---------------------------------------------------------------------------
+   The visual authority for the dashboard-style pages is the read-only
+   reference at D:\Labour_AI forecast\frontend_sodexo (index.css). Its token
+   names are kept verbatim so ported components need no rewriting, but every
+   brand value is AIS:
+
+     reference --color-primary  #c2410c  (Sodexo orange)  ->  #005BAB  AIS blue
+     reference --color-accent   #a16207  (ochre)          ->  #0F2754  AIS navy
+
+   AIS brand values are the three the brief specifies — corporate blue
+   #005BAB, deep navy #0F2754, white — plus the red of the logo diamond,
+   which is used for the logo only and never as a chart colour.
+
+   Everything else here (success/warning/danger, surfaces, borders) is a
+   semantic UI colour, not an AIS brand colour, and is labelled as such. */
+@import 'tailwindcss';
+
+:root {
+  --color-bg: #f4f6f9;
+  --color-surface: #ffffff;
+  --color-surface-2: #f6f8fb;
+  --color-border: #dfe4ec;
+  --color-text: #14181f;
+  --color-text-muted: #616b7a;
+
+  /* AIS brand */
+  --color-primary: #005bab;       /* AIS corporate blue */
+  --color-primary-dark: #0f2754;  /* AIS deep navy */
+  --color-accent: #0f2754;
+  --ais-diamond: #d81f26;         /* the logo's red diamond — logo only */
+
+  /* Semantic UI states. Not AIS brand colours. */
+  --color-success: #157f4a;
+  --color-warning: #a15c07;
+  --color-danger: #b3261e;
+  --color-critical: #8c1d18;
+
+  --color-kpi-bg: #fbfcfe;
+
+  --shadow-sm: 0 1px 2px rgba(15, 39, 84, 0.06), 0 1px 1px rgba(15, 39, 84, 0.04);
+  --shadow-md: 0 6px 16px rgba(15, 39, 84, 0.09), 0 2px 4px rgba(15, 39, 84, 0.05);
+}
+
+/* The reference is a light-only app. AIS already supports a dark theme, so the
+   ported tokens follow it rather than forcing every new page to light. */
+:root[data-theme='dark'] {
+  --color-bg: #0f1319;
+  --color-surface: #161b23;
+  --color-surface-2: #1c222c;
+  --color-border: #2a323e;
+  --color-text: #eef1f6;
+  --color-text-muted: #9aa5b4;
+  --color-primary: #4d9fe0;
+  --color-primary-dark: #1b3b6f;
+  --color-accent: #7fb4e6;
+  --color-kpi-bg: #1a202a;
+}
+
+.ref-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.ref-scroll::-webkit-scrollbar-thumb { background: #c3cad6; border-radius: 4px; }
+.ref-scroll::-webkit-scrollbar-thumb:hover { background: #a6afbe; }
+
+@keyframes ref-typing { 0%, 60%, 100% { opacity: 0.25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+
+/* The lattice's leading edge: the next fit due to resolve.
+   One moving element on the page, marking a real position in the queue rather
+   than decorating the wait. Dropped entirely under reduced motion — the
+   colour change alone still carries the progress. */
+@keyframes ais-lattice-edge {
+  0%,
+  100% {
+    background-color: color-mix(in srgb, var(--color-primary) 22%, transparent);
+    border-color: var(--color-primary);
+  }
+  50% {
+    background-color: color-mix(in srgb, var(--color-primary) 58%, transparent);
+    border-color: var(--color-primary);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @keyframes ais-lattice-edge {
+    0%,
+    100% {
+      background-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
+    }
+  }
+}

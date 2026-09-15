@@ -1,0 +1,38 @@
+# --- python ---
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# --- node ---
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# --- runtime (generated; structure tracked via .gitkeep) ---
+runtime/db/*
+runtime/logs/*
+runtime/mlflow/*
+runtime/storage/*/*
+!runtime/**/.gitkeep
+
+# --- secrets ---
+backend/.env
+frontend/.env.local
+
+# --- client source data: large, and not ours to commit ---
+data/source/
+OneDrive_1_08-09-2026.zip
+
+# --- os ---
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# --- editor/agent detritus, not source ---
+runtime/backups/
+=
+=[0-9]*

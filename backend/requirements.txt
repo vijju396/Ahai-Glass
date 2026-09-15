@@ -1,0 +1,39 @@
+# --- web ---
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+pydantic==2.10.4
+pydantic-settings==2.7.0
+python-multipart==0.0.20
+sse-starlette==2.1.3
+
+# --- persistence (SQLite now, PostgreSQL-ready) ---
+SQLAlchemy==2.0.36
+alembic==1.14.0
+
+# --- data processing ---
+pandas==2.2.3
+numpy==1.26.4  # ceiling set by tensorflow-cpu 2.17.0 (numpy<2); see docs/DECISIONS.md-008
+polars==1.17.1
+pyarrow==18.1.0
+openpyxl==3.1.5
+pyxlsb==1.0.10
+
+# --- ML: exact reference-project versions where pinned by Oxea ---
+statsmodels==0.14.6
+pmdarima==2.1.1
+xgboost-cpu==3.3.0
+scikit-learn==1.5.2
+tensorflow-cpu==2.17.0
+
+# --- tracking ---
+mlflow==2.19.0
+
+# --- test ---
+pytest==8.3.4
+pytest-cov==6.0.0
+httpx==0.28.1
+
+# AI assistant (docs/UI_VISUAL_PARITY.md section 6). The key is optional:
+# with none configured the assistant reports setup steps and the rest of the
+# application is unaffected.
+openai>=1.60,<2
