@@ -3624,3 +3624,65 @@ Neither touches the script-share or long-token checks, and the original
 nonsense still fails. Both directions are held by tests: a multi-script answer
 degrades and never reaches the page, and a short markdown answer passes
 through as `openai`.
+
+## D-091
+
+**Three inconsistencies between what is stored, what is displayed and what is
+described.**
+
+### A stored q95 the generator would no longer produce
+
+D-089 stopped a scope claiming a level it cannot place inside its own sample,
+so q95 needed nineteen residuals and a national scope has twelve. The
+restriction was right about the statistics and wrong about the outcome: the
+national forecast **kept a q95 in the database** from before the change, while
+the current code would have left it empty. Stored results and live logic
+disagreed, which is worse than either answer on its own.
+
+Resolved in favour of publishing the band. `_scope_calibration` now runs twice:
+once requiring `conformal_minimum`, so the caller can prefer the run's larger
+pooled cell, and once without, used last for a scope that has no pooled cell to
+fall back on. A national q95 is therefore computed from its twelve residuals
+and labelled **`empirical`** rather than `conformal` - the existing vocabulary
+for an interpolated tail - while q80 and q90 remain conformal on the same
+twelve.
+
+```
+NATIONAL   q80 conformal n=12   q90 conformal n=12   q95 empirical n=12
+SERIES     q95 conformal n=41   (unchanged - the pooled cell still wins)
+```
+
+**The measured caveat stands.** A q95 from twelve residuals was measured at
+72.9% coverage, and an oracle calibrated on the scored months could not beat
+83.5% from the same points. The label is the disclosure; the number is not a
+95% service level and the method field says so.
+
+### Captions describing a column that had changed underneath them
+
+D-088 made the MAPE column volume-weighted so it would reconcile with
+Accuracy. Four captions still said the unweighted `100 - MAPE` was "two columns
+along" and that "the MAPE column carries it". Both had been true and neither
+was any longer - the unweighted figure is not displayed at all now.
+
+Corrected rather than papered over: the captions say both columns are weighted
+and sum to 100, that the unweighted figure is no longer shown, and that WAPE is
+the nearest unweighted column. The rank tooltip also separated two things it
+had been conflating - position in this table, and winning scopes, which is the
+Wins column and comes from per-scope MAPE.
+
+### A derived export describing a workspace that no longer exists
+
+`data/scoped/` records "exactly what the application covers". It still listed
+**AHMEDABAD** and 1,059 rows - the workspace before DELHI-1 replaced Ahmedabad
+and before the SKU set was reselected three times (D-081, D-082, D-083).
+
+Regenerated from the panel and the live `.env`:
+
+```
+before   AHMEDABAD, BENGALURU   1,059 rows   the pre-D-081 SKU set
+after    BENGALURU, DELHI-1     1,118 rows   40 series, 2024-04 -> 2026-07
+```
+
+The manifest now also records which decisions chose the SKUs, so the next
+reader does not have to reconstruct that from four separate entries. The five
+client files in `data/source/` were not touched.

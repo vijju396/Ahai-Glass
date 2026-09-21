@@ -9,16 +9,22 @@
  * not met, and the row carries the exact requirement so the reader can judge
  * whether that is fixable.
  *
- * **Accuracy is volume-weighted.** Each scope
- * counts in proportion to the units it sells, because the unweighted mean lets a
- * 99-unit line outweigh its own irrelevance (D-087). The unweighted `100 −
- * MAPE` of D-043 is not a column of its own - `MAPE` carries it two columns
- * along, so the figure is still on the row and the arithmetic is checkable in
- * place. The champion selector still ranks on MAPE; this table's default sort
- * does not change what won. WAPE, MAE, RMSE, sMAPE, MASE and bias are
- * decision context, not a second ranking — a model can lead on MAPE
- * and trail on WAPE, and the table lets you see that rather than hiding it
- * behind one number.
+ * **Both Accuracy and MAPE are volume-weighted**, and each is 100 minus the
+ * other, so the pair reconciles on the row (D-087, D-088). Each scope counts
+ * in proportion to the units it sells, because an unweighted mean lets a
+ * 99-unit line outweigh its own irrelevance.
+ *
+ * The *unweighted* `100 - MAPE` of D-043 is no longer displayed. It was, while
+ * the MAPE column was the unweighted median; once that column became weighted
+ * the captions saying "the MAPE column carries it" were simply false, and
+ * saying so was worse than the omission. WAPE remains unweighted and is the
+ * nearest thing on the row to a scale-free comparison.
+ *
+ * The champion selector still ranks on per-scope MAPE; this table's default
+ * sort does not change what won. WAPE, MAE, RMSE, sMAPE, MASE and bias are
+ * decision context, not a second ranking — a model can lead on MAPE and trail
+ * on WAPE, and the table lets you see that rather than hiding it behind one
+ * number.
  *
  * **The thirteen only.** The four non-registry baselines are not rows here.
  * They are still fitted and still compared against, and the line beneath the
@@ -44,9 +50,9 @@ const COLUMNS: Array<{
   title: string;
   numeric: boolean;
 }> = [
-  { key: null, label: '#', title: 'Rank on whichever column the table is sorted by — volume-weighted accuracy by default. The champion selector itself ranks on MAPE', numeric: false },
+  { key: null, label: '#', title: 'Position in this table, on whichever column it is sorted by — volume-weighted Accuracy by default. Not the same thing as winning scopes: the champion selector ranks per scope on MAPE, and the Wins column is what that produced', numeric: false },
   { key: null, label: 'Model', title: 'Registered model', numeric: false },
-  { key: 'accuracy_weighted', label: 'Accuracy', title: 'Volume-weighted: each scope counts in proportion to the units it actually sells, so a 99-unit line no longer counts the same as a 9,672-unit one. The unweighted figure is 100 − MAPE, and the MAPE column carries it', numeric: true },
+  { key: 'accuracy_weighted', label: 'Accuracy', title: 'Volume-weighted: each scope counts in proportion to the units it actually sells, so a 99-unit line no longer counts the same as a 9,672-unit one. Exactly 100 minus the MAPE column, which is weighted the same way', numeric: true },
   { key: 'accuracy_series', label: 'Series', title: 'Accuracy at branch × SKU — the hardest grain, and most of the scopes', numeric: true },
   { key: 'mape_weighted', label: 'MAPE', title: 'Volume-weighted mean absolute percentage error — the figure Accuracy is exactly 100 minus, so the two columns reconcile on the row. Zero actuals are excluded. The champion selector ranks on per-scope MAPE, which is a different question from this summary', numeric: true },
   { key: 'median_wape', label: 'WAPE', title: 'Total absolute error over total absolute demand', numeric: true },
@@ -192,20 +198,23 @@ export function Leaderboard({
       </div>
 
       <p className="mt-2 text-[10px] leading-relaxed text-[var(--color-text-muted)]">
-        <strong>Accuracy is volume-weighted.</strong> Each scope counts in proportion to the
-        units it sells, so a line selling 99 units in 28 months no longer weighs as much as one
-        selling 9,672 — MAPE explodes on the small denominator, and being wrong by 7 units on a
-        3.5-unit month scores 200% while costing nobody anything. Weighting is worth about 22
-        points at series grain on this workspace. The unweighted figure is not hidden: it is
-        exactly 100 − <em>MAPE</em>, two columns along. <em>Series</em> isolates branch × SKU,
-        the hardest grain and most of the scopes.
+        <strong>Accuracy and MAPE are both volume-weighted, and sum to 100.</strong> Each scope
+        counts in proportion to the units it sells, so a line selling 99 units in 28 months no
+        longer weighs as much as one selling 9,672 — MAPE explodes on the small denominator, and
+        being wrong by 7 units on a 3.5-unit month scores 200% while costing nobody anything.
+        Weighting is worth about 22 points at series grain on this workspace. The unweighted
+        figure is no longer shown on this table; <em>WAPE</em> is the unweighted column nearest
+        to it. <em>Series</em> isolates branch × SKU, the hardest grain and most of the scopes.
       </p>
       <p className="mt-1 text-[10px] leading-relaxed text-[var(--color-text-muted)]">
-        Ranked on <strong>MAPE</strong> — the metric the champion selector uses. Accuracy is
-        <strong> 100 − MAPE</strong> clamped at zero, the same number restated, not a second
-        measurement. Every other column is decision context: a model can lead on MAPE and trail
-        on WAPE, and this table lets you see that. A negative bias means the model forecasts
-        <em> below</em> actual demand, which is the direction that causes a stockout.
+        Sorted on <strong>Accuracy</strong> by default; every heading is clickable. Accuracy is
+        <strong> 100 − MAPE</strong> clamped at zero and both are weighted the same way, so
+        they are one measurement shown twice rather than two. The <strong>champion selector
+        ranks on per-scope MAPE</strong>, which is a different question from this summary and
+        is not changed by how the table is sorted. Every other column is decision context: a
+        model can lead on MAPE and trail on WAPE, and this table lets you see that. A negative
+        bias means the model forecasts <em>below</em> actual demand, which is the direction
+        that causes a stockout.
         Hover an Ineligible row for the requirement it did not meet.
       </p>
 

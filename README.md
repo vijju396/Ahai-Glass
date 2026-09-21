@@ -103,9 +103,15 @@ data until you supply the first two:
 | `backend/.env` | Holds an API key | `cp backend/.env.example backend/.env` |
 | `runtime/` | Generated — database, MLflow, Parquet, logs | Created on first run |
 
-`data/scoped/*.parquet` **is** committed: a 2-branch × 20-SKU derived slice.
-It is a convenience export, not the system of record, and nothing reads it at
-runtime.
+`data/scoped/` **is** committed: the derived slice the deployment actually
+reports on — BENGALURU and DELHI-1, 20 SKUs, 40 series, 1,118 panel rows over
+2024-04 → 2026-07. `manifest.json` beside the parquet files records the
+branches, the SKUs and which decisions chose them.
+
+It is a convenience export and a readable record, not the system of record,
+and nothing reads it at runtime. Regenerate it after changing
+`AIS_WORKSPACE_BRANCHES` or `AIS_WORKSPACE_SKUS` — it silently described the
+previous workspace for several selections before anyone noticed.
 
 #### Source files
 
