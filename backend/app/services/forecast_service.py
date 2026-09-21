@@ -802,6 +802,7 @@ def _scope_calibration(
     segment: str,
     horizon: int,
     by_horizon: dict[int, list[float]],
+    require_conformal: bool = True,
 ) -> Calibration | None:
     """A calibration built from one scope's own residuals, or `None`.
 
@@ -825,11 +826,13 @@ def _scope_calibration(
         # oracle calibrated on the scored months could not beat 83.5% from the
         # same twelve points (D-089).
         #
-        # Since residuals became relative they are scale-free, so the run's
-        # pooled cell is a legitimate source rather than a mixture of
-        # magnitudes. Levels the scope cannot support are therefore left unset
-        # and filled from that larger pool by the caller.
-        need = conformal_minimum(level)
+        # `require_conformal` runs this twice. The first pass takes only the
+        # levels the scope can place inside its own sample, so the caller can
+        # prefer the run's larger pooled cell for the rest. The second pass
+        # drops the requirement and is used last, for a scope with no pooled
+        # cell to fall back to - an interpolated band it labels `empirical`
+        # beats publishing no band at all (D-091).
+        need = conformal_minimum(level) if require_conformal else MIN_RESIDUALS
         for pooling_level, residuals in pools:
             if len(residuals) < need:
                 continue
@@ -871,6 +874,17 @@ def _quantiles_for(
             horizon=int(horizon),
             by_horizon=by_horizon,
         )
+        # Same residuals, gate dropped. Used only for levels neither the
+        # conformal scope pass nor the pooled cell could supply, so a national
+        # total still publishes a q95 from its twelve residuals rather than
+        # leaving the band empty (D-091).
+        local_any = _scope_calibration(
+            model_id=model_id,
+            segment=segment,
+            horizon=int(horizon),
+            by_horizon=by_horizon,
+            require_conformal=False,
+        )
         # The run's pooled cell mixes every scope that shares a model, horizon
         # and demand segment - and a branch x SKU cell has a far larger
         # *relative* error than a national total even when both are "smooth".
@@ -886,6 +900,16 @@ def _quantiles_for(
             cell = calibrations.get(
                 (model_id, int(horizon), segment)
             ) or calibrations.get((model_id, int(horizon), "all"))
+
+        if cell is None and local_any is not None:
+            # No pooled cell to defer to, so fill whatever the conformal pass
+            # left unset from the same residuals, interpolated and labelled.
+            merged = local or Calibration(
+                model_id=model_id, horizon=int(horizon), segment=segment
+            )
+            for key, offset in local_any.offsets.items():
+                merged.offsets.setdefault(key, offset)
+            local = merged
 
         if local is not None and (cell is None or len(local.offsets) == len(QUANTILE_KEYS)):
             values, _report = apply_calibration([float(point[index])], local)

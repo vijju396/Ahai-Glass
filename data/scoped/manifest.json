@@ -1,33 +1,33 @@
 {
   "purpose": "The exact slice this deployment reports on. A derived export - the five client files in data/source/ are untouched and remain the system of record.",
   "branches": [
-    "AHMEDABAD",
-    "BENGALURU"
+    "BENGALURU",
+    "DELHI-1"
   ],
   "skus": [
-    "FG.AQ3.LFH.GYG2120000",
     "FG.BA5.LFH.GCG2120000",
-    "FG.DHH.FDR.G00400A000",
-    "FG.EP3.FDR.G00350A000",
-    "FG.FBM.LFH.GCG2120VN3",
-    "FG.HY2.BCK.G00300A100",
-    "FG.HY2.FDR.G003000000",
-    "FG.M1C.LFH.GCG2120000",
-    "FG.ML9.BCK.G00Z00A000",
+    "FG.HBI.LFH.GCG2120000",
+    "FG.HBR.LFH.GCG2120000",
+    "FG.HIR.LFH.GCG2120000",
+    "FG.KQY.LFH.GCG2120000",
+    "FG.MJ1.LFH.GCG2120000",
+    "FG.MP8.BCK.G00300A000",
     "FG.MP8.FDR.G00300A000",
     "FG.MP8.LFH.GCG2120000",
-    "FG.MW5.LFHGAG2525A000",
+    "FG.MP9.LFH.GCG21X0000",
+    "FG.MRL.BCK.G00Z00A100",
+    "FG.MTL.BCK.G00280A300",
+    "FG.MTV.LFH.GCG21X0000",
+    "FG.MW5.LFH.GCG2120000",
     "FG.MW6.LFH.GAG21XAR00",
     "FG.MY7.LFH.GCG2120000",
-    "FG.MYC.BCK.G00300A000",
-    "FG.T66.FDR.G00A000000",
-    "FG.TCF.LFH.GCG2120000",
-    "FG.TK4.BCK.G00300A100",
-    "FG.TK4.FVR.G003000000",
-    "FG.TK4.LFH.GCG2120000"
+    "FG.MYS.BCK.G00300A000",
+    "FG.MYS.LFH.GCG2120000",
+    "FG.T56.LFH.GXG21XAT00",
+    "FG.TCF.LFH.GCG2120000"
   ],
   "series": 40,
-  "panel_rows": 1059,
+  "panel_rows": 1118,
   "periods": [
     "2024-04",
     "2026-07"
@@ -35,7 +35,8 @@
   "of_full_panel": {
     "branches": "2 of 53",
     "skus": "20 of 2334",
-    "rows": "1059 of 1503753"
+    "rows": "1118 of 1503753"
   },
-  "applied_by": "AIS_WORKSPACE_BRANCHES and AIS_WORKSPACE_SKUS in backend/.env, via app/domain/ais/workspace.py"
+  "applied_by": "AIS_WORKSPACE_BRANCHES and AIS_WORKSPACE_SKUS in backend/.env, via app/domain/ais/workspace.py",
+  "sku_selection": "Chosen by the mix objective in D-075, re-selected on real model eligibility in D-081, freed from the mean_mrp rule in D-082, and given reserved slots for 3W, value class C and COMMERCIAL in D-083."
 }

@@ -3529,6 +3529,33 @@ forecast 91775e14 - origin 2026-07, coherent, 288 rows + 6 unavailable
 backend 919 passed - frontend 233 passed - tsc clean
 ```
 
+## Stored/displayed/described inconsistencies resolved (D-091)
+
+**q95 is published again at aggregate scopes.** The national forecast held a
+stored q95 the current generator would have left empty. `_scope_calibration`
+now runs a second pass without the conformal requirement, used only where
+there is no pooled cell to prefer, so the band is computed from the twelve
+residuals and labelled `empirical`.
+
+```
+NATIONAL   q80/q90 conformal n=12   q95 empirical n=12
+SERIES     q95 conformal n=41       unchanged
+```
+
+Still a measured 72.9% coverage from twelve residuals - the label carries that,
+the number is not a 95% service level.
+
+**Leaderboard captions corrected.** Four still claimed the unweighted
+`100 - MAPE` was in the MAPE column; that column became weighted in D-088 and
+the unweighted figure is no longer displayed anywhere.
+
+**`data/scoped/` regenerated.** It described AHMEDABAD and 1,059 rows; the live
+workspace is BENGALURU and DELHI-1 at 1,118 rows over 40 series.
+
+```
+forecast f84488b3 - origin 2026-07, coherent, 288 rows + 6 unavailable
+```
+
 ## Accuracy is reported per planning window, and per line
 
 **The monthly figure was never going to reach 85%, and that is measured rather
@@ -3645,10 +3672,11 @@ recorded against the order. The sales file stops at Mar 2026, so those four
 months have no second source. Named, not corrected.
 
 ```
-backend 918 passed, 1 failed (pre-existing drift-slope test, Apple Silicon)
-frontend 236 passed - tsc clean - 73 endpoints, contract in step
+backend  919 passed  (last full run, on main at 53809e6)
+frontend 233 passed  (same run) - tsc --noEmit clean on the merge
+73 endpoints, contract in step
 ```
 
-*The test line above is from the last full run, before the D-099 to D-102
-changes. All four are frontend-only and `tsc --noEmit` is clean on them; the
-frontend suite has not been re-run since.*
+*That run predates D-094 to D-103. Everything since is frontend-only except
+`forecast_service.py`, which came from main's own tested commit; `tsc --noEmit`
+is clean on the merged tree and the suites have not been re-run since.*

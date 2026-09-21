@@ -3627,43 +3627,65 @@ through as `openai`.
 
 ## D-091
 
-**A champion must be able to run on the history it will be refitted on.**
+**Three inconsistencies between what is stored, what is displayed and what is
+described.**
 
-`BENGALURU|FG.MYS.BCK.G00300A000` crowned `var_exog` on a 25.5% WAPE and then
-produced six null forecast rows. The row stated its reason honestly — VAR needs
-two non-constant co-evolving series and only one of four qualified — but a
-plant scheduling that SKU had no number, while three models that could have run
-were ranked below it.
+### A stored q95 the generator would no longer produce
 
-The cause is that a backtest fold trains on a window that stops before the fold
-it is scored against, and the live refit trains on everything. Those are
-different data. A column that varied over the eighteen months of fold 1 can be
-flat across all twenty-eight.
+D-089 stopped a scope claiming a level it cannot place inside its own sample,
+so q95 needed nineteen residuals and a national scope has twelve. The
+restriction was right about the statistics and wrong about the outcome: the
+national forecast **kept a q95 in the database** from before the change, while
+the current code would have left it empty. Stored results and live logic
+disagreed, which is worse than either answer on its own.
 
-`rank_candidates` now takes an optional `deployable` predicate, and
-`select_champions` supplies one built from the panel. A candidate the predicate
-refuses is excluded with `Ineligibility.NOT_DEPLOYABLE` and the crown passes to
-the next model that can run. Measured on the series-only run: four models
-refused, on one scope of forty, and that scope moved from `var_exog` to
-`auto_arima_exog`.
+Resolved in favour of publishing the band. `_scope_calibration` now runs twice:
+once requiring `conformal_minimum`, so the caller can prefer the run's larger
+pooled cell, and once without, used last for a scope that has no pooled cell to
+fall back on. A national q95 is therefore computed from its twelve residuals
+and labelled **`empirical`** rather than `conformal` - the existing vocabulary
+for an interpolated tail - while q80 and q90 remain conformal on the same
+twelve.
 
-Three properties held deliberately:
+```
+NATIONAL   q80 conformal n=12   q90 conformal n=12   q95 empirical n=12
+SERIES     q95 conformal n=41   (unchanged - the pooled cell still wins)
+```
 
-- **The question goes to the adapter that would do the refit.** A second
-  opinion written in the selector could disagree with the one that matters, so
-  `app/domain/ais/deployability.py` owns both the frame construction and the
-  check, and `forecast_service` fits on the same `ScopeFit` it produces.
-- **A refused model is still a row**, with the adapter's own words for the
-  requirement it missed. `demoted` on the selection response names every case.
-- **The check failing is not a reason to select nothing.** A panel that cannot
-  be read leaves selection ungated and says so in `deployability_note`, which
-  is the behaviour that existed before.
+**The measured caveat stands.** A q95 from twelve residuals was measured at
+72.9% coverage, and an oracle calibrated on the scored months could not beat
+83.5% from the same points. The label is the disclosure; the number is not a
+95% service level and the method field says so.
 
-Reading a leaderboard does not load a panel. Where an active selection exists
-for the run being asked about, `leaderboard_payload` serves the board that
-selection stored — otherwise the screen would rank a model first that the
-forecast does not use, and contradict itself.
+### Captions describing a column that had changed underneath them
 
+D-088 made the MAPE column volume-weighted so it would reconcile with
+Accuracy. Four captions still said the unweighted `100 - MAPE` was "two columns
+along" and that "the MAPE column carries it". Both had been true and neither
+was any longer - the unweighted figure is not displayed at all now.
+
+Corrected rather than papered over: the captions say both columns are weighted
+and sum to 100, that the unweighted figure is no longer shown, and that WAPE is
+the nearest unweighted column. The rank tooltip also separated two things it
+had been conflating - position in this table, and winning scopes, which is the
+Wins column and comes from per-scope MAPE.
+
+### A derived export describing a workspace that no longer exists
+
+`data/scoped/` records "exactly what the application covers". It still listed
+**AHMEDABAD** and 1,059 rows - the workspace before DELHI-1 replaced Ahmedabad
+and before the SKU set was reselected three times (D-081, D-082, D-083).
+
+Regenerated from the panel and the live `.env`:
+
+```
+before   AHMEDABAD, BENGALURU   1,059 rows   the pre-D-081 SKU set
+after    BENGALURU, DELHI-1     1,118 rows   40 series, 2024-04 -> 2026-07
+```
+
+The manifest now also records which decisions chose the SKUs, so the next
+reader does not have to reconstruct that from four separate entries. The five
+client files in `data/source/` were not touched.
 ## D-092
 
 **An aggregate with no champion is published as the sum of its parts.**
@@ -4020,3 +4042,45 @@ crossing), so a despatch made the following month is not recorded against the
 order at all. The sales file stops at Mar 2026, so there is no second source to
 test those four months against. Not corrected, because correcting it would mean
 inventing despatches.
+
+## D-103 — A champion must be able to run on the history it will be refitted on
+
+*Recorded as D-091 while this work was local. Renumbered on merge: D-091 was
+already taken on `main` by the stored/displayed/described entry above.*
+
+
+`BENGALURU|FG.MYS.BCK.G00300A000` crowned `var_exog` on a 25.5% WAPE and then
+produced six null forecast rows. The row stated its reason honestly — VAR needs
+two non-constant co-evolving series and only one of four qualified — but a
+plant scheduling that SKU had no number, while three models that could have run
+were ranked below it.
+
+The cause is that a backtest fold trains on a window that stops before the fold
+it is scored against, and the live refit trains on everything. Those are
+different data. A column that varied over the eighteen months of fold 1 can be
+flat across all twenty-eight.
+
+`rank_candidates` now takes an optional `deployable` predicate, and
+`select_champions` supplies one built from the panel. A candidate the predicate
+refuses is excluded with `Ineligibility.NOT_DEPLOYABLE` and the crown passes to
+the next model that can run. Measured on the series-only run: four models
+refused, on one scope of forty, and that scope moved from `var_exog` to
+`auto_arima_exog`.
+
+Three properties held deliberately:
+
+- **The question goes to the adapter that would do the refit.** A second
+  opinion written in the selector could disagree with the one that matters, so
+  `app/domain/ais/deployability.py` owns both the frame construction and the
+  check, and `forecast_service` fits on the same `ScopeFit` it produces.
+- **A refused model is still a row**, with the adapter's own words for the
+  requirement it missed. `demoted` on the selection response names every case.
+- **The check failing is not a reason to select nothing.** A panel that cannot
+  be read leaves selection ungated and says so in `deployability_note`, which
+  is the behaviour that existed before.
+
+Reading a leaderboard does not load a panel. Where an active selection exists
+for the run being asked about, `leaderboard_payload` serves the board that
+selection stored — otherwise the screen would rank a model first that the
+forecast does not use, and contradict itself.
+
