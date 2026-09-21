@@ -17,6 +17,10 @@ export const BLUE = '#005BAB';
 export const NAVY = '#0F2754';
 export const TEAL = '#0d7d78';
 export const AMBER = '#a15c07';
+/** A true yellow, darkened to yellow-600 so a 2px line stays legible on the
+ *  light surface and does not vanish. `#eab308` reads more yellow but fails
+ *  contrast against white at line weight. */
+export const YELLOW = '#ca8a04';
 export const VIOLET = '#5b4bb7';
 export const GREEN = '#157f4a';
 export const RED = '#b3261e';

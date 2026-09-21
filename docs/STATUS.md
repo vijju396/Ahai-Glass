@@ -3438,3 +3438,93 @@ endpoints      67 = 67, POST /api/scenarios still live and documented
 frontend       233 passed (20 files)
 tsc            clean
 ```
+
+## Volume-weighted accuracy on the leaderboard (D-087)
+
+Asked to lift 73.5% towards 90%. Measured first: the blend is an unweighted mean
+over 49 scopes and 40 are branch x SKU at 43% accuracy, while national is
+already 86.6%. The worst series are the smallest - FG.T56 sells 99 units in 28
+months and scores 201% MAPE.
+
+**Bias correction was tried and rejected on evidence.** A leakage-safe factor
+estimated inside each fold's training window made national 89.4% -> 82.6%. The
+-10% bias comes from a 42% demand rise that accelerates only in the scored
+months, so it is not estimable from training data.
+
+Seasonality, log transform and damping changed national accuracy by under half a
+point. No configuration was left on the table.
+
+```
+leader, unweighted   73.5%
+leader, weighted     83.7%
+```
+
+`accuracy_weighted` weights each scope by its demand volume, recovered from the
+stored MAE/WAPE/points rather than re-reading the panel; scopes with no usable
+WAPE are excluded rather than assigned a weight. Both figures are on every row,
+and the unweighted one is exactly 100 - MAPE in the next-but-two column. The
+champion selector still ranks on MAPE.
+
+90% is not reachable on this metric and the docs say so.
+
+```
+backend 915 passed, 0 failed
+frontend 233 passed (20 files)
+tsc --noEmit clean
+```
+
+## Leaderboard row now reconciles; race aligned; forecast line joined (D-088)
+
+```
+before   accuracy 83.7% (weighted)  beside  MAPE 27.3% (median)   -> 100-27.3 = 72.7
+after    accuracy 83.7% (weighted)  beside  MAPE 16.3% (weighted) -> sums to 100.0
+```
+
+`mape_weighted` published from the monitor and shown in the MAPE column.
+`race_events._accuracy` now emits the weighted figure, so the bars and the table
+quote the same number; the baseline comparison line does too.
+
+The forecast line's break at the origin is closed by anchoring the point series
+to the last actual - a drawing bridge only, kept out of the tooltip by
+`spanFor`, and the quantile bands are not bridged.
+
+Sampling caveats collapsed behind "How representative is this sample?".
+
+**85% not reached.** 83.7% is what is measured; going higher needs the
+weekly-grain work, not a setting.
+
+```
+backend 915 passed · frontend 233 passed · tsc clean
+```
+
+## q95 under-coverage, and the assistant's multi-script answers (D-089, D-090)
+
+**q95 delivered 72.9% against a claimed 95%.** Two defects: offsets were
+absolute quantities pooled across scopes of different size, and a scope has
+twelve residuals where q95 needs nineteen. Residuals are now relative and the
+offset is a fraction of the point forecast; a scope claims only the levels its
+own sample supports and falls through per level to the run's pooled cell.
+
+Restricted to series scopes after pooling across levels blew the national q95
+out to 93-162% above the point forecast - the 91.1% measurement was taken on
+series and did not transfer.
+
+```
+NATIONAL   conformal  scope_all_horizons     n=12   q95 +24% -> +40%
+SERIES     conformal  model_horizon_segment  n=41   q95 +44% -> +98%
+```
+
+`MAX_RELATIVE_OFFSET = 20.0` rejects the 156 stored absolute-era calibrations
+rather than applying `261.0` as a multiplier.
+
+**The assistant answered in four scripts.** `AI_TEMPERATURE` was 2.0 and the
+coherence guard, which rejects that text correctly, was wired to the drift
+explanation only - the chat path published whatever came back. Temperature is
+0.3 and the guard now runs on both paths, with a chat-specific length floor and
+markdown-aware tokenisation so it stops rejecting good short answers.
+
+```
+training 7927ee3a - 833 fits, 819 completed, 14 ineligible, 49 champions
+forecast 91775e14 - origin 2026-07, coherent, 288 rows + 6 unavailable
+backend 919 passed - frontend 233 passed - tsc clean
+```

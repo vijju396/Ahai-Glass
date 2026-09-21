@@ -22,8 +22,14 @@
  * changed.
  *
  * It renders nothing when an axis is not materially distorted, and nothing at
- * all when no SKU restriction is configured. A warning on every panel is read
- * on none of them.
+ * all when no SKU restriction is configured. A note on every panel is read on
+ * none of them.
+ *
+ * Styled as a neutral note rather than a red alert, and collapsed to a single
+ * clickable line. Nothing here is broken - it is a property of a deliberately
+ * stratified sample - and four panels each carrying three lines of standing
+ * caveat read as faults to anyone seeing the page for the first time. The
+ * disclosure is unchanged and one click away; only its volume is.
  */
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -47,18 +53,18 @@ export function SampleMixCaveat({ axis }: { axis: string }) {
   const shown = row.levels.filter((l) => l.sample_pct > 0 || l.branch_pct > 0);
 
   return (
-    <div className="mt-1.5 rounded-lg border border-[var(--ais-diamond,#b3261e)]/30 bg-[var(--ais-diamond,#b3261e)]/[0.06] px-2 py-1.5">
+    <div className="mt-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted,transparent)] px-2 py-1.5">
       <button
         type="button"
-        className="flex w-full items-start gap-1.5 text-left"
+        className="flex w-full items-center gap-1.5 text-left"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        <span className="mt-[1px] shrink-0 text-[10px] font-bold text-[var(--ais-diamond,#b3261e)]">
-          !
+        <span className="shrink-0 text-[10px] font-semibold text-[var(--color-text-muted)]">
+          i
         </span>
-        <span className="text-[10px] leading-relaxed text-[var(--color-text)]">
-          {row.caveat}
+        <span className="text-[10px] font-medium text-[var(--color-text)]">
+          How representative is this sample?
         </span>
         <span className="ml-auto shrink-0 text-[10px] text-[var(--color-primary)]">
           {open ? '−' : '+'}
@@ -67,6 +73,13 @@ export function SampleMixCaveat({ axis }: { axis: string }) {
 
       {open && (
         <div className="mt-1.5 border-t border-[var(--color-border)] pt-1.5">
+          {/* The sentence itself is now inside the fold. Four panels each
+              carrying three lines of standing caveat crowded the page and were
+              read by nobody; a prompt that says what is behind it gets opened
+              by the one reader who needs it. */}
+          <p className="mb-1.5 text-[10px] leading-relaxed text-[var(--color-text)]">
+            {row.caveat}
+          </p>
           <table className="w-full text-[10px]">
             <thead>
               <tr className="text-[var(--color-text-muted)]">
@@ -93,7 +106,7 @@ export function SampleMixCaveat({ axis }: { axis: string }) {
                   <td
                     className="text-right tabular-nums"
                     style={{
-                      color: l.material ? 'var(--ais-diamond,#b3261e)' : 'var(--color-text-muted)',
+                      color: l.material ? 'var(--color-text)' : 'var(--color-text-muted)',
                       fontWeight: l.material ? 600 : 400,
                     }}
                   >

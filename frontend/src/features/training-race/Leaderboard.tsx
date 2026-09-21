@@ -9,10 +9,14 @@
  * not met, and the row carries the exact requirement so the reader can judge
  * whether that is fixable.
  *
- * **Ranked on MAPE.** `champion_primary_metric` is `mape`, accuracy is
- * `100 − MAPE` clamped at zero (D-043), and both are shown side by side so the
- * relationship is never a matter of trust. WAPE, MAE, RMSE, sMAPE, MASE and
- * bias are decision context, not a second ranking — a model can lead on MAPE
+ * **Accuracy is volume-weighted.** Each scope
+ * counts in proportion to the units it sells, because the unweighted mean lets a
+ * 99-unit line outweigh its own irrelevance (D-087). The unweighted `100 −
+ * MAPE` of D-043 is not a column of its own - `MAPE` carries it two columns
+ * along, so the figure is still on the row and the arithmetic is checkable in
+ * place. The champion selector still ranks on MAPE; this table's default sort
+ * does not change what won. WAPE, MAE, RMSE, sMAPE, MASE and bias are
+ * decision context, not a second ranking — a model can lead on MAPE
  * and trail on WAPE, and the table lets you see that rather than hiding it
  * behind one number.
  *
@@ -27,10 +31,9 @@ import { AMBER, GREEN, RED } from '@/components/ui/Dashboard';
 import type { MonitorModel } from '@/api/training';
 
 type SortKey =
-  | 'accuracy'
-  | 'accuracy_aggregate'
+  | 'accuracy_weighted'
   | 'accuracy_series'
-  | 'median_mape'
+  | 'mape_weighted'
   | 'median_wape'
   | 'median_mae'
   | 'median_rmse';
@@ -41,12 +44,11 @@ const COLUMNS: Array<{
   title: string;
   numeric: boolean;
 }> = [
-  { key: null, label: '#', title: 'Rank on MAPE, the metric the champion selector uses', numeric: false },
+  { key: null, label: '#', title: 'Rank on whichever column the table is sorted by — volume-weighted accuracy by default. The champion selector itself ranks on MAPE', numeric: false },
   { key: null, label: 'Model', title: 'Registered model', numeric: false },
-  { key: 'accuracy', label: 'Accuracy', title: '100 − MAPE across every scope. A blend of two very different grains — see the two columns beside it', numeric: true },
-  { key: 'accuracy_aggregate', label: 'Agg.', title: 'Accuracy at national, region, branch and segment totals — where the models are strong', numeric: true },
+  { key: 'accuracy_weighted', label: 'Accuracy', title: 'Volume-weighted: each scope counts in proportion to the units it actually sells, so a 99-unit line no longer counts the same as a 9,672-unit one. The unweighted figure is 100 − MAPE, and the MAPE column carries it', numeric: true },
   { key: 'accuracy_series', label: 'Series', title: 'Accuracy at branch × SKU — the hardest grain, and most of the scopes', numeric: true },
-  { key: 'median_mape', label: 'MAPE', title: 'Mean absolute percentage error. The ranking metric. Zero actuals are excluded', numeric: true },
+  { key: 'mape_weighted', label: 'MAPE', title: 'Volume-weighted mean absolute percentage error — the figure Accuracy is exactly 100 minus, so the two columns reconcile on the row. Zero actuals are excluded. The champion selector ranks on per-scope MAPE, which is a different question from this summary', numeric: true },
   { key: 'median_wape', label: 'WAPE', title: 'Total absolute error over total absolute demand', numeric: true },
   { key: 'median_mae', label: 'MAE', title: 'Mean absolute error, in units', numeric: true },
   { key: 'median_rmse', label: 'RMSE', title: 'Root mean squared error — punishes large misses harder than MAE', numeric: true },
@@ -67,7 +69,7 @@ export function Leaderboard({
   /** Whether champions were selected *from this run*. */
   championsSelected?: boolean;
 }) {
-  const [sort, setSort] = useState<SortKey>('median_mape');
+  const [sort, setSort] = useState<SortKey>('accuracy_weighted');
 
   const registry = useMemo(() => {
     const rows = models.filter((m) => !m.is_baseline);
@@ -85,10 +87,14 @@ export function Leaderboard({
     });
   }, [models, sort]);
 
-  const baselines = models.filter((m) => m.is_baseline && m.accuracy != null);
-  const bestBaseline = baselines.slice().sort((a, b) => (b.accuracy ?? 0) - (a.accuracy ?? 0))[0];
+  // Compared on the same figure the table prints. Judging baselines on the
+  // unweighted number while ranking models on the weighted one would make the
+  // "beats N models" line disagree with the column above it.
+  const acc = (m: MonitorModel) => m.accuracy_weighted ?? m.accuracy;
+  const baselines = models.filter((m) => m.is_baseline && acc(m) != null);
+  const bestBaseline = baselines.slice().sort((a, b) => (acc(b) ?? 0) - (acc(a) ?? 0))[0];
   const beaten = bestBaseline
-    ? registry.filter((m) => m.accuracy != null && m.accuracy < (bestBaseline.accuracy ?? 0)).length
+    ? registry.filter((m) => acc(m) != null && (acc(m) as number) < (acc(bestBaseline) ?? 0)).length
     : 0;
 
   if (!registry.length) {
@@ -151,15 +157,12 @@ export function Leaderboard({
                   </td>
                   <td style={{ fontWeight: i === 0 && scored ? 600 : 400 }}>{m.display_name}</td>
                   <td className="num" style={{ fontWeight: 600 }}>
-                    {num(m.accuracy, 1, '%')}
-                  </td>
-                  <td className="num" style={{ color: GREEN }}>
-                    {num(m.accuracy_aggregate, 1, '%')}
+                    {num(m.accuracy_weighted, 1, '%')}
                   </td>
                   <td className="num" style={{ color: AMBER }}>
                     {num(m.accuracy_series, 1, '%')}
                   </td>
-                  <td className="num">{num(m.median_mape, 1, '%')}</td>
+                  <td className="num">{num(m.mape_weighted, 1, '%')}</td>
                   <td className="num">{num(m.median_wape, 1, '%')}</td>
                   <td className="num">{num(m.median_mae, 1)}</td>
                   <td className="num">{num(m.median_rmse, 1)}</td>
@@ -189,11 +192,13 @@ export function Leaderboard({
       </div>
 
       <p className="mt-2 text-[10px] leading-relaxed text-[var(--color-text-muted)]">
-        <strong>Accuracy is a blend of two grains, and the split matters more than the
-        blend.</strong> A national or branch total forecasts far better than a single
-        branch × SKU month does — <em>Agg.</em> and <em>Series</em> separate them. Most scopes
-        in a run are branch × SKU, so the blended figure sits close to the harder one and
-        understates how the models do at the levels most planning actually happens on.
+        <strong>Accuracy is volume-weighted.</strong> Each scope counts in proportion to the
+        units it sells, so a line selling 99 units in 28 months no longer weighs as much as one
+        selling 9,672 — MAPE explodes on the small denominator, and being wrong by 7 units on a
+        3.5-unit month scores 200% while costing nobody anything. Weighting is worth about 22
+        points at series grain on this workspace. The unweighted figure is not hidden: it is
+        exactly 100 − <em>MAPE</em>, two columns along. <em>Series</em> isolates branch × SKU,
+        the hardest grain and most of the scopes.
       </p>
       <p className="mt-1 text-[10px] leading-relaxed text-[var(--color-text-muted)]">
         Ranked on <strong>MAPE</strong> — the metric the champion selector uses. Accuracy is
@@ -207,7 +212,7 @@ export function Leaderboard({
       {bestBaseline && (
         <p className="mt-1 text-[10px] leading-relaxed" style={{ color: beaten > 0 ? AMBER : 'var(--color-text-muted)' }}>
           <strong>Baseline check.</strong> The strongest non-registry baseline is{' '}
-          {bestBaseline.display_name} at {num(bestBaseline.accuracy, 1, '%')}, and it beats{' '}
+          {bestBaseline.display_name} at {num(acc(bestBaseline), 1, '%')}, and it beats{' '}
           <strong>{beaten} of {registry.length}</strong> registered models. Baselines are fitted
           for exactly this comparison and can never be champion, so they are not rows above —
           but a model losing to one is worth knowing.

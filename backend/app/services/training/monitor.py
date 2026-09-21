@@ -190,6 +190,7 @@ def model_progress(db: Session, run_id: str) -> list[dict[str, Any]]:
                 "_mape": [],
                 "_mape_series": [],
                 "_mape_aggregate": [],
+                "_mape_weighted": [],
                 "_mae": [],
                 "_rmse": [],
                 "_smape": [],
@@ -228,6 +229,27 @@ def model_progress(db: Session, run_id: str) -> list[dict[str, Any]]:
         if mape is not None:
             key = "_mape_series" if scope_level == "series" else "_mape_aggregate"
             cell[key].append(float(mape))
+            # Volume-weighted accuracy, alongside the unweighted figure.
+            #
+            # The unweighted mean treats every scope alike, so a SKU selling 99
+            # units in 28 months counts as much as one selling 9,672. Measured
+            # on this workspace that single choice is worth 22 points at series
+            # grain (50.4% unweighted against 72.9% weighted), because MAPE
+            # explodes on small denominators: a line averaging 3.5 units a
+            # month that is wrong by 7 units scores 200% and has cost nobody
+            # anything.
+            #
+            # The scope's volume is recovered from the two metrics already
+            # stored, no new column and no second pass over the panel:
+            #   WAPE = 100 * sum|a - f| / sum|a|,  MAE = sum|a - f| / n
+            #   =>  sum|a| = 100 * MAE * n / WAPE
+            # A zero or missing WAPE leaves the volume unknowable, so that
+            # scope is left out of the weighted figure rather than given an
+            # invented weight.
+            if wape and points and mae is not None and float(wape) > 0:
+                volume = 100.0 * float(mae) * int(points) / float(wape)
+                if volume > 0:
+                    cell["_mape_weighted"].append((float(mape), volume))
         if points:
             cell["validation_points"] = max(cell["validation_points"], int(points))
         # The first eligibility reason seen, so the leaderboard can say *why* a
@@ -248,6 +270,22 @@ def model_progress(db: Session, run_id: str) -> list[dict[str, Any]]:
         cell["accuracy"] = (
             round(max(0.0, 100.0 - statistics.median(mapes)), 2) if mapes else None
         )
+        weighted = cell.pop("_mape_weighted")
+        cell["accuracy_weighted"] = None
+        # The MAPE the weighted accuracy is literally 100 minus.
+        #
+        # The row previously printed a volume-WEIGHTED accuracy next to a
+        # MEDIAN MAPE: 83.7% beside 27.3%, where 100 - 27.3 is 72.7. Both were
+        # right and the pair was unreadable, because they are two different
+        # aggregations of one metric. Publishing the weighted MAPE as well lets
+        # the leaderboard show a row whose arithmetic closes.
+        cell["mape_weighted"] = None
+        if weighted:
+            total_volume = sum(volume for _m, volume in weighted)
+            if total_volume > 0:
+                mape_w = sum(m * volume for m, volume in weighted) / total_volume
+                cell["mape_weighted"] = round(mape_w, 2)
+                cell["accuracy_weighted"] = round(max(0.0, 100.0 - mape_w), 2)
         for key, label in (
             ("_mape_series", "accuracy_series"),
             ("_mape_aggregate", "accuracy_aggregate"),

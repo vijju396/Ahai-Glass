@@ -36,15 +36,14 @@ import {
   type AnalyticsQuery,
 } from '@/api/analytics';
 import {
-  AMBER,
   BLUE,
-  GREEN,
   Panel,
   RED,
   SLATE,
   StatTile,
   TICK,
   TOOLTIP,
+  YELLOW,
   inr,
   num,
   pct,
@@ -326,13 +325,13 @@ export function SeriesAnalysisPage() {
                   type="monotone"
                   dataKey="despatched_units"
                   name="Despatched"
-                  stroke={GREEN}
+                  stroke={YELLOW}
                   strokeWidth={2}
                   dot={false}
                   connectNulls={false}
                   isAnimationActive={false}
                 />
-                <Bar dataKey="shortfall_units" name="Short" fill={AMBER} barSize={8} isAnimationActive={false} />
+                <Bar dataKey="shortfall_units" name="Short" fill={RED} barSize={8} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
           </Panel>

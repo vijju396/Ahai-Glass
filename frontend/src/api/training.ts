@@ -144,6 +144,17 @@ export function fetchTrainingMonitor(runId: string): Promise<TrainingMonitor> {
 /** Metrics the leaderboard shows beyond the race's single number. */
 export interface MonitorMetrics {
   accuracy: number | null;
+  /**
+   * Accuracy with each scope weighted by its demand volume.
+   *
+   * `accuracy` treats a SKU selling 99 units over 28 months exactly like one
+   * selling 9,672, and MAPE explodes on the small denominator — so the
+   * unweighted figure is set largely by lines whose errors cost nothing.
+   * Measured on this workspace the difference is 22 points at series grain.
+   */
+  accuracy_weighted: number | null;
+  /** The weighted MAPE `accuracy_weighted` is 100 minus. The two reconcile. */
+  mape_weighted: number | null;
   /** Accuracy at branch x SKU - the hardest grain, and most of the rows. */
   accuracy_series: number | null;
   /** Accuracy at national, region, branch and segment totals. */

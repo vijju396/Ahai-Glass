@@ -340,9 +340,14 @@ export function ForecastingPage() {
               sublabel="selected on this series alone"
               tint="navy"
             />
+            {/* MAPE, not WAPE. MAPE is the metric the champion for this series
+                was selected on (D-043), so the error quoted beside the model
+                name is the error that chose it. WAPE is still computed and
+                still on the leaderboard; quoting it here named one metric while
+                the selection used another. */}
             <StatTile
               label="Measured error"
-              value={metrics?.wape == null ? '—' : `${metrics.wape.toFixed(2)}% WAPE`}
+              value={metrics?.mape == null ? '—' : `${metrics.mape.toFixed(2)}% MAPE`}
               sublabel={`out of sample · ${formatInt(metrics?.validation_points)} points`}
               tint="teal"
             />
@@ -578,6 +583,9 @@ export function ForecastingPage() {
               <div className="metric-row">
                 {[
                   ['Model', metrics.display_name],
+                  // MAPE first: it is the selection metric, and the table did
+                  // not carry it at all while the tile above quoted WAPE.
+                  ['MAPE %', metrics.mape?.toFixed(3) ?? '—'],
                   ['WAPE %', metrics.wape?.toFixed(3) ?? '—'],
                   ['MAE', formatInt(metrics.mae)],
                   ['RMSE', formatInt(metrics.rmse)],

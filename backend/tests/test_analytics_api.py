@@ -424,6 +424,56 @@ class TestAssistantWithMockedOpenAI:
         assert body["tools_used"] == ["demand_trend"]
         assert body["answer"] == answer
 
+    def test_a_multi_script_answer_never_reaches_the_page(self, client, monkeypatch):
+        """The failure this guard exists for, on the path that lacked it.
+
+        The coherence guard was wired only to the drift explanation, so the
+        assistant published whatever the provider returned. At temperature 2.0
+        that included an answer about monthly demand carrying Korean, Hebrew,
+        Tamil, Cyrillic and Arabic - rendered under a chart as though it meant
+        something. The guard always rejected this text; nothing asked it to.
+        """
+        nonsense = (
+            "Best (peak) month Aanointments########itionwreck 107 Pilar_PS "
+            "limestoneFeetadi-close_rsp_business සිට unrhywchnenvoy stories "
+            "portrayed_shipping members_choiceלייב Bibele_HASH Fah_MODULEמי "
+            "주세요 держ китайفق Enrollment insulation Questions_cases"
+        )
+        fake = self._client(self._responses(["demand_trend"], nonsense))
+        with patch("app.services.assistant.llm.is_configured", return_value=True), patch(
+            "app.services.assistant.llm.client", return_value=fake
+        ):
+            body = client.post(
+                "/api/assistant/ask",
+                json={"question": "Show the demand trend", "history": [], "current_scope": None},
+            ).json()
+
+        # Degraded to the deterministic writer, and the nonsense is nowhere.
+        assert body["answered_by"] == "deterministic_after_provider_error"
+        assert "주세요" not in body["answer"]
+        assert "Aanointments" not in body["answer"]
+        # The question is still answered, from the same facts.
+        assert len(body["answer"]) > 0
+
+    def test_a_short_markdown_answer_is_not_mistaken_for_nonsense(self, client):
+        """The guard must not reject the house style.
+
+        Answers are markdown - bolded figures, bullet lists - and short ones
+        are legitimate. Holding chat to the 80-character explanation floor and
+        counting "**Latest**" as a non-word rejected a perfectly good reply.
+        """
+        answer = "Demand is rising.\n- **Latest** - 200,686 units."
+        fake = self._client(self._responses(["demand_trend"], answer))
+        with patch("app.services.assistant.llm.is_configured", return_value=True), patch(
+            "app.services.assistant.llm.client", return_value=fake
+        ):
+            body = client.post(
+                "/api/assistant/ask",
+                json={"question": "Show the demand trend", "history": [], "current_scope": None},
+            ).json()
+        assert body["answered_by"] == "openai"
+        assert body["answer"] == answer
+
     def test_the_tool_schema_gives_the_model_no_arguments_to_author(self):
         from app.services.assistant import agent
 

@@ -38,9 +38,24 @@ MIN_DELTA = 0.05
 
 
 def _accuracy(model: dict[str, Any]) -> float | None:
-    """100 - median MAPE, clamped at zero — the project's own definition."""
+    """The same number the leaderboard prints, so the page cannot contradict itself.
+
+    The race and the leaderboard sit on one screen. When the leaderboard moved
+    to volume-weighted accuracy (D-087) and this stayed on `100 - median MAPE`,
+    the same model read 73.5% in the bars and 83.7% in the table - two true
+    figures that look like a bug to anyone shown them together.
+
+    Volume-weighted where it exists, falling back to `100 - MAPE` for a run
+    written before the weighted figure was computed, or for a scope where no
+    WAPE was usable and the weight is therefore unknowable.
+    """
+    if not model.get("scored"):
+        return None
+    weighted = model.get("accuracy_weighted")
+    if weighted is not None:
+        return max(0.0, float(weighted))
     mape = model.get("median_mape")
-    if mape is None or not model.get("scored"):
+    if mape is None:
         return None
     return max(0.0, 100.0 - float(mape))
 

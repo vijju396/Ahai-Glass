@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.services.assistant import llm, tools
+from app.services.assistant import quality
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,21 @@ def run(
     answer = (final.choices[0].message.content or "").strip()
     if not answer:
         raise RuntimeError("assistant agent produced an empty answer")
+
+    # The same coherence guard the drift explanation uses (D-061). It was only
+    # ever wired to that one path, so the assistant published whatever the
+    # provider returned - and at temperature 2.0 that included answers mixing
+    # Korean, Hebrew, Tamil, Cyrillic and Arabic into a sentence about monthly
+    # demand. The guard rejects that text correctly; nothing was asking it to.
+    #
+    # Raising here rather than returning degraded prose: the caller already
+    # catches and falls through to the deterministic writer, which answers the
+    # same question from the same facts in plain English.
+    verdict = quality.check_explanation(
+        answer, min_chars=quality.MIN_ANSWER_CHARS
+    )
+    if not verdict.ok:
+        raise RuntimeError(f"assistant answer failed the coherence guard: {verdict.reason}")
 
     facts_by_tool = {name: facts for name, facts in executed}
     chart = next(

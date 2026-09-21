@@ -51,6 +51,27 @@ export function DemandChart({
           : [...history.map((p) => p.period), ...future.map((p) => p.period)];
   const pad = view === 'forecast' ? [] : history.map(() => null);
 
+  /** The forecast line starts at the last actual, so the two meet.
+   *
+   *  The forecast series was null across every history month and its first
+   *  value sat one slot after the last actual, which left a visible break
+   *  between Jul and Aug - the line simply stopped and restarted. Anchoring
+   *  the *point* series to the final actual closes it.
+   *
+   *  This is a drawing bridge, not a forecast. The month belongs to
+   *  `historyPeriods`, and `spanFor` only lets the forecast series into the
+   *  tooltip over `futurePeriods`, so hovering the origin still reports the
+   *  actual alone and no model is credited with predicting a month it never
+   *  forecast.
+   *
+   *  The quantile series are deliberately NOT bridged: an interval at the
+   *  origin would be inventing a band around a known number. */
+  const lastActual = history.length ? (history[history.length - 1]?.actual ?? null) : null;
+  const pointPad =
+    view === 'forecast' || pad.length === 0
+      ? pad
+      : [...pad.slice(0, -1), lastActual];
+
   const line = (
     name: string,
     values: (number | null)[],
@@ -143,7 +164,7 @@ export function DemandChart({
             : []),
           ...(view !== 'actual'
             ? [
-                line('Forecast', [...pad, ...future.map((p) => p.point_forecast)], c.s2, true),
+                line('Forecast', [...pointPad, ...future.map((p) => p.point_forecast)], c.s2, true),
                 ...(quantiles
                   ? (['q80', 'q90', 'q95'] as const).map((q, i) => ({
                       ...line(q, [...pad, ...future.map((p) => p[q])], [c.s3, c.s5, c.s6][i], true),

@@ -570,13 +570,38 @@ class TestQuantiles:
         assert POOLING_LEVELS[0] == "model_horizon_segment"
         assert POOLING_LEVELS[-1] == "global"
 
-    def test_residuals_are_actual_minus_prediction(self):
-        # Sign matters: a positive residual must mean under-forecasting, or the
-        # upper quantiles would be built from the wrong tail.
+    def test_residuals_are_relative_and_signed_toward_under_forecasting(self):
+        # Two things at once, both load-bearing.
+        #
+        # Sign: a positive residual must mean under-forecasting, or the upper
+        # quantiles would be built from the wrong tail.
+        #
+        # Scale: the residual is RELATIVE - (10 - 8) / 8 = 0.25, not 2.0 - so
+        # a cell can pool across scopes of different magnitude. Absolute
+        # offsets pooled that way gave a q95 delivering 69% on the largest
+        # series (docs/DECISIONS.md D-089).
         store = ResidualStore()
         store.add("var", 1, "smooth", [10] * 6, [8] * 6)
         offset = store.calibrate("var", 1, "smooth").offsets["q80"]
-        assert offset.offset == pytest.approx(2.0)
+        assert offset.offset == pytest.approx(0.25)
+
+    def test_a_relative_offset_scales_with_the_point_forecast(self):
+        # The same calibration must widen a large forecast more than a small
+        # one in absolute units, which is the whole point of going relative.
+        store = ResidualStore()
+        store.add("var", 1, "smooth", [10] * 6, [8] * 6)
+        calibration = store.calibrate("var", 1, "smooth")
+        small, _ = apply_calibration([100.0], calibration)
+        large, _ = apply_calibration([10_000.0], calibration)
+        assert small["q80"][0] == pytest.approx(125.0)
+        assert large["q80"][0] == pytest.approx(12_500.0)
+
+    def test_a_non_positive_prediction_yields_no_relative_residual(self):
+        # Dividing by zero would send the residual to infinity, so the point is
+        # skipped rather than clamped into the pool.
+        store = ResidualStore()
+        store.add("var", 1, "smooth", [5, 6, 7], [0, -1, 0])
+        assert store.count("var", 1, "smooth") == 0
 
     def test_quantiles_are_monotone_and_crossings_are_counted(self):
         store = ResidualStore()

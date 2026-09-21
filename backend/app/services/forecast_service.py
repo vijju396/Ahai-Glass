@@ -646,6 +646,7 @@ def _forecast_scope(
     quantiles, provenance = _quantiles_for(
         values,
         model_id=selection.champion_model_id,
+        scope_level=scope.scope_level,
         segment=sparsity.segment.value,
         horizons=horizons,
         calibrations=calibrations,
@@ -729,9 +730,10 @@ SCOPE_POOLING_LEVELS: tuple[str, ...] = ("scope_horizon", "scope_all_horizons")
 def _scope_residuals(model_run_id: str | None) -> dict[int, list[float]]:
     """This scope's champion's out-of-sample residuals, keyed by horizon.
 
-    `actual - prediction`, matching `ResidualStore`: a positive residual means
-    the model under-forecast, and the upper tail is the one that matters for
-    stock cover.
+    `(actual - prediction) / prediction`, matching `ResidualStore`: a positive
+    residual means the model under-forecast, and the upper tail is the one that
+    matters for stock cover. Relative rather than absolute so the value is on
+    the same footing as the run's pooled cells (D-089).
     """
     if not model_run_id:
         return {}
@@ -746,8 +748,12 @@ def _scope_residuals(model_run_id: str | None) -> dict[int, list[float]]:
             horizons = origin.get("horizons") or []
             for index in range(min(len(actuals), len(predictions))):
                 horizon = int(horizons[index]) if index < len(horizons) else index + 1
+                prediction = float(predictions[index])
+                if prediction <= 0.0:
+                    continue
+                # Relative, matching `ResidualStore` - see D-089.
                 by_horizon.setdefault(horizon, []).append(
-                    float(actuals[index]) - float(predictions[index])
+                    (float(actuals[index]) - prediction) / prediction
                 )
     return by_horizon
 
@@ -811,7 +817,21 @@ def _scope_calibration(
     calibration = Calibration(model_id=model_id, horizon=horizon, segment=segment)
     for key in QUANTILE_KEYS:
         level = float(key[1:]) / 100.0
+        # A scope has at most twelve residuals of its own (two origins x six
+        # horizons). q95 needs nineteen to put the order statistic inside the
+        # sample, so below that the scope pool can only extrapolate its own
+        # tail - measured at 72.9% coverage for a band claiming 95%, and the
+        # oracle calibrated on the scored months could not beat 83.5% from the
+        # same twelve points (D-089).
+        #
+        # Since residuals became relative they are scale-free, so the run's
+        # pooled cell is a legitimate source rather than a mixture of
+        # magnitudes. Levels the scope cannot support are therefore left unset
+        # and filled from that larger pool by the caller.
+        need = conformal_minimum(level)
         for pooling_level, residuals in pools:
+            if len(residuals) < need:
+                continue
             offset = _offset_from(residuals, level, pooling_level)
             if offset is not None:
                 calibration.offsets[key] = offset
@@ -827,6 +847,7 @@ def _quantiles_for(
     horizons: Sequence[int],
     calibrations: dict[tuple[str, int, str], QuantileCalibration],
     scope_residuals: dict[int, list[float]] | None = None,
+    scope_level: str = "series",
 ) -> tuple[dict[str, np.ndarray], list[dict[str, Any]]]:
     """Per-horizon quantiles, from this scope's own residuals where possible.
 
@@ -849,7 +870,23 @@ def _quantiles_for(
             horizon=int(horizon),
             by_horizon=by_horizon,
         )
-        if local is not None:
+        # The run's pooled cell mixes every scope that shares a model, horizon
+        # and demand segment - and a branch x SKU cell has a far larger
+        # *relative* error than a national total even when both are "smooth".
+        # Pooling across levels widened the national q95 to 93-162% above the
+        # point forecast, which is not an interval anybody can plan against.
+        #
+        # The 91.1% coverage measured for the pooled cell was measured on
+        # series scopes, so that is where it is used. An aggregate keeps its
+        # own residuals: its relative error is small and stable, and twelve of
+        # them beat a pool drawn from a different population (D-089).
+        cell = None
+        if scope_level == "series":
+            cell = calibrations.get(
+                (model_id, int(horizon), segment)
+            ) or calibrations.get((model_id, int(horizon), "all"))
+
+        if local is not None and (cell is None or len(local.offsets) == len(QUANTILE_KEYS)):
             values, _report = apply_calibration([float(point[index])], local)
             for key in QUANTILE_KEYS:
                 series = values.get(key) or [None]
@@ -870,9 +907,6 @@ def _quantiles_for(
             )
             continue
 
-        cell = calibrations.get((model_id, int(horizon), segment)) or calibrations.get(
-            (model_id, int(horizon), "all")
-        )
         if cell is None:
             provenance.append(
                 {
@@ -888,6 +922,9 @@ def _quantiles_for(
             continue
 
         offsets = cell.offsets_json or {}
+        # Built from the run's pooled cell, then overridden level by level by
+        # anything the scope could support on its own - its own residuals are
+        # the better estimate where there are enough of them.
         calibration = Calibration(
             model_id=model_id,
             horizon=int(horizon),
@@ -909,6 +946,16 @@ def _quantiles_for(
                 if key in offsets
             },
         )
+        # The scope's own residuals are the better estimate wherever it had
+        # enough of them; the pooled cell covers only the levels it could not
+        # support. Merging per level rather than choosing one source wholesale
+        # means q80 can be local while q95 comes from the larger pool.
+        local_levels: list[str] = []
+        if local is not None:
+            for key, offset in local.offsets.items():
+                calibration.offsets[key] = offset
+                local_levels.append(key)
+
         if not calibration.offsets:
             provenance.append(
                 {"horizon": int(horizon), "available": False, "reason": "empty cell"}

@@ -3329,3 +3329,298 @@ shorter array.
 **The endpoint stays live and documented.** `POST /api/scenarios` is still in
 `docs/API_CONTRACT.md` §9 and still counted among the 67, because it still
 exists and still answers. An unrouted page is a UI decision, not an API one.
+
+## D-087
+
+**Accuracy is reported volume-weighted, and the bias that looked correctable is
+not.**
+
+Asked to lift the leaderboard's 73.5% towards 90%. Three things were measured
+before anything was changed.
+
+### The blend is set by the smallest lines
+
+```
+level      scopes   MAPE   accuracy
+national        1   13.4     86.6%
+region          2   18.4     81.6%
+branch          2   18.4     81.6%
+segment         4   19.4     80.6%
+series         40   57.0     43.0%   <- 82% of all rows
+```
+
+The aggregate levels were already near 90%. The headline is an **unweighted**
+mean over 49 scopes, 40 of which are branch x SKU, so it is decided by the
+hardest and smallest grain.
+
+And "smallest" is literal:
+
+```
+BENGALURU|FG.T56   MAPE 201%     99 units over 28 months  (~3.5/month)
+BENGALURU|FG.MTL   MAPE 194%    198 units
+BENGALURU|FG.MJ1   MAPE 150%    286 units
+```
+
+A line averaging 3.5 units a month that is wrong by 7 units scores 200% and has
+cost nobody anything. `FG.T56` is there because a slot was reserved for value
+class C (D-083) - the accuracy cost of that decision was always going to land
+here.
+
+### Bias correction was tried and made it worse
+
+Every model under-forecasts (-10.1% national, -14.1% branch), which looks like a
+free 10 points. A correction factor estimated by an **inner backtest inside each
+fold's own training window** - leakage-safe by construction - was applied:
+
+```
+national    89.4% -> 82.6%
+BENGALURU   88.8% -> 84.5%
+DELHI-1     90.2% -> 81.8%
+```
+
+Worse everywhere. The diagnosis is the point: demand grew **42%** across the
+panel and accelerated sharply from 2026-04 (13,796 -> 19,090 units/month). The
+under-forecast is caused by that acceleration, which **is not present in the
+training window**. The bias is real, and it is only estimable from the months
+the model is being scored on. Correcting it is leakage wearing the costume of
+an improvement.
+
+### Nothing else in the model space moved it
+
+```
+national:  damped 89.1%  undamped 89.4%  log 89.3%  seasonal 89.4%
+series:    damped 50.4%  undamped 47.7%  log 49.4%  seasonal 47.7%
+```
+
+Damped already wins at series grain and the registry already carries both
+variants, chosen per scope. The models sit at the achievable frontier for this
+data; there was no configuration left on the table.
+
+### What changed
+
+`accuracy_weighted` weights each scope by the demand volume it actually carries,
+recovered from metrics already stored rather than a second pass over the panel:
+
+```
+WAPE = 100 * sum|a - f| / sum|a|,  MAE = sum|a - f| / n
+  =>  sum|a| = 100 * MAE * n / WAPE
+```
+
+A scope with no usable WAPE is **left out of the weighted figure** rather than
+given an invented weight.
+
+```
+leader, unweighted   73.5%
+leader, weighted     83.7%
+```
+
+Both are on every row (`Accuracy` and `Unwtd`), and the unweighted figure is
+exactly `100 - MAPE`, three columns along, so the arithmetic is checkable in
+place. The champion selector still ranks on MAPE (D-043) - this changes what is
+*reported*, never what *won*.
+
+**90% was not reached and is not reachable on this metric.** It would require
+~10% MAPE on lines selling 3 to 30 units a month. Saying so is worth more than a
+number that would not survive the client's own analysts.
+
+## D-088
+
+**Three corrections after the leaderboard moved to weighted accuracy, two of
+them mine.**
+
+### The row did not reconcile
+
+D-087 put a volume-WEIGHTED accuracy next to a MEDIAN MAPE: `83.7%` beside
+`27.3%`, where `100 - 27.3` is `72.7`. Both figures were correct and the pair
+was unreadable - they are two different aggregations of one metric, and no
+reader can be expected to know that from a table.
+
+`mape_weighted` is now published alongside `accuracy_weighted` and is what the
+MAPE column shows, so every row closes:
+
+```
+Exponential Smoothing Additive   83.69 + 16.31 = 100.00
+Exponential Smoothing Add Damped 83.63 + 16.37 = 100.00
+LSTM                             82.25 + 17.75 = 100.00
+```
+
+The champion selector still ranks on per-scope MAPE. The column is a summary of
+the run, not the selection rule, and the tooltip says so.
+
+### The race and the leaderboard disagreed on screen
+
+Same cause. The bars stayed on `100 - median MAPE` while the table moved to
+weighted, so one model read 73.5% in the race and 83.7% in the table, a metre
+apart. `race_events._accuracy` now prefers the weighted figure, falling back to
+`100 - MAPE` for a run written before it existed. The baseline comparison line
+under the table was comparing on the unweighted figure too, and now does not.
+
+### The forecast line had a visible break
+
+Not cosmetic and not a data fault: the forecast series was null across every
+history month and its first value sat one slot past the last actual, so the
+line stopped at Jul and restarted at Aug. The point series is now anchored to
+the final actual.
+
+It is a drawing bridge, not a forecast. The origin belongs to `historyPeriods`
+and `spanFor` only admits the forecast series to the tooltip over
+`futurePeriods`, so hovering the origin still reports the actual alone and no
+model is credited with a month it never forecast. The quantile series are
+deliberately not bridged - an interval at the origin would be inventing a band
+around a known number.
+
+### Sampling caveats collapsed
+
+Four panels each carrying three lines of standing caveat read as faults. The
+text now sits behind a single clickable line, "How representative is this
+sample?". The disclosure is unchanged and one click away.
+
+### 85% was asked for and is not available
+
+Weighted accuracy is **83.7%**, measured. Above 85% is not reachable on this
+metric without the weekly-grain work (D-087 notes national reaching 92.0% and
+per-series grain choice worth about +2.5 at series level), which is a change to
+the panel builder, the fold design, the eligibility thresholds and the quantile
+calibration - not a setting. Reporting a higher figure without that work would
+mean claiming an accuracy this project has not measured.
+
+## D-089
+
+**q95 was delivering 73%, and the cause was two defects that hid each other.**
+
+Measured fold 1 -> fold 2, calibrating only on fold 1 and scoring only on
+fold 2, so nothing is calibrated on the months it is judged against.
+
+### The offsets were absolute quantities
+
+Residuals were `actual - prediction` in units, pooled by
+(model, horizon, segment) across every scope. A three-unit SKU and a
+seven-hundred-unit SKU contributed to one pool, and the average hid two
+opposite failures:
+
+```
+small series   q95 96.7%   band +273%     far too wide
+large series   q95 73.9%   band  +47%     far too narrow
+```
+
+The highest-volume lines - where a stockout costs most - had a band claiming
+95% and delivering 74%.
+
+### A scope has twelve residuals and q95 needs nineteen
+
+`conformal_minimum(0.95)` is 19. Two origins by six horizons is 12. The 95th
+percentile of twelve points sits between the eleventh and twelfth, so roughly
+one in twelve exceeds it **by construction**. An oracle calibrated on the very
+months it was scored against could not beat 83.5% from those twelve points -
+which is how we know this is a sample-size ceiling, not a modelling miss.
+
+```
+scope-own absolute (as shipped)   q80 61.1%   q90 68.6%   q95 72.9%
+pooled absolute                   q80 72.5%   q90 80.7%   q95 85.3%
+pooled RELATIVE                   q80 70.6%   q90 83.3%   q95 91.1%
+oracle ceiling                        ~80%        ~90%        ~95%
+```
+
+### What changed
+
+Residuals are **relative** - `(actual - prediction) / prediction` - and the
+offset is a fraction: `q = point * (1 + offset)`, not `point + offset`. Being
+scale-free, they pool across scopes legitimately, which gives both the right
+magnitude and enough sample.
+
+A scope may now only claim a level it can place inside its own sample. It
+keeps q80 and q90 from its twelve residuals; q95 falls through to the run's
+pooled cell, per level rather than wholesale, so the better local estimate is
+not discarded to fix the one level that needed it.
+
+### The mistake made in the middle of this
+
+Wiring the pooled fallback everywhere produced a **national q95 of 93-162%
+above the point forecast**. The 91.1% figure had been measured on *series*
+scopes and was applied to all of them - but a branch x SKU cell has far larger
+relative error than a national total even inside the same demand segment, so
+pooling across hierarchy levels is still mixing populations. The pooled
+fallback is now restricted to series scopes, where it was measured.
+
+```
+NATIONAL   conformal   scope_all_horizons     n=12   q95 +24% -> +40% by horizon
+SERIES     conformal   model_horizon_segment  n=41   q95 +44% -> +98%
+```
+
+### A guard against the stale convention
+
+156 calibrations were already stored as absolute offsets - one held `261.0`.
+Applied multiplicatively that is a band 262 times the forecast, and Supply
+Intelligence would have ordered to match. Nothing in the schema distinguishes
+the two conventions, so magnitude is the discriminator: `MAX_RELATIVE_OFFSET =
+20.0` drops such a cell with a reason rather than publishing an absurd
+interval. A forecast against a stale calibration loses its band instead of
+inventing one.
+
+### Not yet measured
+
+Coverage has **not** been re-measured end to end after the level restriction.
+The 72.9% -> 91.1% result was measured on series scopes in isolation;
+aggregates now keep the path that measured ~73% there, though their relative
+error is smaller and steadier so it should behave better. Confirming the
+delivered coverage needs another fold-1 -> fold-2 pass through the real
+pipeline.
+
+## D-090
+
+**The coherence guard was correct, and nothing called it.**
+
+The assistant answered "show the monthly demand trend" with a paragraph mixing
+Korean, Hebrew, Tamil, Sinhala, Cyrillic and Arabic into a sentence about
+units - rendered on the page beneath a real chart.
+
+Two separate faults, and the second is the one worth recording.
+
+### Temperature
+
+`AI_TEMPERATURE` was **2.0**, OpenAI's maximum, set deliberately (D-054). At
+that setting the sampler genuinely reaches for low-probability tokens from
+other scripts mid-sentence. This is the second time it has produced
+multi-script output; the first was the drift explanation that caused D-061.
+Now **0.3**, and `.env.example` documents why rather than leaving the next
+person to rediscover it.
+
+**This reverses D-054**, which recorded 2.0 as a choice. It was reversed
+because four-script output in front of a client is not a stylistic preference
+being overridden - it is broken output.
+
+### The guard existed and was wired to one path
+
+`quality.check_explanation` rejects that exact text - verified against the
+real output, which fails on "15% of letters are not Latin script". It had a
+single call site, `analytics.py:502`, the drift explanation. The assistant
+chat path returned whatever the provider produced, unchecked.
+
+D-061 recorded that a coherence guard "rejects unusable or ungrounded prose at
+any temperature". That was true of explanations and untrue of the assistant,
+and the gap survived because the sentence read as though it covered both.
+**A guard is only as wide as its call sites**, and that is the part worth
+remembering.
+
+The agent now raises on a failed check, so the existing handler degrades to
+the deterministic writer - which answers the same question from the same
+facts.
+
+### Two false positives, fixed at the tokeniser rather than the threshold
+
+Wiring it in immediately rejected good answers, because the guard was tuned
+for explanation prose:
+
+- **`MIN_CHARS = 80`** rejected `"Ordered demand is rising. - Latest -
+  200,686 units."` at 55 characters. An explanation under a chart has a
+  paragraph of work to do; a chat reply can be one sentence.
+  `MIN_ANSWER_CHARS = 20` applies on the chat path only.
+- **Markdown counted against the text.** `**Latest**` is not a word and a
+  bullet `-` is not one either, so a correct answer scored 5/9 word-like and
+  read as token soup. Tokenisation now strips markdown decoration and drops
+  punctuation-only tokens from the denominator.
+
+Neither touches the script-share or long-token checks, and the original
+nonsense still fails. Both directions are held by tests: a multi-script answer
+degrades and never reaches the page, and a short markdown answer passes
+through as `openai`.

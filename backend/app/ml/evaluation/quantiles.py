@@ -1,5 +1,10 @@
 """Quantile calibration from out-of-sample residuals.
 
+**Residuals are relative, and the offsets are fractions.** `q = point * (1 +
+offset)`, not `point + offset`. See `_relative_residual` for the measurement
+that forced it: an absolute offset pooled across scopes gave a q95 that
+delivered 69% on the largest series (D-089).
+
 q80/q90/q95 are **forecast outputs, never models**. They do not appear on the
 leaderboard as models and no model is ever selected because of them.
 
@@ -41,6 +46,21 @@ from app.ml.evaluation.metrics import QUANTILE_LEVELS
 
 #: Both references' floor. Below this, no interval is offered.
 MIN_RESIDUALS = 5
+
+#: The largest plausible RELATIVE offset, as a fraction of the point forecast.
+#:
+#: Offsets became relative in D-089. A calibration written before that change
+#: holds absolute quantities - the run measured here carried `offset: 261.0` -
+#: and multiplying a forecast by `1 + 261` produces a band 262 times the
+#: forecast, which Supply Intelligence would turn into an order to match.
+#:
+#: Nothing in the schema distinguishes the two conventions, so magnitude is the
+#: discriminator. A relative offset of 20 means a band 21x the forecast; no
+#: honest calibration on this data comes close, while every stale absolute one
+#: on the measured run exceeds it. Such a cell is dropped with a reason rather
+#: than applied, so a forecast produced against a stale calibration loses its
+#: interval instead of inventing an absurd one.
+MAX_RELATIVE_OFFSET = 20.0
 
 #: Pooling levels, finest first. A cell falls back along this chain.
 POOLING_LEVELS: tuple[str, ...] = (
@@ -159,7 +179,8 @@ class ResidualStore:
         """Record residuals for one cell. Returns how many were usable."""
         added = 0
         for actual, prediction in zip(actuals, predictions):
-            residual = _residual(actual, prediction)
+            # Relative, so the cell can pool across scopes of different size.
+            residual = _relative_residual(actual, prediction)
             if residual is None:
                 continue
             self._cells[(model_id, horizon, segment)].append(residual)
@@ -296,10 +317,14 @@ def apply_calibration(
         candidates: list[tuple[str, float | None]] = []
         for key in keys:
             offset = calibration.offsets[key].offset
-            if offset is None:
+            if offset is None or abs(offset) > MAX_RELATIVE_OFFSET:
+                # `None` is "not calibrated"; an out-of-range magnitude is a
+                # calibration written under the pre-D-089 absolute convention.
+                # Both mean no interval, which is the honest answer.
                 candidates.append((key, None))
                 continue
-            value = point + offset
+            # The offset is a fraction of the point forecast, not a quantity.
+            value = point * (1.0 + offset)
             if floor_at_zero:
                 value = max(value, 0.0)
             candidates.append((key, value))
@@ -329,6 +354,34 @@ def _residual(actual: Any, prediction: Any) -> float | None:
     if a is None or p is None:
         return None
     return a - p
+
+
+def _relative_residual(actual: Any, prediction: Any) -> float | None:
+    """`(actual - prediction) / prediction` - a scale-free residual.
+
+    Absolute residuals cannot be pooled across scopes that differ in
+    magnitude, and a single scope has only twelve of its own (two origins x
+    six horizons) where q95 needs nineteen. That left both available pools
+    wrong in a different way, measured on fold 1 -> fold 2:
+
+        scope-own absolute   q95 72.9%   right scale, too few residuals
+        pooled absolute      q95 85.3%   enough residuals, wrong scale
+        pooled relative      q95 91.1%   both
+
+    A relative residual is scale-free, so pooling across scopes is legitimate
+    and the pooled cell is large enough to place the order statistic inside
+    the sample. The offset it produces is a fraction of the point forecast,
+    not a quantity (`docs/DECISIONS.md` D-089).
+
+    A prediction of zero or less has no meaningful relative error - dividing
+    would send the residual to infinity - so those points are skipped rather
+    than clamped. They remain in the absolute path for anything that needs it.
+    """
+    a = _to_float(actual)
+    p = _to_float(prediction)
+    if a is None or p is None or p <= 0.0:
+        return None
+    return (a - p) / p
 
 
 def _to_float(value: Any) -> float | None:
