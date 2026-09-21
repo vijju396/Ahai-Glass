@@ -30,6 +30,7 @@ import { EmptyState, ErrorState, LoadingBlock } from '@/components/ui/States';
 import { formatDays, formatInt } from '@/components/ui/format';
 import { LeadTimePanels } from '@/features/supply/components/LeadTimePanels';
 import { SupplyExplainer } from '@/features/supply/components/SupplyExplainer';
+import { Explain } from '@/components/ui/Explain';
 
 const SERVICE_LEVELS = [80, 90, 95] as const;
 
@@ -82,12 +83,12 @@ export function SupplyIntelligencePage() {
       <div className="page-head">
         <div className="eyebrow">07 &middot; Supply Intelligence</div>
         <h1>Supply Intelligence</h1>
-        <p className="lede">
+        <Explain label="About this page" variant="note">
           Cover, unfilled demand, misplaced stock and order recommendations.
           Every recommendation is a{' '}
           <strong>current-snapshot estimate</strong> and exposes the inputs it
           was computed from.
-        </p>
+        </Explain>
       </div>
 
       {/* This page is very long. Without these the sections below the first
@@ -156,11 +157,11 @@ export function SupplyIntelligencePage() {
       <section id="lead-time" className="flex flex-col gap-2">
         <div>
           <div className="eyebrow">Lead time</div>
-          <p className="hint">
+          <Explain variant="hint">
             Days from order to receipt, per branch, from the lead-time source file. The
             replenishment protection period below is built from the average alone, so the
             spread shown here is not yet reflected in any recommended quantity.
-          </p>
+          </Explain>
         </div>
         <LeadTimePanels />
       </section>
@@ -222,12 +223,12 @@ export function SupplyIntelligencePage() {
 
           <div className="grid-2">
             <Card id="exposure" title="Inventory exposure" subtitle="Snapshot positions · counts are separate measures, not additive"><ComparisonBars unit="Positions" labels={['With stock', 'Dead / slow', 'Zero stock / live demand']} series={[{ name: 'Branch × SKU positions', values: [totals.positions_with_stock, totals.dead_or_slow_positions, totals.zero_stock_live_demand_positions] }]} /></Card>
-            <Card title="Replenishment priorities" subtitle="Five largest available order recommendations in the returned page"><ComparisonBars labels={[...rows].filter(r => r.recommended_order !== null).sort((a,b) => b.recommended_order! - a.recommended_order!).slice(0,5).map(r => r.canonical_sku ?? r.scope_key)} series={[{ name: 'Recommended units', values: [...rows].filter(r => r.recommended_order !== null).sort((a,b) => b.recommended_order! - a.recommended_order!).slice(0,5).map(r => r.recommended_order) }]} /><p className="chart-note">Filtered to the loaded recommendation page. The table below retains branch identity, unavailable rows and calculation inputs.</p></Card>
+            <Card title="Replenishment priorities" subtitle="Five largest available order recommendations in the returned page"><ComparisonBars labels={[...rows].filter(r => r.recommended_order !== null).sort((a,b) => b.recommended_order! - a.recommended_order!).slice(0,5).map(r => r.canonical_sku ?? r.scope_key)} series={[{ name: 'Recommended units', values: [...rows].filter(r => r.recommended_order !== null).sort((a,b) => b.recommended_order! - a.recommended_order!).slice(0,5).map(r => r.recommended_order) }]} /><Explain variant="note">Filtered to the loaded recommendation page. The table below retains branch identity, unavailable rows and calculation inputs.</Explain></Card>
           </div>
           {overview.data.caveats.map((caveat) => (
-            <div className="callout" key={caveat}>
+            <Explain variant="callout">
               <p>{caveat}</p>
-            </div>
+            </Explain>
           ))}
         </>
       )}
@@ -313,7 +314,7 @@ export function SupplyIntelligencePage() {
                 </tbody>
               </table>
             </div>
-            <p className="hint">
+            <Explain variant="hint">
               <strong>How each row is computed:</strong> protection period ={' '}
               review period + lead time; order-up-to = q{serviceLevel} monthly
               forecast scaled to the protection period; recommended order =
@@ -321,11 +322,11 @@ export function SupplyIntelligencePage() {
               The pre-rounding requirement is kept as{' '}
               <code>raw_recommended_order</code> so any MOQ or case-pack
               rounding is visible.
-            </p>
+            </Explain>
             {(recommendations.data?.notes ?? []).map((note) => (
-              <p className="hint" key={note}>
+              <Explain variant="hint">
                 {note}
-              </p>
+              </Explain>
             ))}
           </>
         )}
@@ -416,7 +417,7 @@ export function SupplyIntelligencePage() {
                   </table>
                 </div>
               )}
-              <p className="hint">{transferable.data.caveat}</p>
+              <Explain variant="hint">{transferable.data.caveat}</Explain>
             </>
           )}
         </Card>
@@ -454,9 +455,9 @@ export function SupplyIntelligencePage() {
               </tbody>
             </table>
           </div>
-          <p className="hint">
+          <Explain variant="hint">
             A placement signal, not an instruction to scrap.
-          </p>
+          </Explain>
         </Card>
       )}
 

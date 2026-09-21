@@ -32,6 +32,7 @@ import type { ModelRunStatus } from '@/types/api';
 import { WapeChart } from '../components/WapeChart';
 import { ChampionPanel } from '../components/ChampionPanel';
 import { DiagnosticsPanel } from '../components/DiagnosticsPanel';
+import { Explain } from '@/components/ui/Explain';
 
 const SCOPE_LEVELS = ['national', 'region', 'branch', 'segment', 'series'] as const;
 
@@ -77,12 +78,12 @@ export function ModelLeaderboardPage() {
       <div className="page-head">
         <div className="eyebrow">05 &middot; Model leaderboard</div>
         <h1>Model Leaderboard</h1>
-        <p className="lede">
+        <Explain label="About this page" variant="note">
           All thirteen registered models, always shown. A model that did not run
           reports why &mdash; Ineligible, Failed, Timed out, or Not evaluated
           (budget) &mdash; and is never replaced by a zero forecast or dropped
           from this table.
-        </p>
+        </Explain>
       </div>
 
       <Card title="Scope" subtitle="Metrics from different aggregation levels are not comparable, so a scope is chosen explicitly">
@@ -167,9 +168,9 @@ export function ModelLeaderboardPage() {
           )}
 
           {data.notes.map((note) => (
-            <div className="callout" key={note}>
+            <Explain variant="callout">
               <p>{note}</p>
-            </div>
+            </Explain>
           ))}
 
           <Card
@@ -262,21 +263,21 @@ export function ModelLeaderboardPage() {
                 </tbody>
               </table>
             </div>
-            <p className="hint">
+            <Explain variant="hint">
               Accuracy is <strong>informational only</strong>: it is{' '}
               <code>max(0, 100 &minus; MAPE)</code>, and MAPE is undefined
               wherever the actual is zero. Ranking uses WAPE, then absolute bias,
               then MAE, then a deterministic model-id tie-break.
-            </p>
+            </Explain>
             {data.skill_vs_best_baseline.improvement_pct !== null && (
-              <p className="hint">
+              <Explain variant="hint">
                 Champion versus best baseline:{' '}
                 {data.skill_vs_best_baseline.improvement_pct.toFixed(1)}%{' '}
                 {data.skill_vs_best_baseline.champion_better ? 'better' : 'worse'}.
-              </p>
+              </Explain>
             )}
             {data.skill_vs_best_baseline.reason && (
-              <p className="hint">{data.skill_vs_best_baseline.reason}</p>
+              <Explain variant="hint">{data.skill_vs_best_baseline.reason}</Explain>
             )}
           </Card>
 

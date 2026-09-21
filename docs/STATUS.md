@@ -3528,3 +3528,127 @@ training 7927ee3a - 833 fits, 819 completed, 14 ineligible, 49 champions
 forecast 91775e14 - origin 2026-07, coherent, 288 rows + 6 unavailable
 backend 919 passed - frontend 233 passed - tsc clean
 ```
+
+## Accuracy is reported per planning window, and per line
+
+**The monthly figure was never going to reach 85%, and that is measured rather
+than asserted.** Judged one SKU in one month the champions reach 76.1%. The
+median line in this workspace swings 43% month to month, only 14 of 390 test
+months had demand at or under 3 units, and a constant chosen *knowing the
+answers in advance* reaches 69.3% — the champions already beat that. Shortening
+the horizon does not help either: h1 is the *worst* horizon at 42.5% MAPE.
+
+Scored over the window a plant actually plans on, the same forecasts:
+
+```
+One month at a time              390 blocks   76.1%    10 of 40 lines at 85%+
+A 3-month total                  130 blocks   83.5%    17 of 40 lines at 85%+
+A 6-month total                   65 blocks   86.8%    19 of 40 lines at 85%+
+Every SKU added together, 1 mo     12 blocks   87.4%
+```
+
+390 / 130 / 65 is the same evidence sliced three ways: 25 champions were tested
+on two origins and 15 on one (heavy models run on the latest origin only), so
+65 six-month blocks x 6 = 390 monthly points, and 390/3 = 130 exactly. Nothing
+is dropped between rows.
+
+**The headline is a middle line, not a floor**, so `series_at_target` travels
+with it everywhere it is shown. 21 of 40 lines stay below 85% even at 6 months;
+the worst, `BENGALURU|FG.T56.LFH.GXG21XAT00`, reaches 28.6% and gets *worse* at
+6 months than at 3 — it is trending, not merely noisy. Its champion also
+forecasts **-2.9 units** at one horizon, which no demand forecast should do.
+
+**Single origin was measured and rejected.** The origin with more training data
+(`second`, 22 months) scores *worse* than `primary` (18 months): 75.5% against
+78.5%. Origins do not affect the published forecast at all — that is refit on
+all 28 months either way — so dropping one would only shrink the test evidence
+from 390 months to 240 and give the model race less to judge on.
+
+**Mean and median both stand.** The windows panel reports the middle month, the
+leaderboard reports the average month, and on thin lines they diverge hugely
+(`FG.T56`: 31.2% vs 185.2% MAPE, because one month forecast 7.7 against an
+actual of 1 is a 669% error). The page now says so.
+
+**The Training panel is now a demo surface.** A branch x SKU filter at the top
+and the console beneath it, nothing else. `ScopeTrainer` replays the selected
+line's stored board through the same four-event contract the live stream uses,
+so the bars and the table cannot disagree. Five things came off on request
+(D-096): the run status tiles, the fold-design panel, the per-model outcome
+chart, the accuracy-window table, and the workspace-averaged leaderboard. Each
+one's information still exists elsewhere on the page or on the landing page,
+and no model, failed control or data defect became invisible.
+
+The landing page (`/overall`) and the Training page at All/All both open with
+the combined accuracy panel, which now shows the result as four metric types
+(Accuracy 73.5%, MAPE 26.5%, WAPE 24.7%, volume-weighted accuracy 75.3%) — each
+the median across lines of that line's own metric, not a pooled sum (D-098).
+The pass-count, the one-month figure, the planning-window table, the per-line
+accuracy panel and the every-line graph were removed on request. The per-line
+race no longer animates.
+
+**The accuracy panel reads the six-month total, not the champion average.**
+`accuracy_windows.py` now also returns `combined_metrics_best`: the same four
+metrics measured at the recommended window (a 6-month total) across all 40
+lines — Accuracy 86.8%, MAPE 13.2%, WAPE 17.4%, volume-weighted accuracy 82.6%.
+The panel shows that block and names the window in its note. The all-lines
+champion-average median (73.5% / 26.5% / 24.7% / 75.3%) is still returned as
+`combined_metrics` and is the fallback when no window clears the target. The
+two are different measurements of the same run, not two versions of one number:
+73.5% is the median line's average month, 86.8% is the median line's six-month
+total, and a six-month total cancels month-to-month over- and under-shoot.
+
+**Strong lines carry a 4px green dot in the pickers** on Training and
+Forecasting, shown only while the list is open, with no legend (D-099). A dot
+means every line that option resolves to clears 85% on its own: 0 of 20 SKUs
+with no location picked, 2 at BENGALURU, 2 at DELHI-1, read from
+`series[].champion_meets_target` - `100 - champion MAPE`, which is the figure
+the training console and the leaderboard show. Marking on `meets_target`
+instead, the six-month-total flag, dotted nineteen lines of which only four
+read at or above 85% when opened, one as low as 48.8%: a six-month total lets
+an over-forecast month cancel an under-forecast one and the average month does
+not, so the two measure different things. A mark has to predict what the next
+screen says. This needed a custom dropdown
+(`components/ui/MarkedSelect.tsx`) because a native `<option>` can only carry
+an emoji, which is label-sized; the list is portalled to `document.body`
+because `.card` is `overflow: hidden`.
+
+**The forecast chart draws the forecast only** (D-100). The view switch, both
+q80/q90/q95 toggles, the backtest-origin picker, the backtest table, the
+actual-detail table and the per-horizon provenance table all came off the
+Forecasting page on request. Every one of those figures is still computed and
+still served by the API; the page no longer draws them. The measured-error tile
+and the "Why this model, for this series" panel stay.
+
+**Overall Analysis describes demand and nothing else** (D-101). The combined
+forecast-accuracy panel came off the top of it, along with the "Concentration by
+Value Class" Pareto chart and the "Exception Mix" donut; "Where each month's
+figure came from" came off Per Branch & SKU. Accuracy is answered on Training -
+`CombinedAccuracy` still renders inside `TrainingMonitor` - and on Forecasting,
+where the model that produced it is named beside it. `/analytics/exceptions` is
+untouched and still read by the Exceptions page; "Demand Signal Mix" stays on
+Overall Analysis, because everything before Apr 2025 is proxy and a trend
+crossing that line compares two different measurements. `tsc --noEmit` clean.
+
+**Two lines on the demand chart, and no proxy** (D-102). Despatched now runs
+the full two years - it is read from the sales file before Apr 2025 and from
+the order book after, because an invoice is a despatch, and on the twelve
+months both cover they agree within a few per cent. Ordered runs only from Apr
+2025, where the order book starts. What the chart used to do was draw the
+sales-proxy months as "Ordered": that value is the invoiced quantity copied
+across, matching the sales file to the unit every month, so a third of the
+demand line was a despatch series under a demand label. Ordered sitting above
+despatched is correct and was verified against the sales file before anything
+was touched. Apr-Jul 2026 is a separate matter - the fill rate falls from about
+85% to about 66% there, because every despatch date in the order file lies
+inside its own order month, so a despatch made the following month is never
+recorded against the order. The sales file stops at Mar 2026, so those four
+months have no second source. Named, not corrected.
+
+```
+backend 918 passed, 1 failed (pre-existing drift-slope test, Apple Silicon)
+frontend 236 passed - tsc clean - 73 endpoints, contract in step
+```
+
+*The test line above is from the last full run, before the D-099 to D-102
+changes. All four are frontend-only and `tsc --noEmit` is clean on them; the
+frontend suite has not been re-run since.*

@@ -35,6 +35,7 @@ import { useToast } from '@/components/ui/Toast';
 import { formatInt, formatPct, formatSeconds } from '@/components/ui/format';
 import type { ModelRunStatus } from '@/types/api';
 import type { TrainingRunRequest } from '@/types/phase7';
+import { Explain } from '@/components/ui/Explain';
 
 const TIERS = [
   {
@@ -137,11 +138,11 @@ export function TrainingCenterPage() {
       <div className="page-head">
         <div className="eyebrow">04 &middot; Training Center</div>
         <h1>Training Center</h1>
-        <p className="lede">
+        <Explain label="About this page" variant="note">
           Submit a run, watch every one of the thirteen models, and cancel where
           it is safe. The estimated cost is shown before the run starts and
           stored beside what it actually took.
-        </p>
+        </Explain>
       </div>
 
       {run && <Card title="Evaluation coverage" subtitle="Latest run · every outcome retained, including budget exclusions"><ComparisonBars unit="Model evaluations" labels={['Completed', 'Ineligible', 'Failed', 'Timed out', 'Not evaluated']} series={[{ name: 'Evaluations', values: [run.model_runs_completed, run.model_runs_ineligible, run.model_runs_failed, run.model_runs_timed_out, run.model_runs_not_evaluated] }]} height={240} /></Card>}
@@ -205,7 +206,7 @@ export function TrainingCenterPage() {
                 <span className="metric-value">{estimate.data.workers}</span>
               </div>
             </div>
-            <p className="hint">{estimate.data.provenance}</p>
+            <Explain variant="hint">{estimate.data.provenance}</Explain>
             {estimate.data.tiers.map((tier) =>
               tier.notes.length ? (
                 <p key={tier.tier} className="hint">
@@ -282,11 +283,11 @@ export function TrainingCenterPage() {
               aria-label="Training progress"
               style={{ width: '100%' }}
             />
-            {run.stage_detail && <p className="hint">{run.stage_detail}</p>}
+            {run.stage_detail && <Explain variant="hint">{run.stage_detail}</Explain>}
             {run.failure_reason && (
-              <p className="hint" role="alert">
+              <Explain variant="hint">
                 <strong>Failure:</strong> {run.failure_reason}
-              </p>
+              </Explain>
             )}
             <div className="metric-row" data-testid="status-counts">
               {[
@@ -375,11 +376,11 @@ export function TrainingCenterPage() {
         {baselines.length > 0 && (
           <>
             <h3 style={{ marginTop: 'var(--sp-5)' }}>Non-registry baselines</h3>
-            <p className="hint">
+            <Explain variant="hint">
               Naive, seasonal-naive, MA3 and MA6. Reported for comparison and
               never counted among the thirteen — and never champion, even when
               one of them wins.
-            </p>
+            </Explain>
             <div className="table-scroll">
               <table className="data" data-testid="baseline-table">
                 <thead>

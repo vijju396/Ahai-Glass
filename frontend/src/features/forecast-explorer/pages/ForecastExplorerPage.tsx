@@ -27,6 +27,7 @@ import { Card } from '@/components/ui/Card';
 import { EmptyState, ErrorState, LoadingBlock } from '@/components/ui/States';
 import { formatInt } from '@/components/ui/format';
 import type { ForecastRow, HistoryPoint } from '@/types/phase7';
+import { Explain } from '@/components/ui/Explain';
 
 const SCOPE_LEVELS = ['national', 'region', 'branch', 'segment', 'series'] as const;
 
@@ -220,9 +221,9 @@ export function ForecastExplorerPage() {
       <div className="page-head page-head-row"><div>
         <div className="eyebrow">06 &middot; Forecast Explorer</div>
         <h1>Forecast Explorer</h1>
-        <p className="lede">
+        <Explain label="About this page" variant="note">
           Understand what happened. Validate what was predicted. Explore what comes next.
-        </p>
+        </Explain>
       </div><span className="pill pill-info">Monthly demand intelligence</span></div>
 
       <Card title="Selection" subtitle={run.data ? `Origin ${monthLabel(run.data.origin_period)} · reconciled by ${run.data.reconciliation_method}` : 'Loading the latest forecast run'}>
@@ -312,11 +313,11 @@ export function ForecastExplorerPage() {
           </button>
         </div>
         {run.isError && run.error instanceof ApiError && (
-          <p className="hint">{run.error.message} {run.error.remediation}</p>
+          <Explain variant="hint">{run.error.message} {run.error.remediation}</Explain>
         )}
         {scopes.isError && <ErrorState error={scopes.error} onRetry={() => scopes.refetch()} />}
         {isSeries && (
-          <p className="hint">
+          <Explain variant="hint">
             {effectiveScopeKey ? (
               <>
                 Showing <strong>{effectiveScopeKey}</strong>, resolved from the two
@@ -330,9 +331,9 @@ export function ForecastExplorerPage() {
             )}
             Only scopes a training run actually covered are listed — a branch or
             SKU the run did not reach does not appear here.
-          </p>
+          </Explain>
         )}
-        <p className="hint">CSV exports the selected chart view. Historical actuals retain source and censoring information.</p>
+        <Explain variant="hint">CSV exports the selected chart view. Historical actuals retain source and censoring information.</Explain>
       </Card>
 
       {series.isPending && effectiveScopeKey && (
@@ -384,19 +385,19 @@ export function ForecastExplorerPage() {
             </div>
             {view !== 'validation' ? <DemandChart data={data} view={view} quantiles={quantiles} range={range} height={390} /> : diagnostics.isFetching ? <LoadingBlock rows={8} label="Loading backtest predictions" /> : diagnostics.isError ? <ErrorState error={diagnostics.error} onRetry={() => diagnostics.refetch()} /> : validationPoints.length ? <DemandChart data={data} view="validation" points={validationPoints} height={390} /> : <EmptyState title="No backtest predictions available">{diagnostics.data?.unavailable_reason ?? 'No stored validation predictions are available for the model used on this scope.'}</EmptyState>}
             <div className="legend-note"><span>{view === 'validation' ? 'Out-of-sample validation · one origin at a time · not fitted training values' : `Actuals through ${monthLabel(data.origin_period)} · future forecasts have no observed actuals yet`}</span><span>Drag the lower slider to zoom · click legend entries to compare</span></div>
-            {(view === 'forecast' || view === 'overview') && quantiles && <p className="chart-note">q80, q90 and q95 are service-level demand quantities, not a symmetric confidence interval. Calibration method and residual counts are available in Forecast detail below.</p>}
+            {(view === 'forecast' || view === 'overview') && quantiles && <Explain variant="note">q80, q90 and q95 are service-level demand quantities, not a symmetric confidence interval. Calibration method and residual counts are available in Forecast detail below.</Explain>}
             {data.history_unavailable_reason && (
-              <p className="chart-note">{data.history_unavailable_reason}</p>
+              <Explain variant="note">{data.history_unavailable_reason}</Explain>
             )}
             {withoutInterval.length > 0 && (
-              <p className="chart-note">
+              <Explain variant="note">
                 {withoutInterval.length} horizon(s) have a point forecast but no
                 interval: the calibration had too few out-of-sample residuals at
                 any pooling level. The point is shown without a band rather than
                 with a fabricated one.
-              </p>
+              </Explain>
             )}
-            <p className="chart-note">{data.snapshot_caveat}</p>
+            <Explain variant="note">{data.snapshot_caveat}</Explain>
           </Card>
 
           {view === 'actual' && <Card title="Actual demand detail" subtitle="Historical quantities with their original source and censoring flag"><div className="table-scroll"><table className="data" data-testid="actual-table"><thead><tr><th>Month</th><th className="num">Actual units</th><th>Source</th><th>Censored</th></tr></thead><tbody>{(range ? history.slice(-range) : history).map(p => <tr key={p.period}><td>{monthLabel(p.period)}</td><td className="num">{formatInt(p.actual)}</td><td>{p.target_source ?? 'Not recorded'}</td><td>{p.is_censored ? 'Yes' : 'No'}</td></tr>)}</tbody></table></div></Card>}

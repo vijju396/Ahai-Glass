@@ -21,9 +21,18 @@ pyxlsb==1.0.10
 # --- ML: exact reference-project versions where pinned by Oxea ---
 statsmodels==0.14.6
 pmdarima==2.1.1
-xgboost-cpu==3.3.0
+# The `-cpu` distribution publishes no macOS arm64 wheel, and building it from
+# source needs cmake. Plain xgboost 3.3.0 is the identical build and is CPU-only
+# on Apple Silicon regardless, since there is no CUDA there.
+xgboost-cpu==3.3.0; sys_platform != "darwin"
+xgboost==3.3.0; sys_platform == "darwin"
 scikit-learn==1.5.2
-tensorflow-cpu==2.17.0
+# Same story: TensorFlow ships no macOS arm64 wheel under the `-cpu` name. The
+# plain distribution is the same 2.17.0 build and is CPU-only on Apple Silicon
+# anyway (GPU there needs the separate tensorflow-metal plugin). Split by
+# platform so the Windows install is byte-for-byte what it was.
+tensorflow-cpu==2.17.0; sys_platform != "darwin"
+tensorflow==2.17.0; sys_platform == "darwin"
 
 # --- tracking ---
 mlflow==2.19.0

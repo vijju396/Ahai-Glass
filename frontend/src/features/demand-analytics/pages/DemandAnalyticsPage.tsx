@@ -71,6 +71,7 @@ import {
   pct,
 } from '@/components/ui/Dashboard';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
+import { Explain } from '@/components/ui/Explain';
 
 const SELECT_CLASS =
   'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs text-[var(--color-text)]';
@@ -171,10 +172,10 @@ export function DemandAnalyticsPage() {
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[var(--color-text)]">
             Where the demand actually is.
           </h1>
-          <p className="mt-1 max-w-2xl text-sm text-[var(--color-text-muted)]">
+          <Explain label="About this page" variant="note">
             Ordered demand by branch, value class and month, against what was despatched. Click any
             column, slice or legend entry to filter the whole page.
-          </p>
+          </Explain>
         </div>
         <Link
           to="/assistant"

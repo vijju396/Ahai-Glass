@@ -130,6 +130,12 @@ class LeaderboardResponse(ApiModel):
     #: (D-040) travels with the numbers.
     origins: dict[str, Any] | None = None
     active_selection: ChampionSelectionOut | None = None
+    #: "as_selected" when these rows are the board the champion was chosen on,
+    #: "recomputed" when they are a fresh sort of the stored metrics with no
+    #: selection behind them. The two can name different winners, and which one
+    #: a reader is looking at is not something to leave them guessing at.
+    ranking_source: str = "recomputed"
+    ranking_note: str | None = None
 
 
 class ComparisonPoint(ApiModel):
@@ -244,6 +250,28 @@ class SkippedScope(ApiModel):
     excluded_count: int = 0
 
 
+class DemotedChampion(ApiModel):
+    """A model that won its backtest and could not be fitted on the full history.
+
+    Every field is here so the demotion can be read without re-running
+    anything: which model was refused, how it had scored, what took the crown
+    instead, and the adapter's own words for the requirement it missed.
+    """
+
+    scope_kind: str
+    scope_key: str
+    refused_model_id: str
+    refused_wape: float | None = None
+    champion_model_id: str
+    reason: str
+
+
+class UncheckedScope(ApiModel):
+    scope_kind: str
+    scope_key: str
+    reason: str
+
+
 class SelectChampionsResponse(ApiModel):
     training_run_id: str
     selected: list[ChampionSelectionOut]
@@ -252,6 +280,14 @@ class SelectChampionsResponse(ApiModel):
     skipped: list[SkippedScope]
     selected_count: int
     skipped_count: int
+    #: Whether each candidate was also checked against the scope's full
+    #: history, not only its backtest window.
+    deployability_checked: bool = False
+    #: Why that check could not run, when it could not. Never silent.
+    deployability_note: str | None = None
+    demoted: list[DemotedChampion] = Field(default_factory=list)
+    demoted_count: int = 0
+    unchecked_scopes: list[UncheckedScope] = Field(default_factory=list)
 
 
 class OverrideRequest(ApiModel):

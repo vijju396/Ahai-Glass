@@ -5,6 +5,7 @@ import { EmptyState, ErrorState } from '@/components/ui/States';
 import { useToast } from '@/components/ui/Toast';
 import { ApiError } from '@/api/client';
 import { formatInt, formatPct, formatSeconds } from '@/components/ui/format';
+import { Explain } from '@/components/ui/Explain';
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
@@ -168,7 +169,7 @@ export function PanelPanel() {
               </div>
             </div>
 
-            <div className="callout" style={{ marginTop: 'var(--sp-4)' }}>
+            <Explain variant="callout" style={{ marginTop: 'var(--sp-4)' }}>
               <div className="h">A zero is a real observation, not a gap</div>
               <p>
                 {formatInt(data.materialised_zero_rows)} rows were materialised as
@@ -177,7 +178,7 @@ export function PanelPanel() {
                 series gets invented history before its first observation, and
                 trailing zeros are kept because they are the obsolescence signal.
               </p>
-            </div>
+            </Explain>
 
             {(sources.order !== undefined || sources.sales_proxy !== undefined) && (
               <div className="callout warn" style={{ marginTop: 'var(--sp-3)' }}>
@@ -199,7 +200,7 @@ export function PanelPanel() {
             )}
 
             {universe.panel_series !== undefined && (
-              <div className="callout" style={{ marginTop: 'var(--sp-3)' }}>
+              <Explain variant="callout" style={{ marginTop: 'var(--sp-3)' }}>
                 <div className="h">The panel universe is not the 63,210 control</div>
                 <p>
                   The panel holds <strong>{formatInt(universe.panel_series as number)}</strong>{' '}
@@ -210,7 +211,7 @@ export function PanelPanel() {
                   pairs are excluded — they have no demand history to forecast from,
                   and stay visible in the stock position.
                 </p>
-              </div>
+              </Explain>
             )}
 
             {sparsity.zero_cell_share !== undefined && (

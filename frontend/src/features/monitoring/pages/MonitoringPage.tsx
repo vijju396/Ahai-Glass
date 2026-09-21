@@ -16,6 +16,7 @@ import { fetchMonitoring, operationsKeys } from '@/api/operations';
 import { Card } from '@/components/ui/Card';
 import { EmptyState, ErrorState, LoadingBlock } from '@/components/ui/States';
 import { formatInt } from '@/components/ui/format';
+import { Explain } from '@/components/ui/Explain';
 
 function pct(value: number | null | undefined, digits = 1): string {
   return value === null || value === undefined ? '—' : `${value.toFixed(digits)}%`;
@@ -33,12 +34,12 @@ export function MonitoringPage() {
       <div className="page-head">
         <div className="eyebrow">09 &middot; Data &amp; model monitoring</div>
         <h1>Data &amp; Model Monitoring</h1>
-        <p className="lede">
+        <Explain label="About this page" variant="note">
           Freshness, input drift, champion age and error deterioration. Nothing
           here raises an alert: each measure arrives with its window and its
           counts so you apply your own threshold, and a measure that could not
           be computed says so rather than reporting zero.
-        </p>
+        </Explain>
       </div>
 
       {isPending && (
@@ -85,9 +86,9 @@ export function MonitoringPage() {
                 </div>
               </div>
             </div>
-            <div className="callout">
+            <Explain variant="callout">
               <p>{data.freshness.note}</p>
-            </div>
+            </Explain>
           </Card>
 
           <Card
@@ -176,7 +177,7 @@ export function MonitoringPage() {
                     </table>
                   </div>
                 )}
-                {data.drift.note && <p className="hint">{data.drift.note}</p>}
+                {data.drift.note && <Explain variant="hint">{data.drift.note}</Explain>}
               </>
             )}
           </Card>
@@ -218,9 +219,9 @@ export function MonitoringPage() {
                 <div className="s">in their own scope</div>
               </div>
             </div>
-            <div className="callout">
+            <Explain variant="callout">
               <p>{data.champions.note}</p>
-            </div>
+            </Explain>
             {data.champions.rows.length > 0 && (
               <div className="table-scroll">
                 <table className="data" data-testid="champion-age-table">
@@ -301,15 +302,15 @@ export function MonitoringPage() {
                   </table>
                 </div>
                 {data.deterioration.note && (
-                  <p className="hint">{data.deterioration.note}</p>
+                  <Explain variant="hint">{data.deterioration.note}</Explain>
                 )}
               </>
             )}
           </Card>
 
-          <div className="callout">
+          <Explain variant="callout">
             <p>{data.note}</p>
-          </div>
+          </Explain>
         </>
       )}
     </div>

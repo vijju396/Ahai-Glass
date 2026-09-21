@@ -36,6 +36,7 @@ import { TrainingMonitor } from '../components/TrainingMonitor';
 import { PipelineExplainer } from '../components/PipelineExplainer';
 import { ScopeBanner } from '@/components/ui/ScopeBanner';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
+import { Explain } from '@/components/ui/Explain';
 
 const STATUS_COLOR: Record<string, string> = {
   completed: GREEN,
@@ -96,12 +97,12 @@ export function TrainingPage() {
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[var(--color-text)]">
           How the models are trained and judged.
         </h1>
-        <p className="mt-1 max-w-3xl text-sm text-[var(--color-text-muted)]">
+        <Explain label="About this page" variant="note">
           Every figure below is read out of the code that runs training — the fold
           boundaries from the fold builder, the thresholds from each model&apos;s own
           eligibility check, the ranking rule from the champion selector. Nothing here is a
           restated summary that could drift.
-        </p>
+        </Explain>
       </header>
 
       <ScopeBanner scope={data.workspace_scope} />

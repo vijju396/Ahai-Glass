@@ -25,6 +25,7 @@ import { EmptyState, ErrorState, LoadingBlock } from '@/components/ui/States';
 import { useToast } from '@/components/ui/Toast';
 import { formatInt } from '@/components/ui/format';
 import type { LeaderboardResponse } from '@/types/phase7';
+import { Explain } from '@/components/ui/Explain';
 
 const MIN_REASON = 10;
 
@@ -176,10 +177,10 @@ export function ChampionPanel({ scopeLevel, scopeKey, leaderboard }: Props) {
         </div>
       )}
       {active?.reason && (
-        <p className="hint">
+        <Explain variant="hint">
           <strong>Reason on record:</strong> {active.reason}
           {active.actor ? ` — ${active.actor}` : ''}
-        </p>
+        </Explain>
       )}
 
       <h3 style={{ marginTop: 'var(--sp-5)' }}>Manual override</h3>
@@ -233,10 +234,10 @@ export function ChampionPanel({ scopeLevel, scopeKey, leaderboard }: Props) {
         </button>
       </div>
       {entries.length < 2 && (
-        <p className="hint">
+        <Explain variant="hint">
           Rollback needs a previous decision to restore; this scope has{' '}
           {entries.length} on record.
-        </p>
+        </Explain>
       )}
 
       <h3 style={{ marginTop: 'var(--sp-5)' }}>Audit history</h3>

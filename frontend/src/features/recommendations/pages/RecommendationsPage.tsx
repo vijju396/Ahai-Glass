@@ -13,6 +13,7 @@
 import { Link } from 'react-router-dom';
 import { RecommendationList } from '@/features/recommendations/components/RecommendationList';
 import { Card } from '@/components/ui/Dashboard';
+import { Explain } from '@/components/ui/Explain';
 
 export function RecommendationsPage() {
   return (
@@ -25,11 +26,11 @@ export function RecommendationsPage() {
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[var(--color-text)]">
             What is worth your attention.
           </h1>
-          <p className="mt-1 max-w-2xl text-sm text-[var(--color-text-muted)]">
+          <Explain label="About this page" variant="note">
             A standing pass over this application&apos;s own exceptions, replenishment,
             model error and data quality. Every item carries the figures it rests on and
             names the page you can check them against.
-          </p>
+          </Explain>
         </div>
         <Link
           to="/assistant"

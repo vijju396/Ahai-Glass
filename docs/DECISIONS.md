@@ -3624,3 +3624,399 @@ Neither touches the script-share or long-token checks, and the original
 nonsense still fails. Both directions are held by tests: a multi-script answer
 degrades and never reaches the page, and a short markdown answer passes
 through as `openai`.
+
+## D-091
+
+**A champion must be able to run on the history it will be refitted on.**
+
+`BENGALURU|FG.MYS.BCK.G00300A000` crowned `var_exog` on a 25.5% WAPE and then
+produced six null forecast rows. The row stated its reason honestly — VAR needs
+two non-constant co-evolving series and only one of four qualified — but a
+plant scheduling that SKU had no number, while three models that could have run
+were ranked below it.
+
+The cause is that a backtest fold trains on a window that stops before the fold
+it is scored against, and the live refit trains on everything. Those are
+different data. A column that varied over the eighteen months of fold 1 can be
+flat across all twenty-eight.
+
+`rank_candidates` now takes an optional `deployable` predicate, and
+`select_champions` supplies one built from the panel. A candidate the predicate
+refuses is excluded with `Ineligibility.NOT_DEPLOYABLE` and the crown passes to
+the next model that can run. Measured on the series-only run: four models
+refused, on one scope of forty, and that scope moved from `var_exog` to
+`auto_arima_exog`.
+
+Three properties held deliberately:
+
+- **The question goes to the adapter that would do the refit.** A second
+  opinion written in the selector could disagree with the one that matters, so
+  `app/domain/ais/deployability.py` owns both the frame construction and the
+  check, and `forecast_service` fits on the same `ScopeFit` it produces.
+- **A refused model is still a row**, with the adapter's own words for the
+  requirement it missed. `demoted` on the selection response names every case.
+- **The check failing is not a reason to select nothing.** A panel that cannot
+  be read leaves selection ungated and says so in `deployability_note`, which
+  is the behaviour that existed before.
+
+Reading a leaderboard does not load a panel. Where an active selection exists
+for the run being asked about, `leaderboard_payload` serves the board that
+selection stored — otherwise the screen would rank a model first that the
+forecast does not use, and contradict itself.
+
+## D-092
+
+**An aggregate with no champion is published as the sum of its parts.**
+
+Dropping the aggregate tiers, on the reasoning that a branch total does not
+tell a plant which SKU to make, left 54 blank rows for branch, region, national
+and segment scopes.
+
+Reconciliation was already computing those totals: a node with no forecast of
+its own takes its children's sum, so that the projection is not dragged down by
+a zero. The number was computed and then discarded, because `_persist` skips
+any result whose `point` is `None`. It is now kept and written, with
+`forecast_source = "sum_of_children"`, a null `model_id`, and a `drivers` note
+saying where it came from.
+
+Two things were found underneath:
+
+- **The base level was missing from `aggregate_results`.** When the base is
+  `series` it was excluded, so every base entry of the projection vector stayed
+  zero, reconciliation reported itself trivially coherent over an all-zero
+  vector, and the implied branch total came out as 0 against 2,410 units of
+  SKUs beneath it. That is why reconciliation had measured as moving series
+  rows by 0.00%: it had never seen them.
+- **Segments sit outside the hierarchy.** `value_class` and `product_group` are
+  summed separately, from the panel's own membership.
+
+A rolled-up row carries **no prediction interval**. Adding up each SKU's upper
+bound would assume every SKU misses high in the same month, which the residuals
+do not show. The interval is absent and the row says so, rather than being
+given a width that was never measured.
+
+## D-093
+
+**Accuracy is reported per planning window, and the monthly figure is not
+moved.**
+
+Asked to raise accuracy to 85%, the measurement was made first. Per SKU per
+month the champions reach 76.1%. That is not a modelling shortfall: the median
+line in this workspace swings 43% month to month, and a constant chosen
+*knowing the answers in advance* scores only 69.3% on it. Shortening the
+horizon does not rescue it either — h1 is the worst horizon on this data, not
+the best.
+
+The same forecasts, added up over the window a plant actually plans on, measure
+differently and honestly:
+
+| Question | Accuracy |
+|---|---|
+| One SKU, one month | 76.1% |
+| One SKU, a 3-month total | 83.5% |
+| One SKU, a 6-month total | **86.8%** |
+| All SKUs together, one month | **87.4%** |
+
+`GET /api/training/{run_id}/accuracy-windows` reports all four from the
+champions' stored backtests. Nothing is re-fitted, no metric is redefined, and
+**the monthly row is first and unchanged** — because a wider window is a wider
+question, and a table that led with the best number would read as a better
+forecast rather than a different one.
+
+What was explicitly not done: switching the headline metric to WAPE to make the
+figure larger (the median WAPE is 24.7%, so it would not have worked anyway),
+dropping the hard series, or scoring on any month a model was fitted on.
+
+## D-094 — The app plans on the shortest window that clears 85%, and says how many lines it does not cover
+
+**Decision.** Accuracy is headlined at the shortest planning window that reaches
+85% across the workspace — on the current run, a 6-month total at 86.8%. The
+monthly figure stays on the page underneath it, labelled as a guide to how the
+total splits rather than a promise about any one month.
+
+**Why.** Judged one SKU in one month, the champions reach 76.1%, and that is
+not a model problem: the median line in this workspace swings 43% month to
+month, and a constant chosen *knowing the answers in advance* only reaches
+69.3%. Summed over a quarter or a half-year the same forecasts reach 83.5% and
+86.8%, because a month forecast high and a month forecast low cancel inside a
+total. Nothing is re-fitted and no metric is redefined; only the total each
+error is measured against changes.
+
+**The count that must travel with it.** The headline is a *median across
+blocks*, not a floor. Measured per line at the 6-month window, **19 of 40**
+branch x SKU lines clear 85% on their own; the weakest reaches 28.6%
+(`BENGALURU|FG.T56.LFH.GXG21XAT00`, which gets *worse* at 6 months than at 3 —
+that line is trending, not merely noisy). So `GET
+/api/training/{id}/accuracy-windows` returns `series_at_target`,
+`series_scored`, `worst_series_accuracy_pct` and a per-line `series` array, and
+every surface that shows the headline shows the line count beside it at the
+same size. A `scope_key` query parameter narrows the whole answer to one line.
+
+**Mean and median are both kept, and the difference is explained on the page.**
+The accuracy-windows panel reports the *middle* month; the leaderboard's MAPE
+is the *average* month. On a line trading a few units these diverge hugely —
+`FG.T56` shows 31.2% on one and 185.2% MAPE on the other, because one test
+month forecast 7.7 against an actual of 1 is a 669% error that destroys an
+average and leaves the median alone. Both are correct and both are shown, with
+a note saying that a gap between them means the line has at least one very bad
+month.
+
+**Also, on the run-level status tiles.** The Completed / Ineligible / Failed /
+Timed out / Not evaluated tiles were removed from the top of the Training
+Monitor on request; see D-096, which removed three further panels for the same
+reason and records where each one's information still lives.
+
+## D-095 — One line filter governs the Training page, and the race follows it
+
+**Decision.** The branch x SKU filter sits at the top of the Training page, not
+inside the leaderboard header, and everything below it answers for the line it
+names: the accuracy windows, the bar race, and the leaderboard.
+
+**Why the race too.** With the filter inside the leaderboard, picking a line
+changed the table while the bars above it kept showing the workspace average —
+two answers to one question on one screen. `ScopeTrainer` replays that line's
+stored board through the same four-event `Trainer` contract the live stream
+uses, so the bars are the line's own measured accuracies and the table beneath
+them restates the same numbers. A run in flight still wins: the live stream is
+the only source actually changing, and a replay over the top of it would fight
+it.
+
+**Models that did not run keep their lane.** `ScopeTrainer` emits `failed` with
+the model's real exclusion or failure reason rather than omitting it, so an
+ineligible model is visible in the race exactly as it is on the leaderboard.
+
+
+## D-096 — The training panel is a demo surface, so methodology panels come off it
+
+**Decision.** Four panels were removed from the top of the Training page, and
+the workspace-averaged leaderboard with them. What is left is a branch x SKU
+filter and the console: pick a line, watch the models race on it, read which
+one won.
+
+Removed, with where the same information still is:
+
+| Removed | Still available at |
+|---|---|
+| Run status tiles (Completed / Ineligible / Failed / Timed out / Not evaluated) | "Most recent run", lower on the same page |
+| "Training set and validation set" (fold design) | "Validation design", lower on the same page — it was a duplicate |
+| "How every model is doing" (per-model outcome chart) | Every model's status and refusal reason on the per-line leaderboard |
+| "What accuracy can this data support?" | The landing page, combined across every SKU and location |
+| The averaged leaderboard | The per-line leaderboard, once a line is chosen |
+
+**Why.** This panel is shown to a client. Fold boundaries, per-model outcome
+counts and minimum test-point shares are how the thing is built, not what it
+does, and a client asked to read them learns less rather than more.
+
+**Why the averaged board went too.** "Which model is best averaged over every
+line" is not a question anyone asks. It is also actively misleading: a model
+can lead the average and lose forty out of forty individual lines. With no line
+selected the console now says so, and invites the user to pick one, rather than
+printing an average nobody should act on.
+
+**What was NOT allowed to happen.** No model, failed control or data defect
+became invisible. Every model still appears on the per-line leaderboard with
+its status and, where it did not run, the exact requirement it missed
+(CLAUDE.md). The accuracy figure was not softened on its way out — it moved to
+the landing page carrying its line count, 19 of 40, at the same size as the
+headline.
+
+
+## D-097 — The training panel shows the combined picture when nothing is selected, and the console only when a line is
+
+**Decision.** With no line selected (All locations / All SKUs), the Training
+page shows the combined accuracy figure, then a graph of every line's accuracy
+against the 85% target — and the console collapses to a single "Train all
+models" button. The 13-model race and the leaderboard appear only once a line
+is selected, or while a run is actually live.
+
+**Why.** The averaged model race was the same objection as the averaged
+leaderboard (D-096): it answers "which model is best on average" — a question
+nobody asks, and one that disagrees with every individual line. At All/All the
+useful content is the *outcome* (how accurate, how many lines clear the bar),
+not the *mechanism* (which of 13 models is fitting). So the outcome leads and
+the mechanism waits until a line is chosen.
+
+**The graph.** `AccuracySpread` draws all 40 lines sorted best-to-worst, green
+above 85%, amber within 15 points, red below, with the target as a dashed line.
+It is the sentence "19 of 40 clear 85%" as a picture, and it points at exactly
+which lines the accuracy work is on — the short bars on the right.
+
+**Training stays reachable.** Removing the idle race would have removed the
+only way to start a run. The summary variant keeps a plain button that kicks a
+run and hands off to the live race the moment one is in flight.
+
+## D-098 — The overall accuracy panel shows metric types, not a planning-window story
+
+**Decision.** The combined accuracy panel (`CombinedAccuracy`, shown on the
+landing page and on the Training page at All/All) now shows one result as four
+metric *types* — Accuracy, MAPE, WAPE, and volume-weighted accuracy — and
+nothing else. Removed on request: the "N of 40 lines clear 85%" count, the
+"one SKU, one month" figure, the planning-window table, the per-line
+"Every line, best to worst" graph (`AccuracySpread`), and the per-line
+"What accuracy this line can support" panel (`AccuracyWindows`). Both component
+files were deleted.
+
+**How the combined figure is computed.** Each tile is the **median across
+lines** of that line's own official, leakage-safe metric — never a pooled sum
+of raw backtest points. A first cut pooled the points and produced WAPE 306%
+and bias −176%, because a handful of champions extrapolate negative or blown-up
+forecasts on thin lines (one predicted −2.9 units); a single such line swamps a
+pooled sum. The median across lines is robust to that, which is why it is the
+reported figure: Accuracy 73.5%, MAPE 26.5%, WAPE 24.7%, volume-weighted
+accuracy 75.3%.
+
+**The per-line race no longer animates.** With a line selected, the bars appear
+at their final measured values with no growing or reordering (`BarRace
+animate={false}`, `ScopeTrainer` instant mode). The race is kept for the live
+run; a replay of a finished result is a table to read, not a race to watch.
+
+## D-099 — The 85%-target mark is a 4px dot in the open list, and nothing else
+
+**Decision.** The Location and SKU pickers on the Training page
+(`SeriesFilter`) and the Forecasting page mark an option with a small green dot
+when **every** line that option resolves to clears the 85% accuracy target at
+the recommended window. The mark carries no legend, no tooltip and no count.
+
+**Why "all" and not "any".** `meets_target` is a property of a `BRANCH|SKU`
+line, not of a SKU. With no location picked a SKU carries one line per branch,
+so a dot meaning "strong at some branch" would walk a demo into a branch that
+is not. Under the all-lines rule the marks are: 5 of 20 SKUs with no location
+picked, 9 of 20 at BENGALURU, 10 of 20 at DELHI-1 — read from
+`series[].meets_target` on `GET /api/training/{id}/accuracy-windows`, the same
+field and the same run the accuracy panel reads, so a mark and the panel can
+never disagree.
+
+**Why a custom dropdown (`components/ui/MarkedSelect.tsx`).** A native
+`<option>` renders text and nothing else, so the only green mark it can carry
+is an emoji, and the smallest green emoji is the size of the label beside it —
+the first thing anyone in the room sees. The replacement draws a real 4px dot
+at the right edge of the row and shows it **only while the list is open**,
+never on the closed control. It keeps the native control's `aria-label`,
+`role="listbox"`/`role="option"`, Escape and click-outside behaviour.
+
+The list is portalled to `document.body` and positioned `fixed`: both filters
+sit inside `.card`, which is `overflow: hidden`, and an absolutely-positioned
+list is clipped to two rows there. Portalling avoids loosening a rule every
+other card on the site depends on.
+
+**Not a claim the page defends.** The dot is deliberately unexplained. It
+points at a line; the accuracy figures that justify it are in the panel below,
+computed from the same run.
+
+## D-100 — The forecast chart draws the forecast, and the provenance table is gone
+
+**Decision.** The Forecasting page chart now draws observed demand through the
+forecast origin and the six forecast months — nothing else. Removed: the
+four-way view switch (Full timeline / Actual / Backtest vs actual / Forecast),
+both q80/q90/q95 toggles, the backtest-origin picker, the backtest-versus-
+actual table, the actual-demand detail table, and the per-horizon "Every
+horizon, with its provenance" table.
+
+**Why.** Backtest-versus-actual, the service-level bands, reconciliation
+adjustments and interval-calibration pooling levels all answer how the number
+was *built* or *measured*, not what the number *says*. In front of a client
+they put four lines and eleven columns in the way of one question.
+
+**Nothing was computed away.** The quantiles, the reconciliation adjustments
+and the calibration are still computed by the backend and still served on
+`GET /api/forecasts/series/{level}/{key}` — this page simply no longer draws
+them. The measured error stays on the page as the "Measured error" tile and the
+"Why this model, for this series" panel, because that is the next thing anyone
+asks. The stored backtest predictions are still on the leaderboard diagnostics.
+
+## D-101 — Overall Analysis describes demand, and nothing else
+
+**Decision.** Three panels were removed from the two analysis pages:
+
+- **Overall Analysis** — the combined forecast-accuracy panel (`CombinedAccuracy`)
+  that sat above the KPI tiles, the "Concentration by Value Class" ABC/Pareto
+  chart, and the "Exception Mix" severity donut.
+- **Per Branch & SKU** — the "Where each month's figure came from" stacked
+  source-share chart. "Price per unit" now spans the row it shared.
+
+**Why.** Overall Analysis is a description of demand. An accuracy figure at the
+top of it is a model result, and putting one there invited the reading that the
+demand summary itself was a model output — accuracy is answered on Training
+(`CombinedAccuracy` still renders there, inside `TrainingMonitor`) and on
+Forecasting, where the model that produced it is named alongside it. The Pareto
+panel restated what "Demand by Value Class" already shows, and the exception
+donut split 84 lines across two fixed severities, which is a count, not a chart.
+
+**Nothing was computed away.** `/analytics/exceptions` is still live, still
+documented, and still read by the Exceptions page; `by_value_class` is still on
+the summary payload and still drawn by two other panels; `order_share_pct` /
+`proxy_share_pct` / `censored_share_pct` are still served on the series trend
+and still drawn by "Demand Signal Mix" on Overall Analysis — which is the panel
+that has to stay, because everything before Apr 2025 is proxy and a trend
+crossing that line compares two different measurements.
+
+**Changed.** `frontend/src/features/overall/pages/OverallAnalysisPage.tsx`,
+`frontend/src/features/series-analysis/pages/SeriesAnalysisPage.tsx`. The unused
+`pareto` memo, the `exceptionsQuery`, and the imports left dangling by the
+removals were dropped with them. `tsc --noEmit` is clean.
+
+## D-102 — Two lines on the demand chart: ordered, and despatched for two years
+
+**The question asked.** "Ordered is showing more than despatched — that is
+wrong." It is not wrong, and it was checked against a second source before
+anything was changed. But something else on that chart was.
+
+**Ordered above despatched is real.** `despatched_qty` is read from the
+`Despatch Qty` column of `Orders & Receipts (Lead Time).xlsx`, on the same row
+as the order. Over the twelve months where the order book and the sales file
+overlap (Apr 2025 – Mar 2026), the two workspace branches read:
+
+```
+month     ordered   despatched (order file)   invoiced (sales file)
+2025-04    12,181            10,855                   9,725
+2025-07    14,167            12,645                  12,599
+2025-10    14,464            11,782                  12,482
+2026-01    13,879            12,485                  12,195
+2026-03    13,796            11,517                  12,315
+```
+
+Two independent files agree on the despatched level to within a few per cent
+every month, and both sit about 10% below ordered. That gap is the shortfall
+the page exists to show — the workspace fill rate is 86.4%.
+
+**What was wrong.** The blue series was one continuous `Area` on `demand_units`
+named **Ordered**, drawn from Apr 2024. The order book does not start until Apr
+2025. Before it, `target` is the `sales_proxy` value — and that value is not a
+demand figure at all: summed over the workspace it matches the sales file's
+invoiced quantity **to the unit, on every one of the twelve months**. Invoicing
+is despatch. So a third of the "Ordered" line was a despatch series under a
+demand label, and it made the ordered-to-despatched gap look like it opened in
+Apr 2025 when that is only where the order book starts.
+
+**Decision.** The chart draws two series and no third:
+
+- **Despatched** runs the whole window, Apr 2024 onward — from the sales file
+  before Apr 2025 and from the order book's despatch column after it.
+- **Ordered** runs only from Apr 2025, where a real order book exists. Before
+  that it is null, not zero, because there is no order history to draw.
+
+The split is driven by `order_share_pct`, which is exactly 0 on the proxy
+months and exactly 100 after, so no date is hardcoded in the component. The
+existing dashed reference line now carries the label "order book starts". The
+short bars are unchanged and still begin with the order book, because they are
+ordered minus the order file's own despatch column.
+
+**Why the order file wins the overlap.** Both sources record the same event.
+The short bars reconcile with the order file's column, so using the sales
+figure there would leave a chart where ordered − despatched no longer equals
+the bar beside it.
+
+**No proxy on the chart.** The stand-in is not drawn, labelled or named here.
+It remains what it always was in the panel — a labelled substitute target for
+modelling (D-002) — and "Demand Signal Mix" on Overall Analysis is still where
+its share is shown.
+
+**Left standing, and named rather than fixed.** Ordered rises to 16.9K–19.1K in
+Apr–Jul 2026 while despatched stays near 12–14K, so the fill rate falls from
+about 85% to about 66%. Lines with zero despatch go from 10–18% of ordered
+quantity to 23%, 30%, 37%, 34%. It is in the source, not in this code: every
+despatch date in the file falls inside its own order month (69,353 rows, none
+crossing), so a despatch made the following month is not recorded against the
+order at all. The sales file stops at Mar 2026, so there is no second source to
+test those four months against. Not corrected, because correcting it would mean
+inventing despatches.

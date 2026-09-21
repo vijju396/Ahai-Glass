@@ -13,6 +13,7 @@ import { fetchDiagnostics, leaderboardKeys } from '@/api/leaderboard';
 import { Card } from '@/components/ui/Card';
 import { EmptyState, ErrorState, LoadingBlock } from '@/components/ui/States';
 import { formatInt, formatSeconds } from '@/components/ui/format';
+import { Explain } from '@/components/ui/Explain';
 
 interface Props {
   modelId: string;
@@ -96,17 +97,17 @@ export function DiagnosticsPanel({ modelId, scopeLevel, scopeKey, onClose }: Pro
         <>
           <h3>Actual versus predicted</h3>
           <Chart option={actualVsPredicted} height={300} label="Out-of-sample actual and predicted quantities by validation point" />
-          <p className="chart-note">
+          <Explain variant="note">
             Out-of-sample points from every completed origin. Nothing here is a
             fitted value on training data.
-          </p>
+          </Explain>
 
           <h3 style={{ marginTop: 'var(--sp-5)' }}>Residuals</h3>
           <Chart option={residuals} height={240} label="Backtest residuals: positive values indicate over-forecasting" />
-          <p className="chart-note">
+          <Explain variant="note">
             Positive means the model over-forecast. These are the same residuals
             the q80/q90/q95 calibration is built from.
-          </p>
+          </Explain>
 
           <h3 style={{ marginTop: 'var(--sp-5)' }}>Horizon-level performance</h3>
           <div className="table-scroll">
@@ -171,9 +172,9 @@ export function DiagnosticsPanel({ modelId, scopeLevel, scopeKey, onClose }: Pro
           </div>
 
           {data.features && data.features.length > 0 && (
-            <p className="hint">
+            <Explain variant="hint">
               <strong>Features used:</strong> {data.features.join(', ')}
-            </p>
+            </Explain>
           )}
         </>
       )}

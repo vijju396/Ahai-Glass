@@ -58,6 +58,7 @@ export function BarRace({
   attach,
   onStart,
   startLabel = 'Train all models',
+  animate = true,
 }: {
   models: ModelDef[];
   /** Starts a new run when the button is pressed. */
@@ -68,6 +69,10 @@ export function BarRace({
   /** Called when the button is pressed, before the trainer starts. */
   onStart?: () => void;
   startLabel?: string;
+  /** When false, bars appear at their final value with no growing or
+   *  reordering. Used for the per-line replay, which is a result to read, not
+   *  a race to watch. */
+  animate?: boolean;
 }) {
   // Deliberately NOT subscribed to `racers` or `epoch`. Both change on every
   // event, and a subscription would re-render the whole field dozens of times
@@ -83,7 +88,7 @@ export function BarRace({
   const setPhase = useRaceStore((s) => s.setPhase);
   const resetStore = useRaceStore((s) => s.reset);
 
-  const reduced = usePrefersReducedMotion();
+  const reduced = usePrefersReducedMotion() || !animate;
   const rowH = rowHeightFor(models.length);
 
   const refs = useRef(new Map<string, Refs>());

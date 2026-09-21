@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 #: The AIS operational ranking keys, in order. Documented here because the
 #: order is the decision, not an implementation detail.
@@ -84,6 +84,7 @@ class Ineligibility(StrEnum):
     TOO_FEW_VALIDATION_POINTS = "too_few_validation_points"
     INCOMPARABLE_TEST_WINDOW = "incomparable_test_window"
     IS_BASELINE = "is_baseline"
+    NOT_DEPLOYABLE = "not_deployable"
 
 
 #: Human text for each exclusion, so the API never has to invent one.
@@ -109,6 +110,11 @@ INELIGIBILITY_REASONS: dict[str, str] = {
     Ineligibility.IS_BASELINE: (
         "Naive, seasonal-naive, MA3 and MA6 are non-registry baselines. They "
         "are reported for comparison and can never be champion."
+    ),
+    Ineligibility.NOT_DEPLOYABLE: (
+        "The model scored on its backtest window but cannot be fitted on this "
+        "scope's full history, so it could never produce the forecast it would "
+        "be crowned for. The specific requirement it fails is on the row."
     ),
 }
 
@@ -264,8 +270,19 @@ def rank_candidates(
     min_validation_points: int = MIN_VALIDATION_POINTS,
     min_test_point_share: float = MIN_TEST_POINT_SHARE,
     primary_metric: str = DEFAULT_PRIMARY_METRIC,
+    deployable: Callable[[Candidate], str | None] | None = None,
 ) -> Leaderboard:
     """Rank one scope's rows. Every input row appears in the output.
+
+    `deployable` is an optional last gate: given a candidate, it returns the
+    reason that model could not actually be fitted on this scope, or `None` if
+    it could. A candidate it refuses is excluded from the ranking and the crown
+    passes to the next one that can run - because a champion that cannot produce
+    a forecast is not a champion, it is a blank row with a citation. The refused
+    row still appears, carrying the reason, like every other exclusion here.
+
+    It is asked last, after the cheap metric gates, so the expensive question is
+    only put about rows that would otherwise have been ranked.
 
     Comparability is assessed **within an evaluation mode**: a `holdout_fast`
     row is measured against the best `holdout_fast` row, not against a
@@ -337,6 +354,17 @@ def rank_candidates(
                 note,
             )
             continue
+        if deployable is not None:
+            refusal = deployable(candidate)
+            if refusal is not None:
+                verdicts[candidate.model_id] = (
+                    Ineligibility.NOT_DEPLOYABLE.value,
+                    # The adapter's own words, not a paraphrase: the reader
+                    # needs the requirement that was missed, not the category.
+                    refusal,
+                    note,
+                )
+                continue
         verdicts[candidate.model_id] = (None, None, note)
         ranked.append(candidate)
 

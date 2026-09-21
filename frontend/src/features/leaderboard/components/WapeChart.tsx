@@ -12,6 +12,7 @@
  */
 import { Chart, useChartColors } from '@/components/charts/Chart';
 import type { ComparisonPoint } from '@/types/phase7';
+import { Explain } from '@/components/ui/Explain';
 
 interface Props {
   points: ComparisonPoint[];
@@ -86,14 +87,14 @@ export function WapeChart({ points, caption }: Props) {
     <div>
       <Chart option={option} height={360} label="All registered models and baselines compared by WAPE percentage; unavailable metrics remain labelled gaps" />
       {missing.length > 0 && (
-        <p className="chart-note" data-testid="chart-gaps">
+        <Explain variant="note">
           No bar for {missing.map((point) => point.display_name).join(', ')} —
           WAPE is not defined for {missing.length === 1 ? 'it' : 'them'} in this
           scope. The models are on the axis with a gap rather than removed from
           the comparison.
-        </p>
+        </Explain>
       )}
-      {caption && <p className="chart-note">{caption}</p>}
+      {caption && <Explain variant="note">{caption}</Explain>}
     </div>
   );
 }

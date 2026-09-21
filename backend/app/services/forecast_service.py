@@ -49,14 +49,14 @@ from app.domain.ais.backtest_runner import (
     SERIES_COL,
     TARGET_COL,
 )
+from app.domain.ais.deployability import prepare_scope_fit
 from app.domain.ais.exog_features import prepare_local_series_frame
 from app.domain.ais.scope_builder import (
-    AGGREGATE_VAR_PAIR_COLUMN,
+    SEGMENT_COLUMNS,
     ScopeSeries,
     build_aggregate_plan,
 )
 from app.jobs.runner import CancellationToken, JobCancelled, get_runner
-from app.ml.adapters.base import ModelContext
 from app.ml.evaluation.backtest import forecast_magnitude_bound
 from app.ml.evaluation.quantiles import (
     MIN_RESIDUALS,
@@ -66,7 +66,6 @@ from app.ml.evaluation.quantiles import (
     apply_calibration,
     conformal_minimum,
 )
-from app.ml.evaluation.seasonality import resolve_seasonal_period
 from app.ml.evaluation.segmentation import profile_series
 from app.ml.reconciliation.mint import (
     Hierarchy,
@@ -359,6 +358,8 @@ def _run_forecast_job(run_id: str, *, token: CancellationToken) -> None:
                 "scopes_unavailable": sum(
                     1 for result in results if result.get("unavailable_reason")
                 ),
+                # Aggregates with no champion, filled by adding up their parts.
+                "scopes_rolled_up": len(recon_meta.get("rolled_up") or []),
                 "reconciliation": recon_meta,
                 "quantile_provenance": _provenance_summary(results),
             }
@@ -530,6 +531,9 @@ def _forecast_scope(
         "quantiles": {},
         "model_id": None,
         "unavailable_reason": None,
+        # Carried so a scope filled by addition can state how many series it
+        # added up, without re-deriving the membership it was built from.
+        "member_series": scope.member_series,
         # Denormalised onto every row so Phase 10 can join a series forecast to
         # the stock snapshot without re-parsing the scope key, and so the
         # Forecast Explorer can filter without touching the panel.
@@ -551,27 +555,24 @@ def _forecast_scope(
         )
         return result
 
-    frame, exog_columns = prepare_local_series_frame(scope.frame, period_col=PERIOD_COL)
-    frame = frame.sort_values(PERIOD_COL).reset_index(drop=True)
+    # The one definition of what a scope is fitted on, shared with the
+    # deployability gate in champion selection: if the two built a different
+    # frame or context, the gate would be answering about data that is not this
+    # data, and a champion could still be crowned that cannot run here.
+    fit = prepare_scope_fit(
+        scope.frame,
+        scope_level=scope.scope_level,
+        horizons=horizons,
+        config=config,
+    )
+    frame, exog_columns, context, seasonal = (
+        fit.frame,
+        list(fit.exog_columns),
+        fit.context,
+        fit.seasonal,
+    )
     sparsity = profile_series(scope.frame[TARGET_COL])
     result["segment"] = sparsity.segment.value
-
-    seasonal = resolve_seasonal_period(
-        frame[TARGET_COL], profile=str(config["min_history_profile"])
-    )
-    context = ModelContext(
-        seasonal_period=seasonal.period,
-        exog_columns=exog_columns,
-        horizons=tuple(horizons),
-        random_seed=int(config["random_seed"]),
-        min_history_profile=str(config["min_history_profile"]),
-        xgboost_training_profile=str(config["xgboost_training_profile"]),
-        var_pair_column=(
-            AGGREGATE_VAR_PAIR_COLUMN
-            if scope.scope_level != "series"
-            else "despatched_qty"
-        ),
-    )
 
     adapter = adapter_factory(context)
     eligibility = adapter.validate_eligibility(frame, context)
@@ -1062,6 +1063,105 @@ def _resolve_base_level(
     return None, partial
 
 
+#: What a rolled-up row says in place of a model name. It is not a model, and
+#: the model_id stays `None` so nothing can mistake it for one - but a blank
+#: cell on screen reads as a bug rather than as a statement, so the row says
+#: plainly where its number came from.
+ROLLED_UP_DISPLAY = "Added up from the SKUs beneath it"
+ROLLED_UP_SOURCE = "sum_of_children"
+
+
+def _mark_rolled_up(
+    result: dict[str, Any], values: "np.ndarray", *, members: str, member_count: int
+) -> None:
+    """Publish an aggregate that was computed by addition, and say so."""
+    result["point"] = values
+    result["model_id"] = None
+    result["model_display_name"] = ROLLED_UP_DISPLAY
+    result["forecast_source"] = ROLLED_UP_SOURCE
+    result["unavailable_reason"] = None
+    result["drivers"] = {
+        "method": "sum of children",
+        "members_level": members,
+        "member_count": member_count,
+        "note": (
+            "No model was trained for this scope, so its figure is the total of "
+            f"the {member_count} {members} forecast(s) underneath it. It agrees "
+            "with its parts by construction. It carries no prediction interval "
+            "of its own: adding up each SKU's upper bound would assume every "
+            "SKU misses high in the same month, which is not what the residuals "
+            "show."
+        ),
+    }
+
+
+def _publish_rolled_up(
+    rolled: dict[tuple[str, str], "np.ndarray"],
+    aggregate_results: dict[tuple[str, str], dict[str, Any]],
+    *,
+    base_level: str | None,
+    horizons: Sequence[int],
+) -> list[str]:
+    """Turn every implied node value into a published row. Returns their keys."""
+    published: list[str] = []
+    for scope, values in rolled.items():
+        result = aggregate_results.get(scope)
+        if result is None or not np.all(np.isfinite(values)):
+            continue
+        _mark_rolled_up(
+            result,
+            np.clip(values, 0.0, None),
+            members=str(base_level or "child"),
+            member_count=int(result.get("member_series") or 0),
+        )
+        published.append(f"{scope[0]}/{scope[1]}")
+    return published
+
+
+def _roll_up_segments(
+    results: list[dict[str, Any]], *, panel: pd.DataFrame, horizons: Sequence[int]
+) -> list[str]:
+    """The same addition for value-class and product-group scopes.
+
+    Those sit outside the branch/region/national hierarchy, so reconciliation
+    never reaches them. They are still a plain sum of the series that belong to
+    them, and the panel says which those are.
+    """
+    series_points = {
+        result["scope_key"]: result["point"]
+        for result in results
+        if result["scope_level"] == "series" and result.get("point") is not None
+    }
+    if not series_points:
+        return []
+
+    published: list[str] = []
+    for result in results:
+        if result["scope_level"] != "segment" or result.get("point") is not None:
+            continue
+        column, _, value = str(result["scope_key"]).partition("=")
+        if column not in SEGMENT_COLUMNS or column not in panel.columns:
+            continue
+        members = (
+            panel.loc[panel[column].astype(str) == value, SERIES_COL]
+            .astype(str)
+            .unique()
+        )
+        contributing = [series_points[key] for key in members if key in series_points]
+        if not contributing:
+            # Genuinely nothing underneath that was forecast. The row keeps the
+            # reason it already had rather than gaining a zero.
+            continue
+        _mark_rolled_up(
+            result,
+            np.clip(np.sum(contributing, axis=0), 0.0, None),
+            members="series",
+            member_count=len(contributing),
+        )
+        published.append(f"segment/{result['scope_key']}")
+    return published
+
+
 def _reconcile_results(
     results: list[dict[str, Any]],
     *,
@@ -1138,16 +1238,27 @@ def _reconcile_results(
         (level if level != "series" else base_level, key): index
         for index, (level, key) in enumerate(hierarchy.nodes)
     }
+    # The base level must be in here, not only the levels above it. When the
+    # base is `series` it was previously left out, so every base entry of the
+    # projection vector stayed zero: reconciliation ran over an all-zero base,
+    # reported itself trivially coherent, and the bottom-up sum it hands to a
+    # parent with no forecast of its own came out as 0. That is why a branch
+    # total read zero against 2,410 units of SKUs beneath it.
+    levels_in_play = {"branch", "region", "national"}
+    if base_level:
+        levels_in_play.add(base_level)
     aggregate_results = {
         (r["scope_level"], r["scope_key"]): r
         for r in results
-        if r["scope_level"] in {"branch", "region", "national"}
+        if r["scope_level"] in levels_in_play
     }
 
     crossings = 0
     negatives = 0
     coherent = True
     worst = 0.0
+    #: Aggregate scopes filled by adding up their children, keyed by scope.
+    rolled: dict[tuple[str, str], np.ndarray] = {}
     chosen_method = method
     fallback_from: str | None = None
     fallback_reason: str | None = None
@@ -1164,6 +1275,12 @@ def _reconcile_results(
         # A node with no forecast of its own takes its children's sum, which is
         # what bottom-up would give it, rather than entering the projection as
         # a zero and dragging its parents down.
+        #
+        # That sum used to be used for the projection and then dropped, so a
+        # branch with no champion of its own was computed and then written as a
+        # blank row. It is a real answer - the branch total *is* the sum of its
+        # SKUs - so it is kept here and published, labelled as an addition
+        # rather than as a model output.
         implied = hierarchy.S @ vector[: hierarchy.base_count]
         for (level, key), index in node_lookup.items():
             if index < hierarchy.base_count:
@@ -1171,6 +1288,10 @@ def _reconcile_results(
             result = aggregate_results.get((level, key))
             if result is None or result.get("point") is None:
                 vector[index] = implied[index]
+                if result is not None:
+                    rolled.setdefault(
+                        (level, key), np.full(len(horizons), np.nan)
+                    )[position] = implied[index]
 
         residuals = _residual_matrix(hierarchy, node_lookup, aggregate_results)
         outcome = reconcile(
@@ -1216,6 +1337,21 @@ def _reconcile_results(
                 value = adjusted.get(q)
                 if value is not None:
                     result["reconciled_quantiles"][q][position] = value[index]
+
+    rolled_up = _publish_rolled_up(
+        rolled, aggregate_results, base_level=base_level, horizons=horizons
+    )
+    rolled_up.extend(_roll_up_segments(results, panel=panel, horizons=horizons))
+    if rolled_up:
+        meta["notes"].append(
+            f"{len(rolled_up)} scope(s) had no champion of their own and were "
+            f"filled by adding up the {base_level} forecasts beneath them: "
+            f"{', '.join(sorted(rolled_up)[:8])}"
+            + (" and others" if len(rolled_up) > 8 else "")
+            + ". Those rows are totals, not model output, and carry no "
+            "prediction interval of their own."
+        )
+    meta["rolled_up"] = rolled_up
 
     meta.update(
         {

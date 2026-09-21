@@ -168,3 +168,90 @@ export interface MonitorMetrics {
   /** Why an Ineligible model did not run. Null when it did. */
   reason: string | null;
 }
+
+/** One way of asking "how accurate is this", and what it measures. */
+export interface AccuracyWindow {
+  label: string;
+  months: number;
+  level: string;
+  blocks: number;
+  median_error_pct: number | null;
+  accuracy_pct: number | null;
+  blocks_at_target: number;
+  share_at_target_pct: number | null;
+  meets_target: boolean;
+  /** How many branch x SKU lines clear the target *on their own* over this
+   *  window. The headline accuracy is a middle line, not a floor, and these
+   *  two numbers routinely disagree — 86.8% with 19 of 40 lines clearing 85%
+   *  is the measured case here. Both are shown. */
+  series_scored: number;
+  series_at_target: number;
+  worst_series_accuracy_pct: number | null;
+}
+
+export interface AccuracySeries {
+  scope_key: string;
+  champion_model_id: string | null;
+  /** Keyed by window length in months: "1", "3", "6". */
+  accuracy_pct: Record<string, number>;
+  /** This line clears the target over the recommended window (a six-month
+   *  total). Drives the panel's headline, not the filter's dot. */
+  meets_target: boolean;
+  /** 100 − the champion's MAPE: this line's accuracy on the average month,
+   *  and the figure the leaderboard and the training console display. */
+  champion_accuracy_pct: number | null;
+  /** That displayed figure clears the target. This is what the filters mark,
+   *  because a mark has to predict what the next screen says. */
+  champion_meets_target: boolean;
+}
+
+export interface CombinedMetrics {
+  /** Median across lines of each line's own clamped accuracy (100 − MAPE). */
+  accuracy_pct: number | null;
+  /** Median across lines of each line's MAPE — the average percentage miss. */
+  mape_pct: number | null;
+  /** Median across lines of each line's WAPE — error as a share of volume. */
+  wape_pct: number | null;
+  /** Median across lines of 100 − WAPE. */
+  weighted_accuracy_pct: number | null;
+  lines: number;
+}
+
+export interface AccuracyWindows {
+  training_run_id: string;
+  scope_key: string | null;
+  target_accuracy_pct: number;
+  series_covered: number;
+  series_with_champion: number;
+  combined_metrics: CombinedMetrics;
+  /** The headline figures at the recommended window (the six-month total) —
+   *  the "86%" number, with a volume-weighted pair. `window_label` names the
+   *  window it was measured over. Null if no window met the target. */
+  combined_metrics_best:
+    | (CombinedMetrics & { window_label: string; window_months: number })
+    | null;
+  windows: AccuracyWindow[];
+  meets_target_at: string | null;
+  recommended_months: number | null;
+  series: AccuracySeries[];
+  series_below_target: number;
+  notes: string[];
+}
+
+export const accuracyKeys = {
+  windows: (runId: string, scopeKey?: string | null) =>
+    ['training', 'accuracy-windows', runId, scopeKey ?? ''] as const,
+};
+
+/** The champions' own backtests, re-scored over each planning window.
+ *
+ *  With `scopeKey` the answer narrows to one branch x SKU line, which is the
+ *  only way to answer "does *this* line clear the target" rather than "does
+ *  the middle line clear it". */
+export function fetchAccuracyWindows(
+  runId: string,
+  scopeKey?: string | null,
+): Promise<AccuracyWindows> {
+  const suffix = scopeKey ? `?scope_key=${encodeURIComponent(scopeKey)}` : '';
+  return getJson<AccuracyWindows>(`/training/${runId}/accuracy-windows${suffix}`);
+}

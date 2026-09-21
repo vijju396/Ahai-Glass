@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Sequence
+
+import pandas as pd
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -20,6 +22,29 @@ from app.models.mappings import PreprocessingRun
 from app.models.panel import PanelBuild
 
 logger = get_logger(__name__)
+
+
+def load_panel_frame(build_id: str, columns: Sequence[str]) -> pd.DataFrame:
+    """The built panel, read from its parquet artifact.
+
+    Lives here rather than in each consumer because the forecast run and
+    champion selection must read the same frame: a deployability check answered
+    against different columns than the refit will use is not an answer.
+    Opens its own session, so a background job can call it.
+    """
+    with session_scope() as db:
+        build = db.get(PanelBuild, build_id)
+        if build is None:
+            raise NotFoundError(f"No panel build with id {build_id!r}.")
+        artifacts = build.artifacts_json or {}
+    path = artifacts.get("panel")
+    if not path:
+        raise ConflictError(
+            "The panel build recorded no panel artifact, so there is nothing to "
+            "read from.",
+            remediation="Rebuild the panel.",
+        )
+    return pd.read_parquet(path, columns=list(columns))
 
 
 def get_build(db: Session, build_id: str) -> PanelBuild:

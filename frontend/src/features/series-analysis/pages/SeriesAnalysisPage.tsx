@@ -17,6 +17,7 @@ import {
   Area,
   Bar,
   CartesianGrid,
+  Cell,
   ComposedChart,
   Legend,
   Line,
@@ -30,19 +31,22 @@ import {
   analyticsKeys,
   fetchAnalyticsFilters,
   fetchAnalyticsSummary,
-  fetchExceptions,
   fetchSeriesOptions,
   seriesKeys,
   type AnalyticsQuery,
 } from '@/api/analytics';
 import {
   BLUE,
+  GREEN,
+  NAVY,
   Panel,
   RED,
   SLATE,
   StatTile,
+  TEAL,
   TICK,
   TOOLTIP,
+  VIOLET,
   YELLOW,
   inr,
   num,
@@ -51,12 +55,20 @@ import {
 import { Card } from '@/components/ui/Card';
 import { ScopeBanner } from '@/components/ui/ScopeBanner';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
+import { Explain } from '@/components/ui/Explain';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const shortPeriod = (period: string) => {
   const [y, m] = period.split('-');
   return `${MONTHS[Number(m) - 1] ?? m} ${y?.slice(2) ?? ''}`;
 };
+
+/* `inr` rounds anything over a thousand to "K", which is right for a demand
+   value and wrong for a unit price: a 1,575 and a 1,700 both read "\u20B92K" and the
+   step between them disappears. Prices here are plain rupees, so show them
+   whole. */
+const rupees = (n: number | null | undefined): string =>
+  n == null || !Number.isFinite(n) ? '\u2014' : `\u20B9${Math.round(n).toLocaleString('en-IN')}`;
 
 const SELECT =
   'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs text-[var(--color-text)]';
@@ -117,16 +129,59 @@ export function SeriesAnalysisPage() {
     queryFn: () => fetchAnalyticsSummary(query),
     retry: false,
   });
-  const exceptions = useQuery({
-    queryKey: analyticsKeys.exceptions(query),
-    queryFn: () => fetchExceptions(query),
-    retry: false,
-  });
-
   const data = summary.data;
+  /* Two lines, and the proxy months belong to the despatched one.
+
+     A `sales_proxy` month's `target` is not a demand figure at all: it is the
+     invoiced quantity, copied across unchanged - summed over the workspace it
+     matches the sales file to the unit, every month. Invoicing is despatch.
+     Drawing it as "Ordered" put a despatch series under a demand label for a
+     third of the window, and made the ordered-to-despatched gap look like it
+     opened in Apr 2025 when that is only where the order book starts.
+
+     So despatch is the long series - two years of it, Apr 2024 onward, read
+     from the sales file before Apr 2025 and from the order file's despatch
+     column after - and ordered is the short one, sixteen months, drawn only
+     where a real order book exists. The two despatch sources are two records
+     of the same event and agree within a few per cent on every month they
+     share; the order file wins the overlap, because the short bars are
+     ordered minus that same column and have to reconcile with it.
+
+     `order_share_pct` is exactly 0 on the proxy months and exactly 100 after,
+     so the split needs no hardcoded date. */
   const trend = useMemo(
-    () => (data?.trend ?? []).map((p) => ({ ...p, label: shortPeriod(p.period) })),
+    () =>
+      (data?.trend ?? []).map((p) => {
+        const isProxy = (p.order_share_pct ?? 0) < 50;
+        return {
+          ...p,
+          label: shortPeriod(p.period),
+          ordered_units: isProxy ? null : p.demand_units,
+          despatched_shown: isProxy ? p.demand_units : p.despatched_units,
+        };
+      }),
     [data],
+  );
+
+  /* The four views below answer the questions worth asking about a SKU before
+     any forecast of it is worth reading: does it repeat every year, is it
+     steady or jumpy, is the history a real order or a stand-in, and is the
+     price moving under it. All four read fields `/api/analytics/summary`
+     already returns for the current selection. The only figure derived here is
+     the period-over-period percentage change, which is a way of drawing the
+     ordered column, not a second calculation of it. */
+  const seasonality = data?.seasonality ?? [];
+  const change = useMemo(
+    () =>
+      trend.slice(1).map((p, i) => {
+        const previous = trend[i]?.demand_units ?? 0;
+        return {
+          label: p.label,
+          demand_units: p.demand_units,
+          change_pct: previous ? ((p.demand_units - previous) / previous) * 100 : null,
+        };
+      }),
+    [trend],
   );
 
   /** What the current combination actually addresses. Printed, so no figure
@@ -149,10 +204,10 @@ export function SeriesAnalysisPage() {
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[var(--color-text)]">
           One combination at a time.
         </h1>
-        <p className="mt-1 max-w-3xl text-sm text-[var(--color-text-muted)]">
+        <Explain label="About this page" variant="note">
           Pick a location, a SKU, or both. The two slicers narrow each other, so a
           combination that would return nothing is never offered.
-        </p>
+        </Explain>
       </header>
 
       <ScopeBanner scope={filters.data?.workspace_scope} />
@@ -262,9 +317,9 @@ export function SeriesAnalysisPage() {
       )}
       {data?.empty && (
         <Card>
-          <p className="hint">
+          <Explain variant="hint">
             {data.reason ?? 'Nothing in the panel matches this combination.'}
-          </p>
+          </Explain>
         </Card>
       )}
 
@@ -301,7 +356,7 @@ export function SeriesAnalysisPage() {
           <Panel
             title={`Demand over time — ${subject}`}
             accent={BLUE}
-            note="Ordered against despatched. Where the bar is tall the order was not filled, and the ordered figure on that month is a lower bound on what was really wanted."
+            note="Ordered against despatched. Despatch runs the full two years, because an invoice is a despatch: before Apr 2025 it is read from the sales file and after it from the order book, and on the months both cover they agree within a few per cent. Ordered runs only from Apr 2025, which is where the order book starts - there is no order history before it. Ordered sits above despatched in almost every month, and that gap is the point of the chart: it is demand that was recorded but not filled, so the ordered figure is a lower bound on what was really wanted."
           >
             <ResponsiveContainer width="100%" height={280}>
               <ComposedChart data={trend} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
@@ -310,20 +365,31 @@ export function SeriesAnalysisPage() {
                 <YAxis tick={TICK} width={46} />
                 <Tooltip contentStyle={TOOLTIP} formatter={(v: number) => num(v)} />
                 <Legend wrapperStyle={{ fontSize: 9 }} />
-                <ReferenceLine x={shortPeriod('2025-04')} stroke={SLATE} strokeDasharray="4 4" />
+                <ReferenceLine
+                  x={shortPeriod('2025-04')}
+                  stroke={SLATE}
+                  strokeDasharray="4 4"
+                  label={{
+                    value: 'order book starts',
+                    position: 'insideTopLeft',
+                    fontSize: 9,
+                    fill: 'var(--color-text-muted)',
+                  }}
+                />
                 <Area
                   type="monotone"
-                  dataKey="demand_units"
+                  dataKey="ordered_units"
                   name="Ordered"
                   stroke={BLUE}
                   fill={BLUE}
                   fillOpacity={0.12}
                   strokeWidth={2}
+                  connectNulls={false}
                   isAnimationActive={false}
                 />
                 <Line
                   type="monotone"
-                  dataKey="despatched_units"
+                  dataKey="despatched_shown"
                   name="Despatched"
                   stroke={YELLOW}
                   strokeWidth={2}
@@ -338,82 +404,127 @@ export function SeriesAnalysisPage() {
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             <Panel
-              title="Monthly detail"
-              accent={SLATE}
-              note="Every month in the window, with the source and censoring of each. A blank despatch means it was not recorded, which is why it is excluded from the fill rate rather than counted as zero."
+              title="Month-of-year pattern"
+              accent={VIOLET}
+              note="The average ordered quantity for each calendar month, across every year in the window. A repeating shape here is what a seasonal model has to work with; bars of roughly equal height mean there is no annual pattern to lean on. Hover a bar to see how many years went into its average - where that is two, the average is two numbers, so treat it as a hint rather than a season."
             >
-              <div className="table-scroll max-h-[300px]">
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>Period</th>
-                      <th className="num">Ordered</th>
-                      <th className="num">Despatched</th>
-                      <th className="num">Short</th>
-                      <th className="num">Fill</th>
-                      <th className="num">Order %</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trend.map((p) => (
-                      <tr key={p.period}>
-                        <td>{p.label}</td>
-                        <td className="num">{num(p.demand_units)}</td>
-                        <td className="num">
-                          {p.despatched_units === null ? '—' : num(p.despatched_units)}
-                        </td>
-                        <td className="num">{num(p.shortfall_units)}</td>
-                        <td className="num">{pct(p.fill_rate_pct)}</td>
-                        <td className="num">{pct(p.order_share_pct)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <ResponsiveContainer width="100%" height={230}>
+                <ComposedChart data={seasonality} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis dataKey="name" tick={{ ...TICK, fontSize: 9 }} tickLine={false} />
+                  <YAxis tick={TICK} width={46} />
+                  <Tooltip
+                    contentStyle={TOOLTIP}
+                    formatter={(v: number) => `${num(v)} units`}
+                    labelFormatter={(label: string) => {
+                      const row = seasonality.find((m) => m.name === label);
+                      return row ? `${label} - averaged over ${row.observations} year(s)` : label;
+                    }}
+                  />
+                  <Bar
+                    dataKey="mean_demand_units"
+                    name="Average ordered"
+                    fill={VIOLET}
+                    barSize={16}
+                    isAnimationActive={false}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
             </Panel>
 
             <Panel
-              title="Exceptions in this selection"
-              accent={RED}
-              note={
-                exceptions.data && !exceptions.data.empty
-                  ? `${num(exceptions.data.kpis.total_lines)} flagged line(s).`
-                  : 'Nothing flagged for this combination.'
-              }
+              title="Month-on-month change"
+              accent={TEAL}
+              note="How much the ordered quantity moved against the month before it, as a percentage. Small bars either side of the line mean a steady series that is straightforward to forecast. Tall bars in both directions mean a jumpy one, where any single month's forecast will carry a wide range around it."
             >
-              {exceptions.isPending && <LoadingBlock rows={4} label="Reading exceptions" />}
-              {exceptions.data && !exceptions.data.empty ? (
-                <div className="table-scroll max-h-[300px]">
-                  <table className="data">
-                    <thead>
-                      <tr>
-                        <th>Type</th>
-                        <th>Branch</th>
-                        <th>SKU</th>
-                        <th className="num">Units</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {exceptions.data.top_lines.map((row, i) => (
-                        <tr key={`${row.series_id}-${row.type}-${i}`}>
-                          <td>{row.label}</td>
-                          <td>{row.branch}</td>
-                          <td className="mono text-[10px]">{row.sku}</td>
-                          <td className="num">{num(row.units)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                !exceptions.isPending && (
-                  <p className="py-3 text-[11px] text-[var(--color-text-muted)]">
-                    No exception condition applies here.
-                  </p>
-                )
-              )}
+              <ResponsiveContainer width="100%" height={230}>
+                <ComposedChart data={change} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis dataKey="label" tick={{ ...TICK, fontSize: 9 }} tickLine={false} interval={1} />
+                  <YAxis tick={TICK} width={46} unit="%" />
+                  <Tooltip
+                    contentStyle={TOOLTIP}
+                    formatter={(v: number) => (v === null || v === undefined ? 'no previous month' : pct(v))}
+                  />
+                  <ReferenceLine y={0} stroke={SLATE} />
+                  <Bar dataKey="change_pct" name="Change" barSize={10} isAnimationActive={false}>
+                    {change.map((p) => (
+                      <Cell key={p.label} fill={(p.change_pct ?? 0) >= 0 ? GREEN : RED} />
+                    ))}
+                  </Bar>
+                </ComposedChart>
+              </ResponsiveContainer>
             </Panel>
           </div>
+
+          <div className="grid grid-cols-1 gap-3">
+            <Panel
+              title="Price per unit"
+              accent={NAVY}
+              note="The average listed price per unit for this selection, month by month. It is here because a step in price often explains a step in demand that otherwise looks random. It is a record of what happened, not a driver: the price of a future month is not known, so no model is ever given it."
+            >
+              <ResponsiveContainer width="100%" height={230}>
+                <ComposedChart data={trend} margin={{ top: 8, right: 8, left: -4, bottom: 0 }}>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis dataKey="label" tick={{ ...TICK, fontSize: 9 }} tickLine={false} interval={1} />
+                  <YAxis
+                    tick={TICK}
+                    width={58}
+                    domain={['auto', 'auto']}
+                    tickFormatter={rupees}
+                  />
+                  <Tooltip contentStyle={TOOLTIP} formatter={(v: number) => rupees(v)} />
+                  <Line
+                    type="monotone"
+                    dataKey="price_per_unit"
+                    name="Price per unit"
+                    /* Not NAVY, which is the panel's accent: at #0F2754 a thin
+                       line all but vanishes against the dark surface. */
+                    stroke={BLUE}
+                    strokeWidth={2}
+                    dot={{ r: 2 }}
+                    connectNulls={false}
+                    isAnimationActive={false}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </Panel>
+          </div>
+
+          <Panel
+            title="Monthly detail"
+            accent={SLATE}
+            note="Every month in the window, with the source and censoring of each. A blank despatch means it was not recorded, which is why it is excluded from the fill rate rather than counted as zero."
+          >
+            <div className="table-scroll max-h-[300px]">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Period</th>
+                    <th className="num">Ordered</th>
+                    <th className="num">Despatched</th>
+                    <th className="num">Short</th>
+                    <th className="num">Fill</th>
+                    <th className="num">Order %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trend.map((p) => (
+                    <tr key={p.period}>
+                      <td>{p.label}</td>
+                      <td className="num">{num(p.demand_units)}</td>
+                      <td className="num">
+                        {p.despatched_units === null ? '\u2014' : num(p.despatched_units)}
+                      </td>
+                      <td className="num">{num(p.shortfall_units)}</td>
+                      <td className="num">{pct(p.fill_rate_pct)}</td>
+                      <td className="num">{pct(p.order_share_pct)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Panel>
         </>
       )}
     </div>

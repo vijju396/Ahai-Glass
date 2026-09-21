@@ -18,6 +18,7 @@ import { Card } from '@/components/ui/Card';
 import { EmptyState, ErrorState, LoadingBlock } from '@/components/ui/States';
 import { formatDays, formatInt } from '@/components/ui/format';
 import type { ScenarioResponse } from '@/types/operations';
+import { Explain } from '@/components/ui/Explain';
 
 const SERVICE_LEVELS = [80, 90, 95] as const;
 const SCOPE_LEVELS = ['branch', 'region', 'national', 'series'] as const;
@@ -54,12 +55,12 @@ export function ScenarioPlannerPage() {
       <div className="page-head">
         <div className="eyebrow">08 &middot; Scenario planner</div>
         <h1>Scenario Planner</h1>
-        <p className="lede">
+        <Explain label="About this page" variant="note">
           What a change in demand, service level or lead time would imply for
           the order position. The baseline forecast is{' '}
           <strong>read-only</strong> &mdash; a scenario is computed on top of it
           and never written back over it.
-        </p>
+        </Explain>
       </div>
 
       <Card title="Levers" subtitle="Three scalars; the API does the arithmetic">
@@ -240,7 +241,7 @@ export function ScenarioPlannerPage() {
             )}
           </Card>
 
-          <Card title="Scenario impact" subtitle="Stored baseline compared with API-calculated scenario totals"><ComparisonBars labels={['Demand quantity', 'Order quantity']} series={[{ name: 'Baseline', values: [data.totals.baseline_demand, data.totals.baseline_order_quantity] }, { name: data.name, values: [data.totals.scenario_demand, data.totals.scenario_order_quantity] }]} /><p className="chart-note">Totals cover the {data.rows_returned} returned rows only. This is a what-if transformation, not a new trained forecast.</p></Card>
+          <Card title="Scenario impact" subtitle="Stored baseline compared with API-calculated scenario totals"><ComparisonBars labels={['Demand quantity', 'Order quantity']} series={[{ name: 'Baseline', values: [data.totals.baseline_demand, data.totals.baseline_order_quantity] }, { name: data.name, values: [data.totals.scenario_demand, data.totals.scenario_order_quantity] }]} /><Explain variant="note">Totals cover the {data.rows_returned} returned rows only. This is a what-if transformation, not a new trained forecast.</Explain></Card>
           <Card title="Row detail" subtitle="Baseline beside scenario, per period">
             <div className="table-scroll">
               <table className="data" data-testid="scenario-table">

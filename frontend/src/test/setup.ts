@@ -87,3 +87,8 @@ vi.mock('echarts-for-react', () => ({
     });
   },
 }));
+
+// Explanations render collapsed in the application (components/ui/Explain.tsx).
+// The suite checks that a page states a fact, not that a disclosure is shut, so
+// they start open here. Explain.test.tsx unsets this to cover the collapse.
+(globalThis as { __EXPLAIN_DEFAULT_OPEN__?: boolean }).__EXPLAIN_DEFAULT_OPEN__ = true;

@@ -21,6 +21,7 @@ import {
   titleiseRole,
 } from '@/components/ui/format';
 import type { ControlOutcome, DefectRecord, ValidationControl } from '@/types/api';
+import { Explain } from '@/components/ui/Explain';
 
 const OUTCOME_TONE: Record<ControlOutcome, string> = {
   pass: 'pill-ok',
@@ -113,11 +114,11 @@ export function DataStudioPage() {
       <div className="page-head">
         <div className="eyebrow">02 &middot; Data Studio</div>
         <h1>Data Studio</h1>
-        <p className="lede">
+        <Explain label="About this page" variant="note">
           The five client files, streamed read-only. Every structural control is
           shown with its expected and measured value, and every catalogued
           defect with the rule that handled it.
-        </p>
+        </Explain>
       </div>
 
       {isPending && (
@@ -354,14 +355,14 @@ export function DataStudioPage() {
                   </div>
                 </div>
               </div>
-              <div className="callout" style={{ marginTop: 'var(--sp-4)' }}>
+              <Explain variant="callout" style={{ marginTop: 'var(--sp-4)' }}>
                 <p>
                   The two shortfall figures differ because{' '}
                   {formatInt(validation.data.service_measures.lines_over_delivered)} lines
                   despatched more than was ordered. Reporting one number would hide
                   that.
                 </p>
-              </div>
+              </Explain>
             </Card>
           )}
 
@@ -485,14 +486,14 @@ export function DataStudioPage() {
               </tbody>
             </table>
           </div>
-          <div className="callout" style={{ marginTop: 'var(--sp-4)' }}>
+          <Explain variant="callout" style={{ marginTop: 'var(--sp-4)' }}>
             <div className="h">
               {profile.data.pii_columns_excluded.length} PII columns excluded from modelling
             </div>
             <p className="mono" style={{ fontSize: 11.5 }}>
               {profile.data.pii_columns_excluded.join(' · ')}
             </p>
-          </div>
+          </Explain>
         </Card>
       )}
     </div>

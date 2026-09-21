@@ -61,6 +61,7 @@ import {
   num,
 } from '@/components/ui/Dashboard';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
+import { Explain } from '@/components/ui/Explain';
 
 const SELECT_CLASS =
   'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs text-[var(--color-text)]';
@@ -108,10 +109,10 @@ export function ExceptionsPage() {
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[var(--color-text)]">
             What needs looking at.
           </h1>
-          <p className="mt-1 max-w-2xl text-sm text-[var(--color-text-muted)]">
+          <Explain label="About this page" variant="note">
             Supply and data conditions on real branch × SKU lines, each with the definition it was
             found by. Click any slice or column to filter.
-          </p>
+          </Explain>
         </div>
         <Link
           to="/assistant"

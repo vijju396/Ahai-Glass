@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui/Toast';
 import { ApiError } from '@/api/client';
 import { titleiseRole } from '@/components/ui/format';
 import type { MappingDetail, RoleAssignment, SemanticRole } from '@/types/api';
+import { Explain } from '@/components/ui/Explain';
 
 /**
  * The editable role mapping.
@@ -183,7 +184,7 @@ export function RoleEditor({ mapping, datasetId }: { mapping: MappingDetail; dat
         }
       >
         {locked && (
-          <div className="callout" style={{ marginBottom: 'var(--sp-4)' }}>
+          <Explain variant="callout" style={{ marginBottom: 'var(--sp-4)' }}>
             <div className="h">
               {mapping.state === 'confirmed'
                 ? `Confirmed by ${mapping.confirmed_by}`
@@ -202,7 +203,7 @@ export function RoleEditor({ mapping, datasetId }: { mapping: MappingDetail; dat
               rest kept their template default. Confirmation requires the target
               and time columns to be reviewed explicitly, not every column.
             </p>
-          </div>
+          </Explain>
         )}
 
         <div

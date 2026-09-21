@@ -4,6 +4,7 @@ import { Card } from '@/components/ui/Card';
 import { EmptyState, ErrorState } from '@/components/ui/States';
 import { ApiError } from '@/api/client';
 import { formatInt, formatSeconds } from '@/components/ui/format';
+import { Explain } from '@/components/ui/Explain';
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
@@ -140,7 +141,7 @@ export function PreprocessingPanel({ mappingId }: { mappingId: string }) {
               </div>
             </div>
 
-            <div className="callout" style={{ marginTop: 'var(--sp-4)' }}>
+            <Explain variant="callout" style={{ marginTop: 'var(--sp-4)' }}>
               <div className="h">
                 Two target sources, deliberately kept separate
               </div>
@@ -170,7 +171,7 @@ export function PreprocessingPanel({ mappingId }: { mappingId: string }) {
                   </>
                 )}
               </p>
-            </div>
+            </Explain>
 
             {orderFact.censored_cells !== undefined && (
               <div className="callout warn" style={{ marginTop: 'var(--sp-3)' }}>

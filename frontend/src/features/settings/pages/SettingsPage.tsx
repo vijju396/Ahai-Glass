@@ -19,6 +19,7 @@ import {
 import { Card } from '@/components/ui/Card';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
 import { formatDays, formatInt, formatSeconds } from '@/components/ui/format';
+import { Explain } from '@/components/ui/Explain';
 
 export function SettingsPage() {
   const settings = useQuery({
@@ -39,17 +40,17 @@ export function SettingsPage() {
       <div className="page-head">
         <div className="eyebrow">10 &middot; Connections &amp; settings</div>
         <h1>Connections &amp; Settings</h1>
-        <p className="lede">
+        <Explain label="About this page" variant="note">
           The effective runtime configuration, read from the API. There is no
           write endpoint: changing the seed or a history profile is a deployment
           action, so a stored run stays reproducible.
-        </p>
+        </Explain>
       </div>
 
       <Card title="AIS workspace identity" subtitle="Official AIS website identity, adapted for a readable analytics workspace">
         <div className="insight-banner"><img src="/ais-logo.png" alt="Asahi India Glass Ltd. official logo" style={{ width: 78, height: 65, objectFit: 'contain', background: '#fff', borderRadius: 6 }} /><p><strong>Demand & supply intelligence</strong><br />Corporate blue and deep navy connect this workspace to AIS. Chart colors distinguish actuals, forecasts and comparison measures. Use the theme button in the header to switch between light and dark.</p></div>
         <div className="palette-row"><span className="palette-swatch"><i style={{ background: '#005bab' }} />Corporate blue · #005BAB</span><span className="palette-swatch"><i style={{ background: '#0f2754' }} />Deep navy · #0F2754</span><span className="palette-swatch"><i style={{ background: '#fff' }} />White · #FFFFFF</span></div>
-        <p className="hint">Logo and website colors sourced from <a href="https://www.aisglass.com" target="_blank" rel="noreferrer">aisglass.com</a>. Supporting chart and status colors are analytics-specific, not an official AIS brand manual.</p>
+        <Explain variant="hint">Logo and website colors sourced from <a href="https://www.aisglass.com" target="_blank" rel="noreferrer">aisglass.com</a>. Supporting chart and status colors are analytics-specific, not an official AIS brand manual.</Explain>
       </Card>
 
       {settings.isPending && (
@@ -165,11 +166,11 @@ export function SettingsPage() {
                   </tbody>
                 </table>
               </div>
-              <p className="hint">
+              <Explain variant="hint">
                 Protection period = review period + branch lead time. The stock
                 file is a single snapshot, which is why every recommendation is
                 labelled a current-snapshot estimate.
-              </p>
+              </Explain>
             </Card>
           </div>
 
@@ -195,10 +196,10 @@ export function SettingsPage() {
                 </tbody>
               </table>
             </div>
-            <p className="hint">
+            <Explain variant="hint">
               Non-registry baselines: {data.baseline_method_ids.join(', ')}. They
               are reported for comparison and can never be champion.
-            </p>
+            </Explain>
           </Card>
 
           <Card
@@ -260,15 +261,15 @@ export function SettingsPage() {
                     </tbody>
                   </table>
                 </div>
-                <p className="hint">{exports.data.note}</p>
+                <Explain variant="hint">{exports.data.note}</Explain>
               </>
             )}
           </Card>
 
           {data.notes.map((note) => (
-            <div className="callout" key={note}>
+            <Explain variant="callout">
               <p>{note}</p>
-            </div>
+            </Explain>
           ))}
         </>
       )}

@@ -38,6 +38,18 @@
 
   --color-kpi-bg: #fbfcfe;
 
+  /* KPI tile tints. These were hard-coded hex values in Dashboard.tsx with no
+     dark variant, so in dark mode a pale mint tile carried near-white
+     `--color-text` and the number was invisible. They are tokens now, and they
+     switch with everything else. */
+  --tint-blue: #eef5fc;
+  --tint-navy: #eef1f7;
+  --tint-green: #eff8f2;
+  --tint-teal: #eef8f7;
+  --tint-violet: #f2f0fb;
+  --tint-amber: #fdf6e9;
+  --tint-red: #fdf1f0;
+
   --shadow-sm: 0 1px 2px rgba(15, 39, 84, 0.06), 0 1px 1px rgba(15, 39, 84, 0.04);
   --shadow-md: 0 6px 16px rgba(15, 39, 84, 0.09), 0 2px 4px rgba(15, 39, 84, 0.05);
 }
@@ -55,6 +67,44 @@
   --color-primary-dark: #1b3b6f;
   --color-accent: #7fb4e6;
   --color-kpi-bg: #1a202a;
+
+  --tint-blue: #16202e;
+  --tint-navy: #171c28;
+  --tint-green: #142218;
+  --tint-teal: #12211f;
+  --tint-violet: #1b1828;
+  --tint-amber: #241d10;
+  --tint-red: #261614;
+}
+
+/* The block above only fires when the user has clicked the theme toggle.
+   `ais.css` also follows the operating system, via
+   `@media(prefers-color-scheme:dark)` on `:root:not([data-theme='light'])`.
+   With the two rules disagreeing, a Mac in dark mode with no toggle clicked
+   got dark `--ink` text on a light `--color-surface` card: white on white,
+   which made every data table unreadable. The two token sets must switch on
+   the same condition, so this mirrors that rule exactly. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+  --color-bg: #0f1319;
+  --color-surface: #161b23;
+  --color-surface-2: #1c222c;
+  --color-border: #2a323e;
+  --color-text: #eef1f6;
+  --color-text-muted: #9aa5b4;
+  --color-primary: #4d9fe0;
+  --color-primary-dark: #1b3b6f;
+  --color-accent: #7fb4e6;
+  --color-kpi-bg: #1a202a;
+
+  --tint-blue: #16202e;
+  --tint-navy: #171c28;
+  --tint-green: #142218;
+  --tint-teal: #12211f;
+  --tint-violet: #1b1828;
+  --tint-amber: #241d10;
+  --tint-red: #261614;
+}
 }
 
 .ref-scroll::-webkit-scrollbar { width: 8px; height: 8px; }

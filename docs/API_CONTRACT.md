@@ -192,6 +192,8 @@ GET  /api/training/{run_id}/model-runs          per-model rows, paginated
 GET  /api/training/{run_id}/calibrations         the quantile cells the run wrote
 GET  /api/training/{run_id}/events                SSE progress stream
 GET  /api/training/{run_id}/monitor               per-model progress + the fold design it used
+GET  /api/training/{run_id}/accuracy-windows      the same forecasts scored over 1, 3 and 6 months
+                                                  ?scope_key=BRANCH|SKU narrows it to one line
 GET  /api/training/{run_id}/model-events           SSE per-model deltas, for the training race
 POST /api/training/{run_id}/cancel                 cancel; rows already written are kept
 ```
@@ -457,9 +459,13 @@ lead-time panels. Eight endpoints, taking the live application from 57 to
 `/api/training/{run_id}/monitor` (the live training monitor), then
 `/api/analytics/sample-mix` (the composition-sampling caveat) and
 `/api/training/{run_id}/model-events` (the training race's per-model stream),
-for a measured total of **67** - counted from the running app's OpenAPI
+for a measured total of **73** - counted from the running app's OpenAPI
 document rather than by adding to the previous sentence, which is how the
-figure had drifted to a claimed 68.
+figure had drifted to a claimed 68. The most recent addition is
+`/api/training/{run_id}/accuracy-windows`, which re-scores the champions' own
+backtests over one month, a quarter and half a year. It re-fits nothing and
+redefines no metric: the monthly figure is its first row, unchanged, because a
+wider window is a wider question and must not read as a better forecast.
 
 ```
 GET  /api/analytics/filters                 filter options + the grains the data supports

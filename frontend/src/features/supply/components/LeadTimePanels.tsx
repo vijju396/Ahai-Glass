@@ -41,6 +41,7 @@ import {
 } from '@/components/ui/Dashboard';
 import { Card } from '@/components/ui/Card';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
+import { Explain } from '@/components/ui/Explain';
 
 /** Above this, spread relative to the mean is large enough that the average
  *  alone is a poor planning number. Not a threshold from the data — a stated
@@ -63,7 +64,7 @@ export function LeadTimePanels() {
   if (!data || data.empty) {
     return (
       <Card>
-        <p className="hint">{data?.reason ?? 'No lead-time data is available yet.'}</p>
+        <Explain variant="hint">{data?.reason ?? 'No lead-time data is available yet.'}</Explain>
       </Card>
     );
   }

@@ -9,6 +9,7 @@
  */
 import type { ReactNode } from 'react';
 import { Area, AreaChart, ResponsiveContainer } from 'recharts';
+import { Explain } from '@/components/ui/Explain';
 
 /** AIS corporate blue. The primary series colour, replacing the reference's
  *  Sodexo orange. */
@@ -46,13 +47,13 @@ export type TintName = 'blue' | 'navy' | 'green' | 'teal' | 'violet' | 'amber' |
 /** Soft tinted tile backgrounds, one per metric family, so the eye can find a
  *  metric without reading every label. */
 export const TINTS: Record<TintName, { bg: string; line: string; fill: string }> = {
-  blue: { bg: '#eef5fc', line: BLUE, fill: 'rgba(0,91,171,0.16)' },
-  navy: { bg: '#eef1f7', line: NAVY, fill: 'rgba(15,39,84,0.14)' },
-  green: { bg: '#eff8f2', line: GREEN, fill: 'rgba(21,127,74,0.16)' },
-  teal: { bg: '#eef8f7', line: TEAL, fill: 'rgba(13,125,120,0.16)' },
-  violet: { bg: '#f2f0fb', line: VIOLET, fill: 'rgba(91,75,183,0.16)' },
-  amber: { bg: '#fdf6e9', line: AMBER, fill: 'rgba(161,92,7,0.16)' },
-  red: { bg: '#fdf1f0', line: RED, fill: 'rgba(179,38,30,0.14)' },
+  blue: { bg: 'var(--tint-blue)', line: BLUE, fill: 'rgba(0,91,171,0.16)' },
+  navy: { bg: 'var(--tint-navy)', line: NAVY, fill: 'rgba(15,39,84,0.14)' },
+  green: { bg: 'var(--tint-green)', line: GREEN, fill: 'rgba(21,127,74,0.16)' },
+  teal: { bg: 'var(--tint-teal)', line: TEAL, fill: 'rgba(13,125,120,0.16)' },
+  violet: { bg: 'var(--tint-violet)', line: VIOLET, fill: 'rgba(91,75,183,0.16)' },
+  amber: { bg: 'var(--tint-amber)', line: AMBER, fill: 'rgba(161,92,7,0.16)' },
+  red: { bg: 'var(--tint-red)', line: RED, fill: 'rgba(179,38,30,0.14)' },
 };
 
 /**
@@ -159,8 +160,17 @@ export function Panel({
         </div>
         {action}
       </div>
+      {/* A short note orients; a long one is an explanation, and an
+          explanation belongs behind a click (see Explain.tsx). 90 characters
+          is about one line at this size. */}
       {note ? (
-        <p className="mb-2 pl-[11px] text-[10px] text-[var(--color-text-muted)]">{note}</p>
+        note.length > 90 ? (
+          <div className="mb-2 pl-[11px]">
+            <Explain variant="note">{note}</Explain>
+          </div>
+        ) : (
+          <p className="mb-2 pl-[11px] text-[10px] text-[var(--color-text-muted)]">{note}</p>
+        )
       ) : (
         <div className="mb-2" />
       )}

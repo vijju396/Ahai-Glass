@@ -30,6 +30,7 @@ import {
 import { Badge, Card, ClearChip } from '@/components/ui/Dashboard';
 import { ErrorState } from '@/components/ui/States';
 import { ChatChart } from '@/features/assistant/components/ChatChart';
+import { Explain } from '@/components/ui/Explain';
 
 interface Message {
   id: string;
@@ -146,10 +147,10 @@ export function AssistantPage() {
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[var(--color-text)]">
             Ask about this network.
           </h1>
-          <p className="mt-1 max-w-2xl text-sm text-[var(--color-text-muted)]">
+          <Explain label="About this page" variant="note">
             Every figure is read from this application&apos;s own data. The assistant explains numbers
             the backend computed — it never estimates one.
-          </p>
+          </Explain>
         </div>
         {scopeParts.length > 0 && (
           <div className="flex items-center gap-2">

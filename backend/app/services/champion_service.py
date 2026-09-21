@@ -14,18 +14,33 @@ fallback to "the first model" and no zero-forecast stand-in.
 **It never overrides without a reason.** `MIN_OVERRIDE_REASON_CHARS` is enforced
 here rather than only in the schema, so a service-level caller cannot bypass it.
 The override records who, when, why, and what it replaced.
+
+And one thing it now refuses to do: **crown a model that cannot be fitted on the
+history the forecast will use.** A backtest trains on a window that stops before
+its validation fold; the live refit trains on everything. A model can pass the
+first and fail the second - see `app/domain/ais/deployability.py` for the case
+that prompted this. When it does, the crown passes down the ranking to the best
+model that can run, and the refused model keeps its place on the leaderboard
+with the requirement it missed.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+import pandas as pd
+
 from app.core.errors import ConflictError, NotFoundError, ValidationFailedError
 from app.core.logging import get_logger
+from app.db.session import session_scope
+from app.domain.ais.backtest_runner import SERIES_COL
+from app.domain.ais.deployability import ScopeFit, prepare_scope_fit, refusal_reason
+from app.domain.ais.scope_builder import build_aggregate_plan
+from app.domain.ais.workspace import resolve_workspace
 from app.ml.registry.canonical_models import (
     BASELINE_METHOD_IDS,
     CANONICAL_MODEL_IDS,
@@ -45,6 +60,8 @@ from app.models.champions import (
     ChampionSelection,
 )
 from app.models.training import ModelRun, TrainingRun
+from app.services.panel_service import load_panel_frame
+from app.services.training.training_service import PANEL_COLUMNS
 
 logger = get_logger(__name__)
 
@@ -173,8 +190,15 @@ def build_leaderboard(
     scope_level: str = "national",
     scope_key: str = NATIONAL_KEY,
     include_baselines: bool = True,
+    deployable: Callable[[Candidate], str | None] | None = None,
 ) -> Leaderboard:
-    """Rank one scope from its stored rows. Every row appears."""
+    """Rank one scope from its stored rows. Every row appears.
+
+    `deployable` is passed straight through to the ranker. Reading a leaderboard
+    leaves it unset - that view is a record of how the models scored, and a
+    scope's panel is not loaded to render it - while `select_champions` supplies
+    it, because awarding a crown is a decision about what will actually run.
+    """
     conditions = [
         ModelRun.training_run_id == run_id,
         ModelRun.scope_level == scope_level,
@@ -195,6 +219,7 @@ def build_leaderboard(
     return rank_candidates(
         [_candidate(row) for row in rows],
         primary_metric=get_settings().champion_primary_metric,
+        deployable=deployable,
     )
 
 
@@ -223,6 +248,40 @@ def leaderboard_payload(
     )
     present = {row.candidate.model_id for row in board.rows}
     payload = board.as_dict()
+
+    # Show the ranking the crown was actually awarded on.
+    #
+    # `board` above is re-ranked live and ungated, because rendering a table is
+    # not a reason to load a panel. The selection, though, also required each
+    # candidate to be fittable on the full history, and where that demoted
+    # someone the two disagree - the live board crowns a model the forecast
+    # does not use, and the screen contradicts itself. The selection stored the
+    # board it decided on, so that is what is served whenever it belongs to the
+    # run being asked about.
+    if (
+        active is not None
+        and active.training_run_id == run_id
+        and active.ranking_json
+        and active.scope_key == scope_key
+    ):
+        payload = dict(active.ranking_json)
+        champion_row = None
+        present = {
+            str(row.get("model_id")) for row in payload.get("rows") or []
+        }
+        payload["ranking_source"] = "as_selected"
+        payload["ranking_note"] = (
+            "This is the ranking the champion was selected on, including the "
+            "check that each model can be fitted on the full history - not a "
+            "fresh sort of the stored metrics."
+        )
+    else:
+        payload["ranking_source"] = "recomputed"
+        payload["ranking_note"] = (
+            "No champion has been selected for this scope from this run, so "
+            "this is the backtest ranking alone. A model can lead it and still "
+            "be unable to fit on the full history."
+        )
     payload.update(
         {
             "training_run_id": run_id,
@@ -234,8 +293,17 @@ def leaderboard_payload(
             ],
             "baselines_present": sorted(present & set(BASELINE_METHOD_IDS)),
             "skill_vs_best_baseline": compare_to_baseline(
-                champion_row.candidate.wape if champion_row else None,
-                board.best_baseline_wape,
+                champion_row.candidate.wape
+                if champion_row
+                else next(
+                    (
+                        row.get("wape")
+                        for row in payload.get("rows") or []
+                        if row.get("is_champion")
+                    ),
+                    None,
+                ),
+                payload.get("best_baseline_wape"),
             ),
             "active_selection": _selection_dict(active) if active else None,
             "origins": run.origins_json if run else None,
@@ -264,6 +332,135 @@ def _kind_for_level(scope_level: str, scope_key: str = "") -> str:
 # ----------------------------------------------------------------------
 
 
+
+# ----------------------------------------------------------------------
+# The deployability gate
+# ----------------------------------------------------------------------
+
+#: The horizons a champion is checked against. The forecast run takes its own
+#: horizons from the request, but nothing records them at selection time, and
+#: every run so far has asked for six months. Checking the longest ordinary
+#: horizon is the conservative direction: a model that can reach month 6 can
+#: reach month 1.
+GATE_HORIZONS: tuple[int, ...] = (1, 2, 3, 4, 5, 6)
+
+
+class _Deployability:
+    """Answers, per scope, which models could not be fitted on its history.
+
+    Built once per `select_champions` call. Scope frames are prepared on first
+    use and cached, so a run that ranks forty series prepares forty frames and
+    not the whole panel's worth.
+
+    Every question goes to the adapter that would do the refit, through
+    `app.domain.ais.deployability`, so this cannot drift from what the forecast
+    run will find.
+    """
+
+    def __init__(
+        self, panel: "pd.DataFrame", config: dict[str, Any], horizons: Sequence[int]
+    ) -> None:
+        self._config = config
+        self._horizons = tuple(horizons)
+        self._series_frames: dict[str, Any] = {}
+        if SERIES_COL in panel.columns:
+            self._series_frames = dict(tuple(panel.groupby(SERIES_COL, observed=True)))
+        # The aggregate frames come from the one builder the forecast run uses,
+        # rather than being re-summed here under a second definition.
+        self._aggregate_frames = {
+            (scope.scope_level, scope.scope_key): scope.frame
+            for scope in build_aggregate_plan(panel).series
+        }
+        self._fits: dict[tuple[str, str], ScopeFit | None] = {}
+        self._refusals: dict[tuple[str, str], dict[str, str]] = {}
+
+    def _fit(self, scope_level: str, scope_key: str) -> ScopeFit | None:
+        cached = self._fits.get((scope_level, scope_key), _MISSING)
+        if cached is not _MISSING:
+            return cached  # type: ignore[return-value]
+        if scope_level == "series":
+            frame = self._series_frames.get(scope_key)
+        else:
+            frame = self._aggregate_frames.get((scope_level, scope_key))
+        fit: ScopeFit | None = None
+        if frame is not None and not frame.empty:
+            try:
+                fit = prepare_scope_fit(
+                    frame,
+                    scope_level=scope_level,
+                    horizons=self._horizons,
+                    config=self._config,
+                )
+            except Exception:  # noqa: BLE001 - a scope we cannot prepare is ungated
+                # Not silent: `unchecked_scopes` reports it, and an ungated
+                # scope behaves exactly as it did before this gate existed.
+                logger.warning(
+                    "deployability_frame_failed",
+                    extra={"scope_level": scope_level, "scope_key": scope_key},
+                )
+                fit = None
+        self._fits[(scope_level, scope_key)] = fit
+        return fit
+
+    def gate(
+        self, scope_level: str, scope_key: str
+    ) -> Callable[[Candidate], str | None] | None:
+        """The predicate for one scope, or `None` if it cannot be checked."""
+        fit = self._fit(scope_level, scope_key)
+        if fit is None:
+            return None
+        found = self._refusals.setdefault((scope_level, scope_key), {})
+
+        def refused(candidate: Candidate) -> str | None:
+            if candidate.model_id in found:
+                return found[candidate.model_id]
+            reason = refusal_reason(candidate.model_id, fit)
+            if reason is not None:
+                found[candidate.model_id] = reason
+            return reason
+
+        return refused
+
+    def refusals_for(self, scope_level: str, scope_key: str) -> dict[str, str]:
+        return dict(self._refusals.get((scope_level, scope_key), {}))
+
+
+_MISSING = object()
+
+
+def _build_deployability(run: TrainingRun) -> tuple[_Deployability | None, str | None]:
+    """The gate for a run, or `None` with the reason it could not be built.
+
+    A panel that cannot be read is reported and selection continues ungated,
+    which is the behaviour that existed before this gate. Refusing to select
+    any champion because the check is unavailable would be a worse failure than
+    the one the check prevents.
+    """
+    try:
+        panel = load_panel_frame(run.panel_build_id, PANEL_COLUMNS)
+    except Exception as exc:  # noqa: BLE001
+        return None, (
+            "The panel behind this run could not be read, so no champion was "
+            f"checked against the history it will be refitted on: {exc}"
+        )
+    with session_scope() as db:
+        panel = resolve_workspace(db).restrict(panel, "canonical_branch")
+    if panel.empty:
+        return None, (
+            "The workspace restriction leaves no panel rows, so no champion was "
+            "checked against the history it will be refitted on."
+        )
+    settings = get_settings()
+    config = {
+        "min_history_profile": run.min_history_profile or settings.min_history_profile,
+        "xgboost_training_profile": (
+            run.xgboost_training_profile or settings.xgboost_training_profile
+        ),
+        "random_seed": settings.random_seed,
+    }
+    return _Deployability(panel, config, GATE_HORIZONS), None
+
+
 def select_champions(
     db: Session,
     run_id: str,
@@ -276,11 +473,19 @@ def select_champions(
         "product_group",
     ),
     actor: str | None = None,
+    check_deployability: bool = True,
 ) -> dict[str, Any]:
     """Run the deterministic ranking over every requested scope and persist it.
 
     Scopes with no rankable row are **skipped with a reason** and reported in
     `skipped`, never given an arbitrary champion.
+
+    With `check_deployability`, every candidate is also asked whether it can be
+    fitted on the scope's whole history before it can be crowned, and the crown
+    passes down the ranking to the first model that can. `demoted` reports every
+    scope where that changed the answer, with the model it moved from, the model
+    it moved to, and the requirement the first one failed - a champion that
+    changed for a reason nobody can read is not auditable.
     """
     unknown = [kind for kind in scope_kinds if kind not in SCOPE_KINDS]
     if unknown:
@@ -292,6 +497,13 @@ def select_champions(
 
     written: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    demoted: list[dict[str, Any]] = []
+    unchecked: list[dict[str, Any]] = []
+
+    gate: _Deployability | None = None
+    gate_note: str | None = None
+    if check_deployability:
+        gate, gate_note = _build_deployability(run)
 
     for kind in scope_kinds:
         level = SCOPE_KIND_TO_LEVEL[kind]
@@ -301,9 +513,42 @@ def select_champions(
             # kind would claim the other's scopes.
             if kind in SEGMENT_SCOPE_KINDS and not scope_key.startswith(f"{kind}="):
                 continue
+            predicate = gate.gate(scope_level, scope_key) if gate else None
+            if gate is not None and predicate is None:
+                unchecked.append(
+                    {
+                        "scope_kind": kind,
+                        "scope_key": scope_key,
+                        "reason": (
+                            "This scope has no preparable frame in the panel, so "
+                            "its champion was ranked on its backtest alone and "
+                            "may not be fittable on the full history."
+                        ),
+                    }
+                )
             board = build_leaderboard(
-                db, run.id, scope_level=scope_level, scope_key=scope_key
+                db,
+                run.id,
+                scope_level=scope_level,
+                scope_key=scope_key,
+                deployable=predicate,
             )
+            refused = gate.refusals_for(scope_level, scope_key) if gate else {}
+            if refused and board.champion_model_id is not None:
+                # Ranked above the crowned model and refused: the demotion.
+                for row in board.rows:
+                    if row.candidate.model_id not in refused:
+                        continue
+                    demoted.append(
+                        {
+                            "scope_kind": kind,
+                            "scope_key": scope_key,
+                            "refused_model_id": row.candidate.model_id,
+                            "refused_wape": row.candidate.wape,
+                            "champion_model_id": board.champion_model_id,
+                            "reason": refused[row.candidate.model_id],
+                        }
+                    )
             if board.champion_model_id is None:
                 skipped.append(
                     {
@@ -334,7 +579,12 @@ def select_champions(
     db.commit()
     logger.info(
         "champions_selected",
-        extra={"run_id": run.id, "written": len(written), "skipped": len(skipped)},
+        extra={
+            "run_id": run.id,
+            "written": len(written),
+            "skipped": len(skipped),
+            "demoted": len(demoted),
+        },
     )
     return {
         "training_run_id": run.id,
@@ -342,6 +592,11 @@ def select_champions(
         "skipped": skipped,
         "selected_count": len(written),
         "skipped_count": len(skipped),
+        "deployability_checked": gate is not None,
+        "deployability_note": gate_note,
+        "demoted": demoted,
+        "demoted_count": len(demoted),
+        "unchecked_scopes": unchecked,
     }
 
 

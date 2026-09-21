@@ -31,11 +31,13 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { DemandChart, type DemandView } from '@/components/charts/DemandChart';
+import { DemandChart } from '@/components/charts/DemandChart';
+import { useLinesAtTarget } from '@/features/training-race/useLinesAtTarget';
+import { MarkedSelect } from '@/components/ui/MarkedSelect';
 import { monthLabel } from '@/components/charts/Chart';
 import { ApiError } from '@/api/client';
 import { fetchCurrentForecastRun, fetchSeriesForecast, forecastKeys } from '@/api/forecasts';
-import { fetchDiagnostics, fetchScopes, leaderboardKeys } from '@/api/leaderboard';
+import { fetchScopes, leaderboardKeys } from '@/api/leaderboard';
 import {
   analyticsKeys,
   driftKeys,
@@ -59,28 +61,30 @@ import { Card } from '@/components/ui/Card';
 import { ScopeBanner } from '@/components/ui/ScopeBanner';
 import { EmptyState, ErrorState, LoadingBlock } from '@/components/ui/States';
 import { formatInt } from '@/components/ui/format';
+import { Explain } from '@/components/ui/Explain';
 
 const SELECT =
   'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs text-[var(--color-text)]';
 
-/** The four questions this chart can answer, and what each one draws. */
-const VIEWS: ReadonlyArray<readonly [DemandView, string]> = [
-  ['overview', 'Full timeline'],
-  ['actual', 'Actual'],
-  ['validation', 'Backtest vs actual'],
-  ['forecast', 'Forecast'],
-];
 
-const VIEW_NOTE: Record<string, string> = {
-  overview:
-    'Everything on one axis: observed actuals through the forecast origin, then six forecast months with their service-level bands. The bands are not a confidence interval — q95 is the quantity demand is not expected to exceed 95% of the time.',
-  actual:
-    'Observed ordered demand only, with no forecast drawn. Where a month is censored the ordered figure is a lower bound on true demand, because despatch fell short of the order.',
-  validation:
-    'Stored out-of-sample backtest predictions against the actuals they were scored on. This is how the error on this series was measured — it is not the future forecast, and each origin is shown separately because the same month can carry different predictions from different folds.',
-  forecast:
-    'The six forecast months on their own, with q80/q90/q95. A horizon with a point but no band had too few out-of-sample residuals to calibrate one at any pooling level; the point is drawn without a band rather than with a fabricated one.',
-};
+
+/**
+ * The chart draws one thing: what actually happened, then what we forecast
+ * happens next. It used to carry three more layers behind a view switch —
+ * backtest-versus-actual, and the q80/q90/q95 service-level bands — which
+ * answer how the error was *measured* rather than what the forecast *is*, and
+ * put four lines in front of someone reading for one. The per-horizon
+ * provenance table went with them, for the same reason: reconciliation
+ * adjustments and interval-calibration pooling levels are how the number was
+ * built, not what the number says.
+ *
+ * The forecast itself is unchanged — the quantiles, the adjustments and the
+ * calibration are all still computed and still served by the API; this page
+ * simply no longer puts them on screen. The measured error stays, as the tile
+ * and the panel beneath the chart, because that is what someone asks next.
+ */
+const CHART_NOTE =
+  'Observed demand through the forecast origin, then the six forecast months. The shaded stretch is the forecast; everything left of it is what actually happened.';
 
 function splitSeries(id: string): { branch: string; sku: string } | null {
   const cut = id.indexOf('|');
@@ -91,14 +95,7 @@ function splitSeries(id: string): { branch: string; sku: string } | null {
 export function ForecastingPage() {
   const [branch, setBranch] = useState('');
   const [sku, setSku] = useState('');
-  const [quantiles, setQuantiles] = useState(true);
-  /** Which slice of the timeline the chart draws. `overview` is everything;
-   *  `validation` is stored out-of-sample backtest predictions against the
-   *  actuals they were scored on, which is a different question from the
-   *  future forecast and deserves its own view. */
-  const [view, setView] = useState<DemandView>('overview');
   const [range, setRange] = useState(0);
-  const [origin, setOrigin] = useState('');
 
   const filters = useQuery({
     queryKey: analyticsKeys.filters,
@@ -135,6 +132,20 @@ export function ForecastingPage() {
     [parsed, branch],
   );
   const matching = parsed.filter((r) => (!branch || r.branch === branch) && (!sku || r.sku === sku));
+
+  /* A small green dot trails an option whose lines *all* clear 85% accuracy on their
+     own, narrowed by whatever the other slicer already says. "All" rather than
+     "any": with no location picked a SKU carries one line per branch, and a dot
+     meaning "strong somewhere" would walk a demo into a branch that is not. */
+  const atTarget = useLinesAtTarget();
+  const strong = useMemo(() => {
+    const mark = (candidates: { scope_key: string }[]) =>
+      candidates.length > 0 && candidates.every((r) => atTarget.has(r.scope_key));
+    return {
+      branch: (b: string) => mark(parsed.filter((r) => r.branch === b && (!sku || r.sku === sku))),
+      sku: (s: string) => mark(parsed.filter((r) => r.sku === s && (!branch || r.branch === branch))),
+    };
+  }, [parsed, atTarget, branch, sku]);
 
   /** Which forecast scope the current selection addresses.
    *
@@ -177,37 +188,9 @@ export function ForecastingPage() {
   });
 
   const data = series.data;
-  const history = data?.history ?? [];
   const forecasts = data?.forecasts ?? [];
   const metrics = data?.validation_metrics;
 
-  // Backtest predictions, fetched only for the view that draws them.
-  const modelId = metrics?.model_id ?? '';
-  const diagnosticQuery = {
-    training_run_id: data?.training_run_id,
-    scope_level: scopeLevel,
-    scope_key: scopeKey,
-  };
-  const diagnostics = useQuery({
-    queryKey: leaderboardKeys.diagnostics(modelId, diagnosticQuery),
-    queryFn: () => fetchDiagnostics(modelId, diagnosticQuery),
-    // Also on `overview`: the full timeline shows all three series, so it
-    // needs the backtest points as well as the forecast.
-    enabled: (view === 'validation' || view === 'overview') && Boolean(modelId),
-    retry: false,
-  });
-
-  /** Origins are kept apart: the same month can carry different predictions
-   *  from different folds, and overlaying them would read as one jagged line
-   *  rather than two honest ones. */
-  const originKey = (p: { origin_name: string | null; fold_index: number | null }) =>
-    `${p.origin_name ?? 'Origin'} · fold ${p.fold_index ?? 0}`;
-  const origins = [...new Set((diagnostics.data?.points ?? []).map(originKey))];
-  const selectedOrigin = origins.includes(origin) ? origin : (origins[origins.length - 1] ?? '');
-  const validationPoints = (diagnostics.data?.points ?? [])
-    .filter((p) => originKey(p) === selectedOrigin)
-    .sort((a, b) => (a.period ?? '').localeCompare(b.period ?? ''));
-  const withoutInterval = forecasts.filter((r) => r.point_forecast !== null && r.q95 === null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -218,12 +201,12 @@ export function ForecastingPage() {
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[var(--color-text)]">
           Six months ahead, per branch and SKU.
         </h1>
-        <p className="mt-1 max-w-3xl text-sm text-[var(--color-text-muted)]">
+        <Explain label="About this page" variant="note">
           Every series is validated, has its champion chosen, and is forecast{' '}
           <strong>independently</strong>. Two SKUs at the same branch routinely end up with
           different models, so the model and the measured error shown below belong to the
           series you selected — there is no single headline accuracy.
-        </p>
+        </Explain>
       </header>
 
       <ScopeBanner scope={filters.data?.workspace_scope} />
@@ -234,31 +217,31 @@ export function ForecastingPage() {
             <span className="text-[9px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
               Location
             </span>
-            <select aria-label="Location" className={SELECT} value={branch} onChange={(e) => setBranch(e.target.value)}>
-              <option value="">All locations</option>
-              {branchOptions.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </select>
+            <MarkedSelect
+              label="Location"
+              className={SELECT}
+              value={branch}
+              onChange={setBranch}
+              options={[
+                { value: '', label: 'All locations' },
+                ...branchOptions.map((b) => ({ value: b, label: b, marked: strong.branch(b) })),
+              ]}
+            />
           </label>
           <label className="inline-flex flex-col gap-0.5">
             <span className="text-[9px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
               SKU
             </span>
-            <select aria-label="SKU" className={SELECT} value={sku} onChange={(e) => setSku(e.target.value)}>
-              <option value="">All SKUs</option>
-              {skuOptions.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="inline-flex items-center gap-1.5 pb-2 text-[11px] text-[var(--color-text)]">
-            <input type="checkbox" checked={quantiles} onChange={(e) => setQuantiles(e.target.checked)} />
-            Show q80 / q90 / q95
+            <MarkedSelect
+              label="SKU"
+              className={SELECT}
+              value={sku}
+              onChange={setSku}
+              options={[
+                { value: '', label: 'All SKUs' },
+                ...skuOptions.map((s) => ({ value: s, label: s, marked: strong.sku(s) })),
+              ]}
+            />
           </label>
         </div>
         <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
@@ -362,93 +345,35 @@ export function ForecastingPage() {
           <Panel
             title={`Outlook — ${scopeKey}`}
             accent={BLUE}
-            note={VIEW_NOTE[view]}
+            note={CHART_NOTE}
           >
             <div className="chart-toolbar">
-              <div className="segmented" role="group" aria-label="Chart view">
-                {VIEWS.map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    aria-pressed={view === id}
-                    onClick={() => setView(id)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {(view === 'actual' || view === 'overview') && (
-                <label className="field">
-                  <span className="visually-hidden">History range</span>
-                  <select
-                    aria-label="History range"
-                    value={range}
-                    onChange={(e) => setRange(Number(e.target.value))}
-                  >
-                    <option value={0}>All history</option>
-                    <option value={12}>Last 12 months</option>
-                    <option value={6}>Last 6 months</option>
-                  </select>
-                </label>
-              )}
-              {view === 'validation' && origins.length > 0 && (
-                <label className="field">
-                  <span>Backtest origin</span>
-                  <select
-                    aria-label="Backtest origin"
-                    value={selectedOrigin}
-                    onChange={(e) => setOrigin(e.target.value)}
-                  >
-                    {origins.map((o) => (
-                      <option key={o}>{o}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {(view === 'forecast' || view === 'overview') && (
-                <label className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={quantiles}
-                    onChange={(e) => setQuantiles(e.target.checked)}
-                  />
-                  Show q80 / q90 / q95
-                </label>
-              )}
+              <label className="field">
+                <span className="visually-hidden">History range</span>
+                <select
+                  aria-label="History range"
+                  value={range}
+                  onChange={(e) => setRange(Number(e.target.value))}
+                >
+                  <option value={0}>All history</option>
+                  <option value={12}>Last 12 months</option>
+                  <option value={6}>Last 6 months</option>
+                </select>
+              </label>
             </div>
 
-            {view !== 'validation' ? (
-              <DemandChart
-                data={data}
-                view={view}
-                points={view === 'overview' ? validationPoints : []}
-                quantiles={quantiles}
-                range={range}
-                height={330}
-              />
-            ) : diagnostics.isFetching ? (
-              <LoadingBlock rows={8} label="Loading backtest predictions" />
-            ) : diagnostics.isError ? (
-              <ErrorState error={diagnostics.error} onRetry={() => diagnostics.refetch()} />
-            ) : validationPoints.length ? (
-              <DemandChart data={data} view="validation" points={validationPoints} height={330} />
-            ) : (
-              <EmptyState title="No backtest predictions stored for this series">
-                {diagnostics.data?.unavailable_reason ??
-                  'The model used on this scope has no stored out-of-sample predictions. Nothing is drawn rather than a fabricated comparison.'}
-              </EmptyState>
-            )}
+            <DemandChart
+              data={data}
+              view="overview"
+              points={[]}
+              quantiles={false}
+              range={range}
+              height={330}
+            />
             {data.history_unavailable_reason && (
-              <p className="chart-note">{data.history_unavailable_reason}</p>
+              <Explain variant="note">{data.history_unavailable_reason}</Explain>
             )}
-            {withoutInterval.length > 0 && (
-              <p className="chart-note">
-                {withoutInterval.length} horizon(s) have a point forecast but no interval: the
-                calibration had too few out-of-sample residuals at any pooling level. The point
-                is shown without a band rather than with a fabricated one.
-              </p>
-            )}
-            <p className="chart-note">{data.snapshot_caveat}</p>
+            <Explain variant="note">{data.snapshot_caveat}</Explain>
           </Panel>
 
           {isAggregate && (
@@ -462,117 +387,6 @@ export function ForecastingPage() {
               </p>
             </div>
           )}
-
-          {view === 'validation' && validationPoints.length > 0 && (
-            <Panel
-              title={`Backtest against actual — ${selectedOrigin}`}
-              accent={GREEN}
-              note="Stored out-of-sample predictions and the actuals they were scored against. Residual is actual minus forecast, so a negative residual means the model forecast above what happened."
-            >
-              <div className="table-scroll max-h-[280px]">
-                <table className="data" data-testid="backtest-table">
-                  <thead>
-                    <tr>
-                      <th>Month</th>
-                      <th className="num">Horizon</th>
-                      <th className="num">Actual</th>
-                      <th className="num">Backtest forecast</th>
-                      <th className="num">Residual</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {validationPoints.map((p, i) => (
-                      <tr key={`${p.period}-${p.horizon}-${i}`}>
-                        <td>{monthLabel(p.period ?? '')}</td>
-                        <td className="num">{p.horizon}</td>
-                        <td className="num">{formatInt(p.actual)}</td>
-                        <td className="num">{formatInt(p.predicted)}</td>
-                        <td className="num">{formatInt(p.residual)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Panel>
-          )}
-
-          {view === 'actual' && history.length > 0 && (
-            <Panel
-              title="Actual demand detail"
-              accent={SLATE}
-              note="Historical quantities with the source each came from and whether despatch fell short. A censored month means the ordered figure is a lower bound on what was really wanted."
-            >
-              <div className="table-scroll max-h-[280px]">
-                <table className="data" data-testid="actual-table">
-                  <thead>
-                    <tr>
-                      <th>Month</th>
-                      <th className="num">Actual units</th>
-                      <th>Source</th>
-                      <th>Censored</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(range ? history.slice(-range) : history).map((p) => (
-                      <tr key={p.period}>
-                        <td>{monthLabel(p.period)}</td>
-                        <td className="num">{formatInt(p.actual)}</td>
-                        <td>{p.target_source ?? 'Not recorded'}</td>
-                        <td>{p.is_censored ? 'Yes' : 'No'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Panel>
-          )}
-
-          <Panel
-            title="Every horizon, with its provenance"
-            accent={TEAL}
-            note="The reconciliation adjustment is its own column, never folded into the forecast. 'Interval from' names the calibration method, the pooling level it fell back to, and how many residuals backed it."
-          >
-            <div className="table-scroll">
-              <table className="data" data-testid="forecast-table">
-                <thead>
-                  <tr>
-                    <th>Period</th>
-                    <th className="num">h</th>
-                    <th className="num">Point</th>
-                    <th className="num">q80</th>
-                    <th className="num">q90</th>
-                    <th className="num">q95</th>
-                    <th className="num">Pre-reconciliation</th>
-                    <th className="num">Adjustment</th>
-                    <th>Interval from</th>
-                    <th>Model</th>
-                    <th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {forecasts.map((row) => (
-                    <tr key={row.id}>
-                      <td className="mono">{row.period}</td>
-                      <td className="num">{row.horizon}</td>
-                      <td className="num">{formatInt(row.point_forecast)}</td>
-                      <td className="num">{formatInt(row.q80)}</td>
-                      <td className="num">{formatInt(row.q90)}</td>
-                      <td className="num">{formatInt(row.q95)}</td>
-                      <td className="num">{formatInt(row.base_forecast)}</td>
-                      <td className="num">{formatInt(row.reconciliation_adjustment)}</td>
-                      <td className="text-[10px]">
-                        {row.quantile_method
-                          ? `${row.quantile_method} · ${row.quantile_pooling_level} · ${formatInt(row.quantile_residual_count)} residuals`
-                          : '—'}
-                      </td>
-                      <td className="text-[10px]">{row.model_display_name ?? row.model_id ?? '—'}</td>
-                      <td className="text-[10px]">{row.unavailable_reason ?? '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Panel>
 
           {metrics && (
             <Panel

@@ -249,6 +249,9 @@ export interface LeaderboardResponse {
   notes: string[];
   origins: Record<string, unknown> | null;
   active_selection: ChampionSelection | null;
+  /** `as_selected` when these rows are the board the champion was chosen on. */
+  ranking_source?: string;
+  ranking_note?: string | null;
 }
 
 export interface ComparisonPoint {

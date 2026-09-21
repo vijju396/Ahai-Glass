@@ -168,6 +168,35 @@ def explain(db: Session = Depends(get_db)) -> Any:
 
 
 @router.get(
+    "/{run_id}/accuracy-windows",
+    summary="The same forecasts scored over one month, a quarter and half a year",
+)
+def accuracy_windows(
+    run_id: str,
+    scope_key: str | None = Query(
+        None,
+        description=(
+            "One branch x SKU line, as 'BRANCH|SKU'. Omitted, the whole "
+            "workspace is scored together."
+        ),
+    ),
+    db: Session = Depends(get_db),
+) -> Any:
+    """Accuracy at each planning window, from the champions' own backtests.
+
+    The leaderboard answers "how wrong on one SKU in one month". A plant
+    usually acts on a quarter's total or a branch's total, which is the same
+    forecasts added up differently - and measurably more accurate, because
+    errors in both directions cancel. Nothing here is re-fitted and no metric
+    is redefined; the monthly figure is the first row and is unchanged.
+    """
+    from app.services.training.accuracy_windows import accuracy_by_window
+
+    training_service.get_run(db, run_id)
+    return accuracy_by_window(db, run_id, scope_key=scope_key)
+
+
+@router.get(
     "/current",
     response_model=TrainingRunSummary,
     summary="The most recent training run",

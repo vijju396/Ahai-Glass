@@ -7,22 +7,21 @@
  * were already verified and re-typing them would have risked regressions for
  * nothing.
  *
- * Three panels are added on top, because the earlier rewrite of this page
- * introduced them and they answer questions the original set did not:
+ * **Demand signal mix** is the one panel here that has to stay. It shows the
+ * share of rows sourced from a real purchase order rather than the invoiced
+ * proxy. Everything before Apr 2025 is proxy, so a trend crossing that line
+ * compares two different measurements — the single most misleading thing on
+ * the page if it is not shown.
  *
- * - **Concentration by value class** — the ABC/Pareto view: bars are ordered
- *   units, the line is the running share of total demand. It answers "how
- *   much of demand sits in how few products" in one line.
- * - **Which measurement?** — the share of rows sourced from a real purchase
- *   order rather than the invoiced proxy. Everything before Apr 2025 is
- *   proxy, so a trend crossing that line compares two different
- *   measurements. This is the single most misleading thing on the page if it
- *   is not shown.
- * - **Exception mix** — because exceptions are the reason a forecast and a
- *   plan disagree.
+ * The page is **description only**. It carries no forecast accuracy, no
+ * champion, no model figure of any kind: accuracy is answered on Training and
+ * on Forecasting, and repeating it here invited the reading that a demand
+ * summary was a model result. A Pareto panel and an exception-severity donut
+ * were also dropped (D-101) — neither answered a question about demand that
+ * another panel on this page did not already answer better.
  *
- * Everything is read from `/analytics/summary`, `/analytics/branch-scorecard`
- * and `/analytics/exceptions`, all already cut to the workspace. This page
+ * Everything is read from `/analytics/summary` and
+ * `/analytics/branch-scorecard`, both already cut to the workspace. This page
  * computes no forecast and no metric; it selects, formats and draws.
  */
 import { useMemo, useState } from 'react';
@@ -52,13 +51,11 @@ import {
   XAxis,
   YAxis,
   ZAxis,
-  ComposedChart,
 } from 'recharts';
 import {
   analyticsKeys,
   fetchAnalyticsFilters,
   fetchAnalyticsSummary,
-  fetchExceptions,
   fetchBranchScorecard,
   type AnalyticsQuery,
   type ScorecardBranch,
@@ -86,6 +83,7 @@ import {
   pct,
 } from '@/components/ui/Dashboard';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
+import { Explain } from '@/components/ui/Explain';
 
 const SELECT_CLASS =
   'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs text-[var(--color-text)]';
@@ -123,12 +121,6 @@ export function OverallAnalysisPage() {
     queryKey: analyticsKeys.summary(query),
     queryFn: () => fetchAnalyticsSummary(query),
     enabled: !!filters,
-  });
-  const exceptionsQuery = useQuery({
-    queryKey: analyticsKeys.exceptions(query),
-    queryFn: () => fetchExceptions(query),
-    enabled: !!filters,
-    retry: false,
   });
   const scorecardQuery = useQuery({
     queryKey: analyticsKeys.scorecard({ value_class: query.value_class, start_period: query.start_period, end_period: query.end_period }),
@@ -178,26 +170,6 @@ export function OverallAnalysisPage() {
       })),
     [summary],
   );
-
-  /** The ABC curve: value classes sorted by demand, with the running share
-   *  of the total. A cumulative sum over values the API already returned -
-   *  not a new measurement. */
-  const pareto = useMemo(() => {
-    const rows = [...(summary?.by_value_class ?? [])];
-    const total = rows.reduce((sum, r) => sum + (r.demand_units || 0), 0);
-    let running = 0;
-    return rows
-      .sort((a, b) => (b.demand_units || 0) - (a.demand_units || 0))
-      .map((r) => {
-        running += r.demand_units || 0;
-        return {
-          name: r.name,
-          demand_units: r.demand_units,
-          sku_count: r.sku_count,
-          cumulative_pct: total > 0 ? Math.round((running / total) * 1000) / 10 : 0,
-        };
-      });
-  }, [summary]);
 
   /** SKUs ranked by ordered demand, with their unfilled share. The page had
    *  no SKU visual at all, which on a twenty-product workspace left out the
@@ -335,8 +307,6 @@ export function OverallAnalysisPage() {
     [ageRows],
   );
 
-  const exceptions = exceptionsQuery.data;
-
   const anyFilter = branch || valueClass || startPeriod || endPeriod;
   const rangeInvalid = !!(startPeriod && endPeriod && startPeriod > endPeriod);
 
@@ -350,14 +320,14 @@ export function OverallAnalysisPage() {
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[var(--color-text)]">
             Where the demand actually is.
           </h1>
-          <p className="mt-1 max-w-2xl text-sm text-[var(--color-text-muted)]">
+          <Explain label="About this page" variant="note">
             Ordered demand by branch, value class and month, against what was despatched. Click
             any column, slice or legend entry to filter the whole page, or{' '}
             <Link to="/series" className="text-link">
               go per branch and SKU
             </Link>{' '}
             for one series at a time.
-          </p>
+          </Explain>
         </div>
         <Link
           to="/assistant"
@@ -1358,96 +1328,6 @@ export function OverallAnalysisPage() {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-            </Panel>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <Panel
-              title="Concentration by Value Class"
-              accent={NAVY}
-              className="lg:col-span-2"
-              note="The ABC view: bars are ordered units, the line is the running share of total demand. It answers how much of demand sits in how few products."
-            >
-              <ResponsiveContainer width="100%" height={220}>
-                <ComposedChart data={pareto} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="name" tick={{ ...TICK, fontSize: 9 }} tickLine={false} interval={0} />
-                  <YAxis yAxisId="left" tick={TICK} width={48} />
-                  <YAxis
-                    yAxisId="right"
-                    orientation="right"
-                    tick={TICK}
-                    width={44}
-                    unit="%"
-                    domain={[0, 100]}
-                    ticks={[0, 50, 100]}
-                  />
-                  <Tooltip contentStyle={TOOLTIP} />
-                  <Legend wrapperStyle={{ fontSize: 9 }} />
-                  <Bar
-                    yAxisId="left"
-                    dataKey="demand_units"
-                    name="Ordered units"
-                    fill={NAVY}
-                    radius={[3, 3, 0, 0]}
-                    isAnimationActive={false}
-                  />
-                  <Line
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="cumulative_pct"
-                    name="Cumulative %"
-                    stroke={AMBER}
-                    strokeWidth={2}
-                    isAnimationActive={false}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </Panel>
-
-            <Panel
-              title="Exception Mix"
-              accent={RED}
-              note={
-                exceptions && !exceptions.empty
-                  ? `${num(exceptions.kpis.total_lines)} flagged branch × SKU lines. Severity is fixed per type, not scored.`
-                  : 'No exception condition in this selection.'
-              }
-            >
-              {exceptions && !exceptions.empty ? (
-                <ResponsiveContainer width="100%" height={220}>
-                  <PieChart>
-                    <Pie
-                      data={exceptions.by_severity}
-                      dataKey="lines"
-                      nameKey="name"
-                      innerRadius={45}
-                      outerRadius={80}
-                      paddingAngle={2}
-                      isAnimationActive={false}
-                    >
-                      {exceptions.by_severity.map((row) => (
-                        <Cell
-                          key={row.severity}
-                          fill={
-                            row.severity === 'critical'
-                              ? RED
-                              : row.severity === 'high'
-                                ? AMBER
-                                : SLATE
-                          }
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip contentStyle={TOOLTIP} formatter={(v: number) => `${num(v)} lines`} />
-                    <Legend wrapperStyle={{ fontSize: 9 }} />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : (
-                <p className="py-6 text-center text-[11px] text-[var(--color-text-muted)]">
-                  {exceptionsQuery.isLoading ? 'Reading exceptions…' : 'Nothing flagged.'}
-                </p>
-              )}
             </Panel>
           </div>
 

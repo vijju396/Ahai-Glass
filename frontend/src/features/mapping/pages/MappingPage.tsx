@@ -11,6 +11,7 @@ import { ApiError } from '@/api/client';
 import { RoleEditor } from '@/features/mapping/components/RoleEditor';
 import { PreprocessingPanel } from '@/features/mapping/components/PreprocessingPanel';
 import { PanelPanel } from '@/features/mapping/components/PanelPanel';
+import { Explain } from '@/components/ui/Explain';
 
 const FINDING_LABEL: Record<string, string> = {
   oracle_collision: 'Oracle No collision',
@@ -60,11 +61,11 @@ export function MappingPage() {
       <div className="page-head">
         <div className="eyebrow">03 &middot; Mapping &amp; Validation</div>
         <h1>Mapping &amp; Validation</h1>
-        <p className="lede">
+        <Explain label="About this page" variant="note">
           The canonical SKU key, reconciled against Oracle No, and the column
           roles that feed the model. Every join key is reported with the
           evidence for choosing it.
-        </p>
+        </Explain>
       </div>
 
       {!dataset && (
@@ -110,13 +111,13 @@ export function MappingPage() {
                 have hidden the 109 Oracle No collisions, which is the whole
                 finding. Saying so here stops the count reading as a
                 contradiction of the pages that are scoped. */}
-            <p className="hint" style={{ marginBottom: 'var(--sp-3)' }}>
+            <Explain variant="hint" style={{ marginBottom: 'var(--sp-3)' }}>
               These counts describe the <strong>source data</strong>, before any
               workspace or training restriction. They are deliberately unscoped:
               a key rule validated on a slice would hide the collisions it exists
               to find. The workspace and the trained series are narrower — see
               Demand Analytics and the Model Leaderboard for those.
-            </p>
+            </Explain>
             <div className="tiles">
               <div className="tile is-ok">
                 <div className="k">Canonical SKUs</div>
@@ -144,12 +145,12 @@ export function MappingPage() {
               </div>
             </div>
 
-            <div className="callout" style={{ marginTop: 'var(--sp-4)' }}>
+            <Explain variant="callout" style={{ marginTop: 'var(--sp-4)' }}>
               <div className="h">Rule applied</div>
               <p className="mono" style={{ fontSize: 12 }}>
                 {mapping.data.canonical_key_rule}
               </p>
-            </div>
+            </Explain>
             <div className="callout warn" style={{ marginTop: 'var(--sp-3)' }}>
               <div className="h">Why raw Oracle No is not the SKU key</div>
               <p>{mapping.data.why_not_oracle_no}</p>

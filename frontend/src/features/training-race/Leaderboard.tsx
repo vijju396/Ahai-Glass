@@ -28,16 +28,24 @@
  */
 import { useMemo, useState } from 'react';
 import { AMBER, GREEN, RED } from '@/components/ui/Dashboard';
+import { Explain } from '@/components/ui/Explain';
 import type { MonitorModel } from '@/api/training';
 
-type SortKey =
-  | 'accuracy_weighted'
-  | 'accuracy_series'
-  | 'mape_weighted'
-  | 'median_wape'
-  | 'median_mae'
-  | 'median_rmse';
+type SortKey = 'accuracy_weighted' | 'mape_weighted' | 'median_wape';
 
+/* Four measurements, not eight.
+ *
+ * MAE, RMSE, sMAPE and MASE all answer "how far out was it" in a fourth and
+ * fifth restatement of the same misses, and a reader comparing thirteen models
+ * across eight error columns is not making a better decision, only a slower
+ * one. What is left is the three questions that genuinely differ - how wrong in
+ * percent, how wrong in units, and in which direction - plus what actually got
+ * used. The dropped columns are not gone from the system: every one of them is
+ * still computed, still stored on the model run, and still on the API payload.
+ *
+ * `Series` went because the filters above the table do that job properly now:
+ * pick a branch and a SKU and you get that line's own board.
+ */
 const COLUMNS: Array<{
   key: SortKey | null;
   label: string;
@@ -46,16 +54,12 @@ const COLUMNS: Array<{
 }> = [
   { key: null, label: '#', title: 'Rank on whichever column the table is sorted by — volume-weighted accuracy by default. The champion selector itself ranks on MAPE', numeric: false },
   { key: null, label: 'Model', title: 'Registered model', numeric: false },
-  { key: 'accuracy_weighted', label: 'Accuracy', title: 'Volume-weighted: each scope counts in proportion to the units it actually sells, so a 99-unit line no longer counts the same as a 9,672-unit one. The unweighted figure is 100 − MAPE, and the MAPE column carries it', numeric: true },
-  { key: 'accuracy_series', label: 'Series', title: 'Accuracy at branch × SKU — the hardest grain, and most of the scopes', numeric: true },
-  { key: 'mape_weighted', label: 'MAPE', title: 'Volume-weighted mean absolute percentage error — the figure Accuracy is exactly 100 minus, so the two columns reconcile on the row. Zero actuals are excluded. The champion selector ranks on per-scope MAPE, which is a different question from this summary', numeric: true },
-  { key: 'median_wape', label: 'WAPE', title: 'Total absolute error over total absolute demand', numeric: true },
-  { key: 'median_mae', label: 'MAE', title: 'Mean absolute error, in units', numeric: true },
-  { key: 'median_rmse', label: 'RMSE', title: 'Root mean squared error — punishes large misses harder than MAE', numeric: true },
+  { key: 'accuracy_weighted', label: 'Accuracy', title: 'Volume-weighted: each line counts in proportion to the units it actually sells, so a 99-unit line no longer counts the same as a 9,672-unit one. The unweighted figure is 100 − MAPE, and the MAPE column carries it', numeric: true },
+  { key: 'mape_weighted', label: 'MAPE', title: 'How wrong, as a percentage of each month. Accuracy is exactly 100 minus this, so the two columns reconcile on the row', numeric: true },
+  { key: 'median_wape', label: 'WAPE', title: 'How wrong, in units: total units missed over total units ordered. The same question as MAPE, asked in units, which is why a model can lead one and trail the other', numeric: true },
   { key: null, label: 'Bias', title: 'Negative means the model forecasts below actual demand, which is the direction that causes a stockout', numeric: true },
-  { key: null, label: 'Scopes', title: 'Completed + ineligible + failed fits for this model', numeric: true },
-  { key: null, label: 'Wins', title: 'Scopes where this model was selected champion. This is what decides the forecast for a branch × SKU', numeric: true },
-  { key: null, label: 'Fit', title: 'Total fit time across every scope', numeric: true },
+  { key: null, label: 'Ran on', title: 'Lines this model completed, plus the ones it was ineligible for (+) or failed on (!)', numeric: true },
+  { key: null, label: 'Wins', title: 'Lines where this model was selected champion. This is what decides the forecast for a branch × SKU', numeric: true },
 ];
 
 const num = (v: number | null, digits = 2, suffix = '') =>
@@ -159,13 +163,8 @@ export function Leaderboard({
                   <td className="num" style={{ fontWeight: 600 }}>
                     {num(m.accuracy_weighted, 1, '%')}
                   </td>
-                  <td className="num" style={{ color: AMBER }}>
-                    {num(m.accuracy_series, 1, '%')}
-                  </td>
                   <td className="num">{num(m.mape_weighted, 1, '%')}</td>
                   <td className="num">{num(m.median_wape, 1, '%')}</td>
-                  <td className="num">{num(m.median_mae, 1)}</td>
-                  <td className="num">{num(m.median_rmse, 1)}</td>
                   <td
                     className="num"
                     style={{ color: (m.median_bias ?? 0) < 0 ? AMBER : undefined }}
@@ -183,7 +182,6 @@ export function Leaderboard({
                   >
                     {m.champion_count || '·'}
                   </td>
-                  <td className="num">{m.fit_seconds ? `${m.fit_seconds.toFixed(0)}s` : '—'}</td>
                 </tr>
               );
             })}
@@ -191,32 +189,49 @@ export function Leaderboard({
         </table>
       </div>
 
-      <p className="mt-2 text-[10px] leading-relaxed text-[var(--color-text-muted)]">
-        <strong>Accuracy is volume-weighted.</strong> Each scope counts in proportion to the
-        units it sells, so a line selling 99 units in 28 months no longer weighs as much as one
-        selling 9,672 — MAPE explodes on the small denominator, and being wrong by 7 units on a
-        3.5-unit month scores 200% while costing nobody anything. Weighting is worth about 22
-        points at series grain on this workspace. The unweighted figure is not hidden: it is
-        exactly 100 − <em>MAPE</em>, two columns along. <em>Series</em> isolates branch × SKU,
-        the hardest grain and most of the scopes.
-      </p>
-      <p className="mt-1 text-[10px] leading-relaxed text-[var(--color-text-muted)]">
-        Ranked on <strong>MAPE</strong> — the metric the champion selector uses. Accuracy is
-        <strong> 100 − MAPE</strong> clamped at zero, the same number restated, not a second
-        measurement. Every other column is decision context: a model can lead on MAPE and trail
-        on WAPE, and this table lets you see that. A negative bias means the model forecasts
-        <em> below</em> actual demand, which is the direction that causes a stockout.
-        Hover an Ineligible row for the requirement it did not meet.
-      </p>
+      <div className="mt-2">
+        <Explain variant="note" label="How to read these numbers">
+          <p>
+            <strong>Accuracy is volume-weighted.</strong> Each line counts in proportion to the
+            units it sells, so a line selling 99 units in 28 months no longer weighs as much as
+            one selling 9,672 — being wrong by 7 units on a 3.5-unit month scores 200% while
+            costing nobody anything. Weighting is worth about 22 points at branch × SKU grain on
+            this workspace. The unweighted figure is not hidden: it is exactly 100 − MAPE, the
+            next column along.
+          </p>
+          <p className="mt-1.5">
+            Champions are picked on <strong>MAPE</strong>, per line, not on this table&rsquo;s
+            average. That is why the model ranked first here can differ from the model named on
+            Forecasting: ranking first is an average across every line, a champion is chosen for
+            one. Pick a location and a SKU above to see that line&rsquo;s own board. A negative
+            bias means the model forecasts <em>below</em> real demand, which is the direction that
+            causes a stockout. Hover a row to read why a model did not run.
+          </p>
+        </Explain>
+      </div>
 
       {bestBaseline && (
-        <p className="mt-1 text-[10px] leading-relaxed" style={{ color: beaten > 0 ? AMBER : 'var(--color-text-muted)' }}>
-          <strong>Baseline check.</strong> The strongest non-registry baseline is{' '}
-          {bestBaseline.display_name} at {num(acc(bestBaseline), 1, '%')}, and it beats{' '}
-          <strong>{beaten} of {registry.length}</strong> registered models. Baselines are fitted
-          for exactly this comparison and can never be champion, so they are not rows above —
-          but a model losing to one is worth knowing.
-        </p>
+        /* Not collapsed when a baseline is winning. A registered model losing
+           to a moving average is the most useful thing on this page, and the
+           contract is explicit that a data defect is never put behind a click. */
+        beaten > 0 ? (
+          <p className="mt-1 text-[10px] leading-relaxed" style={{ color: AMBER }}>
+            <strong>Baseline check.</strong> The strongest non-registry baseline is{' '}
+            {bestBaseline.display_name} at {num(acc(bestBaseline), 1, '%')}, and it beats{' '}
+            <strong>{beaten} of {registry.length}</strong> registered models. Baselines are fitted
+            for exactly this comparison and can never be champion, so they are not rows above —
+            but a model losing to one is worth knowing.
+          </p>
+        ) : (
+          <div className="mt-1">
+            <Explain variant="hint" label="Baseline check">
+              The strongest non-registry baseline is {bestBaseline.display_name} at{' '}
+              {num(acc(bestBaseline), 1, '%')}, and it beats none of the {registry.length}{' '}
+              registered models. Baselines are fitted for exactly this comparison and can never be
+              champion, so they are not rows above.
+            </Explain>
+          </div>
+        )
       )}
     </div>
   );
