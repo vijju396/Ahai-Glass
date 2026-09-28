@@ -6,7 +6,7 @@ import { OverallAnalysisPage } from '@/features/overall/pages/OverallAnalysisPag
 import { SeriesAnalysisPage } from '@/features/series-analysis/pages/SeriesAnalysisPage';
 import { TrainingPage } from '@/features/training-explained/pages/TrainingPage';
 import { ForecastingPage } from '@/features/forecasting/pages/ForecastingPage';
-import { SupplyIntelligencePage } from '@/features/supply/pages/SupplyIntelligencePage';
+import { LeadTimePage } from '@/features/lead-time/pages/LeadTimePage';
 import { AssistantPage } from '@/features/assistant/pages/AssistantPage';
 import { RecommendationsPage } from '@/features/recommendations/pages/RecommendationsPage';
 
@@ -21,7 +21,11 @@ export function AppRoutes() {
         <Route path="series" element={createElement(SeriesAnalysisPage)} />
         <Route path="training" element={createElement(TrainingPage)} />
         <Route path="forecasting" element={createElement(ForecastingPage)} />
-        <Route path="supply" element={createElement(SupplyIntelligencePage)} />
+        {/* Supply Intelligence was removed from the UI on request (D-105).
+            Its page, its components and its endpoints are untouched under
+            `features/supply`, so the route can be restored by putting this
+            line and its nav item back. */}
+        <Route path="lead-time" element={createElement(LeadTimePage)} />
         <Route path="assistant" element={createElement(AssistantPage)} />
         <Route path="recommendations" element={createElement(RecommendationsPage)} />
         <Route

@@ -338,8 +338,59 @@ export interface Recommendation {
   verify_on: string | null;
 }
 
+/** One branch x SKU line: its own measured figures and its own sentence.
+ *
+ *  The numeric fields are computed and ranked by the backend before any model
+ *  sees them, so `urgency` is reproducible and auditable; `written_by_model`
+ *  says whether the prose beside them came from the model or a template. */
+export interface LineRecommendation {
+  scope_key: string;
+  branch: string;
+  sku: string;
+  /** critical | high | medium | cannot_recommend. Computed, never model-chosen. */
+  urgency: string;
+  urgency_reason: string;
+  headline: string;
+  explanation: string | null;
+  next_step: string | null;
+  evidence: string[];
+  written_by_model: boolean;
+
+  forecast_period: string | null;
+  service_level: number | null;
+  point_forecast: number | null;
+  quantile_forecast: number | null;
+  usable_stock: number | null;
+  on_order: number | null;
+  backorders: number | null;
+  days_of_cover: number | null;
+  lead_time_days: number | null;
+  protection_period_days: number | null;
+  order_up_to_level: number | null;
+  recommended_order: number | null;
+  model: string | null;
+  demand_segment: string | null;
+  /** Despatch fell short here, so ordered quantity is a lower bound on demand. */
+  is_censored: boolean;
+  target_source: string | null;
+  /** Set when no recommendation could be produced. Never the same as zero. */
+  unavailable_reason: string | null;
+  exceptions: Array<{ type?: string | null; units?: number | null }>;
+}
+
 export interface RecommendationsPayload {
   items: Recommendation[];
+  /** Per branch x SKU, already ranked by the backend. */
+  lines: LineRecommendation[];
+  /** Fails independently of `answered_by` — the two passes are separate calls. */
+  lines_answered_by: string | null;
+  /** Band totals across the whole workspace, so a trimmed list says what it hides. */
+  line_counts: Record<string, number>;
+  lines_total: number;
+  lines_shown: number;
+  /** Served from the completed-pass cache, and how old it is. */
+  cached?: boolean;
+  cache_age_seconds?: number;
   /** openai | deterministic_no_key | deterministic_after_provider_error */
   answered_by: string;
   sources: string[];
@@ -350,10 +401,21 @@ export interface RecommendationsPayload {
   provider_error: string | null;
 }
 
-export const recommendationKeys = { all: ['assistant', 'recommendations'] as const };
+export const recommendationKeys = {
+  all: ['assistant', 'recommendations'] as const,
+  /** Keyed by `prose` so the fast computed pass and the written pass are two
+   *  cache entries, not one overwriting the other. */
+  pass: (prose: boolean) => ['assistant', 'recommendations', prose] as const,
+};
 
-export function fetchRecommendations(): Promise<RecommendationsPayload> {
-  return getJson<RecommendationsPayload>('/assistant/recommendations');
+/**
+ * `prose: false` skips both model calls and returns in about six seconds
+ * instead of thirty-five. The ranking and every figure are identical — they
+ * were never the model's work — so the fast pass is not a degraded one, it is
+ * the same facts with templated wording (D-104).
+ */
+export function fetchRecommendations(prose = true): Promise<RecommendationsPayload> {
+  return getJson<RecommendationsPayload>('/assistant/recommendations', { prose });
 }
 
 // ----------------------------------------------------------------------
@@ -665,3 +727,107 @@ export const sampleMixKeys = {
 export function fetchSampleMix(): Promise<SampleMixPayload> {
   return getJson<SampleMixPayload>('/analytics/sample-mix');
 }
+
+// ----------------------------------------------------------------------
+// Lead time: stated (Location Master) against observed (Orders & Receipts)
+// ----------------------------------------------------------------------
+
+export interface LeadTimeObservedBranch {
+  branch: string;
+  /** Order lines this branch's observed figures were computed from. */
+  lines: number | null;
+  /** Location Master `Avg Lead Time`, as supplied. */
+  stated_avg: number | null;
+  stated_std: number | null;
+  transit: number | null;
+  service_factor: number | null;
+  truck_moq: number | null;
+  /** Mean of Despatch Date minus Order Date. A derived view of two existing
+   *  columns; neither source column is altered. */
+  observed_mean: number | null;
+  observed_median: number | null;
+  observed_std: number | null;
+  observed_p95: number | null;
+  observed_max: number | null;
+  /** observed_mean minus stated_avg. Positive means longer than stated. */
+  gap_mean: number | null;
+  gap_p95: number | null;
+  /** Why this branch is worth a look, or null. Not an assertion of error. */
+  review: string | null;
+  /** False when the supplied service factor is outside 0-5 and so cannot be one. */
+  service_factor_usable: boolean;
+}
+
+export interface LeadTimeSku {
+  sku: string;
+  lines: number;
+  mean: number;
+  median: number;
+  p95: number;
+  max: number;
+}
+
+/** One order month. Branch names appear as extra keys alongside the overall
+ *  mean, so a two-branch workspace charts both without a fixed schema. */
+export interface LeadTimeMonth {
+  period: string;
+  lines: number;
+  mean: number;
+  [branch: string]: string | number | null;
+}
+
+export interface LeadTimeBucket {
+  days: number;
+  label: string;
+  lines: number;
+  share_pct: number;
+}
+
+/** First third of the observed months against the last third, weighted by
+ *  line count. A measured change between two windows, not a fitted slope. */
+export interface LeadTimeTrend {
+  early_periods: [string, string];
+  late_periods: [string, string];
+  early_mean: number;
+  late_mean: number;
+  change_days: number;
+  change_pct: number;
+}
+
+export interface LeadTimeObservedPayload {
+  empty: boolean;
+  reason: string | null;
+  cached: boolean;
+  branches: LeadTimeObservedBranch[];
+  flagged_count: number;
+  scope: { branches?: string[]; skus?: number; restricted?: boolean };
+  scoped_lines: number;
+  by_sku: LeadTimeSku[];
+  by_month: LeadTimeMonth[];
+  distribution: LeadTimeBucket[];
+  trend: LeadTimeTrend | null;
+  workspace_scope?: WorkspaceScope | null;
+  notes: {
+    lines_total: number;
+    lines_usable: number;
+    lines_missing_a_date: number;
+    lines_out_of_range: number;
+    worst_excluded_days: number | null;
+    invoice_rows: number;
+    invoice_before_despatch: number;
+    invoice_same_day: number;
+    invoice_after_despatch: number;
+  };
+  definitions: Record<string, string>;
+  caveats: string[];
+}
+
+export const leadTimeObservedKeys = { all: ['analytics', 'lead-time-observed'] as const };
+
+export function fetchLeadTimeObserved(
+  refresh = false,
+  all = false,
+): Promise<LeadTimeObservedPayload> {
+  return getJson<LeadTimeObservedPayload>('/analytics/lead-time-observed', { refresh, all });
+}
+

@@ -29,13 +29,15 @@ describe('accessibility and navigation', () => {
 
   it('numbers the required destinations in order, without reassigning them', () => {
     // Was [1..10]. Three of the original ten were removed from the UI on
-    // request (D-052) and Scenario Planner (index 8) later on request too
-    // (D-086); the survivors keep their original numbers rather than being
-    // renumbered - the gaps are the record of what went.
+    // request (D-052), Scenario Planner (index 8) later on request too
+    // (D-086), and Supply Intelligence (index 7) after that, replaced in the
+    // Operations section by Lead Time (index 24, D-105); the survivors keep
+    // their original numbers rather than being renumbered - the gaps are the
+    // record of what went.
     // `REQUIRED_NAV_ITEMS` sorts by index; `REQUIRED_NAV_INDEXES` is in nav
     // order. Asserting on the sorted set is the meaningful check - that the
     // seven exist exactly once each and no number was reassigned.
-    expect(REQUIRED_NAV_ITEMS.map((item) => item.index)).toEqual([7, 13, 14, 20, 21, 22, 23]);
+    expect(REQUIRED_NAV_ITEMS.map((item) => item.index)).toEqual([13, 14, 20, 21, 22, 23, 24]);
     expect([...REQUIRED_NAV_INDEXES].sort((a, b) => a - b)).toEqual(
       REQUIRED_NAV_ITEMS.map((item) => item.index),
     );
@@ -49,6 +51,7 @@ describe('accessibility and navigation', () => {
     renderWithProviders(<AppShell />);
 
     for (const gone of [
+      'Supply Intelligence',
       'Executive Command Center',
       'Data & Model Monitoring',
       'Connections & Settings',
@@ -99,7 +102,7 @@ describe('accessibility and navigation', () => {
       'Per Branch & SKU',
       'Training',
       'Forecasting',
-      'Supply Intelligence',
+      'Lead Time',
       'AI Assistant',
       'AI Recommendations',
     ]) {

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -84,8 +84,68 @@ class Recommendation(BaseModel):
     verify_on: str | None = None
 
 
+class LineRecommendation(BaseModel):
+    """One branch x SKU line: its own figures, its own sentence.
+
+    The computed fields come from `line_recommendations` and are the same
+    whoever wrote the prose; `written_by_model` says whether the prose came
+    from the model or a template, because a reader deserves to know which.
+    """
+
+    scope_key: str
+    branch: str
+    sku: str
+    #: critical | high | medium | cannot_recommend. Computed, never model-chosen.
+    urgency: str
+    #: Why that band, in the application's own words.
+    urgency_reason: str
+    headline: str
+    explanation: str | None = None
+    next_step: str | None = None
+    evidence: list[str] = Field(default_factory=list)
+    written_by_model: bool = False
+
+    forecast_period: str | None = None
+    service_level: int | None = None
+    point_forecast: float | None = None
+    quantile_forecast: float | None = None
+    usable_stock: float | None = None
+    on_order: float | None = None
+    backorders: float | None = None
+    days_of_cover: float | None = None
+    lead_time_days: float | None = None
+    protection_period_days: float | None = None
+    order_up_to_level: float | None = None
+    recommended_order: float | None = None
+    model: str | None = None
+    demand_segment: str | None = None
+    #: Despatch fell short of the order here, so ordered quantity is a lower
+    #: bound on real demand. Never collapsed into the forecast.
+    is_censored: bool = False
+    target_source: str | None = None
+    #: Set when no recommendation could be produced. Not a zero.
+    unavailable_reason: str | None = None
+    exceptions: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class Recommendations(BaseModel):
     items: list[Recommendation]
+    #: Per branch x SKU, ranked by the application before any model saw them.
+    lines: list[LineRecommendation] = Field(default_factory=list)
+    #: `openai` | `deterministic_no_key` | `deterministic_after_provider_error`
+    #: | `no_lines`. Separate from `answered_by`: the two passes fail
+    #: independently, so one can be model-written while the other is not.
+    lines_answered_by: str | None = None
+    #: How many lines fell in each urgency band across the whole workspace,
+    #: so a trimmed list can say what it is not showing.
+    line_counts: dict[str, int] = Field(default_factory=dict)
+    lines_total: int = 0
+    lines_shown: int = 0
+    #: Whether this pass was served from the completed-pass cache, and how old
+    #: it is. Only a fully model-written pass is cached, so a provider blip is
+    #: never pinned in place.
+    cached: bool = False
+    cache_age_seconds: int = 0
     #: `openai` | `deterministic_no_key` | `deterministic_after_provider_error`.
     #: Surfaced so the UI can say which wrote the list.
     answered_by: str
@@ -118,10 +178,24 @@ def ask(payload: AssistantQuestion, db: Session = Depends(get_db)) -> Any:
     response_model=Recommendations,
     summary="What this application thinks is worth attention, explained",
 )
-def get_recommendations(db: Session = Depends(get_db)) -> Any:
+def get_recommendations(
+    prose: bool = Query(
+        True,
+        description=(
+            "False skips both model calls and returns the computed payload - "
+            "the ranking, every figure and each line's own reason - in about "
+            "six seconds instead of thirty-five. Nothing in it is less "
+            "accurate; only the wording is templated, and `answered_by` says "
+            "`computed_only`."
+        ),
+    ),
+    db: Session = Depends(get_db),
+) -> Any:
     """A standing recommendation pass over the same bounded read-only tools.
 
-    A GET with no parameters: it is one question, always the same one, so a
-    caller cannot steer which evidence gets gathered.
+    `prose` is the only parameter and it cannot steer which evidence is
+    gathered - the same five tools run every time, in the same order. It
+    chooses whether a model writes the wording over facts that were computed
+    either way (D-104).
     """
-    return recommendations.generate(db)
+    return recommendations.generate(db, prose=prose)

@@ -22,6 +22,7 @@ from app.core.errors import ConflictError
 from app.db.session import get_db
 from app.domain.ais import analytics
 from app.domain.ais.workspace import WorkspaceScope, resolve_workspace
+from app.services import lead_time_service
 from app.models.mappings import PreprocessingRun
 from app.models.panel import PanelBuild
 
@@ -237,6 +238,49 @@ def _branch_dim(db: Session) -> "pd.DataFrame":
             remediation="Re-run preprocessing, then reload this page.",
         )
     return pd.read_parquet(path)
+
+
+@router.get(
+    "/lead-time-observed",
+    summary="Location Master's stated lead time beside what the order dates show",
+)
+def get_lead_time_observed(
+    refresh: bool = Query(False),
+    all_branches: bool = Query(
+        False,
+        alias="all",
+        description=(
+            "Ignore the workspace restriction and compare every branch in both "
+            "files. The network view is where the four zero-day branches are "
+            "visible."
+        ),
+    ),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """A monitoring view over two files that are read and never written.
+
+    `Avg Lead Time` from Location Master beside the mean of Despatch Date minus
+    Order Date from Orders & Receipts, per branch. Both columns already exist;
+    subtracting one date from another is a derived view, not an edit (D-105).
+
+    Deliberately **not** workspace-restricted. The point of the view is to let
+    the client check their own master against their own order history across
+    the whole network, and hiding 51 of 53 branches would defeat it. Every
+    figure is labelled per branch, so nothing here can read as a national
+    total.
+
+    Scoped to the workspace by default, like every other page, so a two-branch
+    figure can never read as a national one. `all=true` drops the restriction.
+
+    `refresh=true` re-parses the order file, which takes about two minutes.
+    """
+    scope = resolve_workspace(db)
+    payload = lead_time_service.build(
+        refresh=refresh,
+        branches=None if all_branches else (list(scope.branches) if scope.branches else None),
+        skus=None if all_branches else (list(scope.skus) if scope.skus else None),
+    )
+    return _stamp(payload, scope)
 
 
 @router.get("/lead-time", summary="Per-branch lead time, its variability, and what looks wrong")

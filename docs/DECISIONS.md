@@ -4084,3 +4084,243 @@ for the run being asked about, `leaderboard_payload` serves the board that
 selection stored — otherwise the screen would rank a model first that the
 forecast does not use, and contradict itself.
 
+
+## D-104 — AI Recommendations answer at branch × SKU, not at the network
+
+The page answered at the network. "50 branch × SKU lines are flagged critical"
+is a count of lines, never a line: a planner could read the whole page and
+still not know what to order. The grain a planner acts at is branch × SKU, and
+the facts already carried it — `inventory_recommendations` returns per-line
+rows and `stock_exceptions` returns per-line worst cases. They were being
+summed away before the model saw them.
+
+`app/domain/ais/line_recommendations.py` keeps the line intact: one record per
+branch × SKU with that line's own forecast, stock, cover and replenishment
+figures. It joins, ranks and labels; it does not re-derive an order quantity
+and never scales a forecast. Every figure is copied from what the inventory
+service already computed, and a figure the service could not produce stays
+`None` with the service's own `unavailable_reason` beside it.
+
+**Ranking is the application's, not the model's.** `_urgency` assigns the band
+from measured fields and the reason travels with the line, so the order is
+reproducible between runs and auditable against Supply Intelligence. The model
+is asked only to explain a line that was already ranked. The test order is
+load-bearing: stock is tested before cover, because a zero-stock line whose
+cover happens to be null would otherwise fall through to `medium`.
+
+`cannot_recommend` is deliberately not a severity on the same axis as
+critical/high/medium. A line the service could not serve is the *absence* of a
+recommendation, not a mild one, and it renders as its own state with the
+reason — never as a recommended order of zero.
+
+**Written text is joined to its line by `scope_key`, never by position.** A
+model that dropped or reordered a line would otherwise have its paragraph
+printed against a different branch × SKU — a confident, well-evidenced
+statement about the wrong location, which is the worst thing this page could
+do. A line the model did not write about keeps its computed facts and says the
+prose is missing.
+
+### Two defects found while building this
+
+**The page had never once been written by the model.** The network pass shared
+`ai_max_output_tokens` (900) with the Q&A assistant. Five items of title,
+observation, a 2–4 sentence explanation and evidence do not fit: the JSON was
+truncated mid-string at ~3,480 characters, `json.loads` raised, and `generate`
+fell back to templates on every call while the badge said
+`deterministic_after_provider_error`. The pass now has its own
+`NETWORK_OUTPUT_TOKENS = 2200`; raising the shared setting would have changed
+the assistant's answer length, which is a different question.
+
+**`written_by_model` was true for template-written lines.** `_merge_lines` set
+it from `text is not None`, and the template fallback also produces text. The
+flag exists precisely to tell a reader which wrote the sentence, so reporting
+templates as model-written defeated it. Now passed explicitly as `by_model`.
+
+The two passes are separate calls with separate budgets and timeouts
+(`LINE_OUTPUT_TOKENS = 3000`, `LINE_TIMEOUT_SECONDS = 120`, against the shared
+30-second timeout that was silently timing the line pass out). They fail
+independently, which is the point of splitting them: a truncated line list no
+longer costs the page its network items, and `lines_answered_by` is reported
+separately from `answered_by`.
+
+Network items are kept above the per-line list. Drift and data-quality
+findings genuinely are network-level and have nowhere else to live.
+
+The top 12 lines are written; the cut happens after ranking, never before, and
+the band counts across all ranked lines are reported so a trimmed list says
+what it is not showing.
+
+### Making it fast without making it less accurate
+
+The page took ~35 seconds and showed a skeleton for all of it. Measured, the
+work splits cleanly:
+
+```
+gather facts (no model)    4.99 s
+rank lines   (no model)    0.78 s
+two model calls           ~29 s
+```
+
+Everything a planner acts on — the ranking, every figure, each line's
+`urgency_reason` — is in the first 5.8 seconds. Only the wording needed the
+model. Three changes, in order of effect:
+
+- **`prose=false` returns the computed pass.** The page asks for it first and
+  renders it, then asks again for the written version and swaps the sentences
+  in. The figures do not move between the two, because they were never the
+  model's to produce. `answered_by` is `computed_only` so nothing pretends a
+  model wrote it.
+- **The two model calls run in a pool.** They share no state and neither reads
+  the other's result, so sequencing them only ever added a round trip.
+- **A completed pass is cached for 15 minutes**, keyed on the newest completed
+  forecast run and panel build, so a new run invalidates it immediately.
+  Only a fully model-written pass is cached: caching a fallback would pin a
+  provider blip in place for the whole TTL and the page would keep saying the
+  model could not be reached long after it could.
+
+```
+prose=false     5 s
+written        30 s   (was ~35 s)
+cached          2 s
+```
+
+The honest limit: the line pass alone is ~28 s, so parallelism bought less
+than halving. What actually fixed the complaint is that nobody waits on it any
+more.
+
+
+## D-105 — Supply Intelligence out of the UI; lead time compared against the order dates
+
+Supply Intelligence was removed from the nav and the router on request. Its
+page, components and endpoints are untouched under `features/supply`, so the
+route can be restored by putting the item and index 7 back. **Lead Time**
+(index 24) takes its place in the Operations section.
+
+The new page puts two things that already exist in the client's own files
+beside each other, and edits neither:
+
+- Location Master: `Avg Lead Time`, `Std. LeadTime`, `Transit Lead Time`,
+  `Service Factor`, `Truck (MoQ)` — static, supplied per branch.
+- Orders & Receipts: `Order Date`, `Despatch Date`, `Invoice Date` — raw
+  timestamps per line.
+
+Subtracting one existing date column from another is the same kind of derived
+view `MRP Value` already is in that file (Quantity × MRP Rate). It reads two
+columns together; it changes neither.
+
+**It compares, it does not correct.** No master value is rewritten, no order
+line is dropped, and nothing here feeds a forecast, a recommendation or a
+safety-stock figure. A gap is put on screen for the client to judge, because
+the master's number may be a deliberate planning allowance rather than a claim
+about observed timing — and this application cannot know which.
+
+**Not workspace-restricted, deliberately.** The point is to check a master
+against an order history across the network; showing 2 of 53 branches would
+defeat it. Every row is labelled by branch, so no figure can read as a national
+total.
+
+### What the measurement found
+
+All 53 branches join. 775,628 of 775,912 order lines produce a usable
+duration.
+
+```
+stated mean across branches   4.25 days
+observed mean across branches 3.15 days
+branches where observed > stated   12 of 53
+
+RUDRAPUR             stated 0.0   observed 4.75   p95  8   gap +4.75   2,034 lines
+MANDI                stated 0.0   observed 3.37   p95  5   gap +3.37     153 lines
+THIRUVANANTHAPURAM   stated 0.0   observed 3.23   p95  6   gap +3.23  12,127 lines
+GOA                  stated 0.0   observed 2.76   p95  5   gap +2.76   3,973 lines
+DELHI-1              stated 3.0   observed 4.08   p95 10   gap +1.08  25,099 lines
+```
+
+Four branches state a **zero-day** lead time and take 2.8–4.8 days. The
+observed spread is also routinely wider than the stated one — DELHI-1 carries a
+stated `Std. LeadTime` of 0.72 against an observed 2.80, and a p95 of 10 days
+against a stated 3-day average.
+
+### Three things this refuses to do
+
+**Despatch → Invoice is not a third leg.** 285,995 of 708,317 lines — 40% — are
+invoiced *before* despatch, and the negatives cluster at exactly −1 and −2 days
+rather than scattering. That is a billing practice, not corruption, so the page
+reports the leg's shape (before / same day / after) and refuses to average it.
+A "despatch to invoice" duration over those rows would mean nothing.
+
+**`Service Factor` is not plugged into a formula.** It is a z-score — 1.0 is
+about 84% service, 1.65 about 95%. It reads **1.0 for 55 of 57 rows**, so using
+it as-is in a reorder point would plan to a *lower* service level than the q95
+the application already uses. One row carries **225**, which cannot be a
+service factor: that row has no branch name and is the file's own totals line,
+excluded by requiring a branch name.
+
+**216 order lines are excluded and counted, not dropped silently.** The worst
+carries a despatch date of 2002-05-26 against a 2025 order.
+
+### Cost
+
+Parsing 775,912 rows out of `.xlsx` takes ~129 s, which a page load cannot do.
+The per-branch aggregate is 57 rows, so it is computed once and cached to
+parquet under `runtime/storage`, keyed on a fingerprint of both source files.
+Cached reads are 0.09 s. The fingerprint is size and mtime rather than a hash,
+because hashing a 90 MB workbook costs most of what parsing costs.
+
+Nothing in this work writes to `data/source/`.
+
+### Scoped to the workspace, and charted
+
+Requested next: run the analysis on the two branches and twenty SKUs, with
+graphs. The page now applies the workspace restriction like every other page —
+a two-branch figure can never read as a national one, and the banner states it.
+`?all=true` keeps the network comparison, which is where the four zero-day
+branches live.
+
+The restriction is applied to the per-line durations **before** any aggregate
+is taken. Restricting afterwards would compute over 53 branches and then label
+the result with two names, which is the exact failure `workspace_scope` exists
+to prevent (D-049). The per-line frame is what is cached, so switching scope
+does not re-parse 775,912 rows.
+
+SKU comes from `Oracle No`, the order file's master join key (D-017), not
+`Material Code`. All 20 workspace SKUs appear in the order file; the scoped
+slice is 6,484 lines.
+
+**The measurement that came out of it:**
+
+```
+BENGALURU   stated 4.0   observed 3.72   p95  6   gap -0.28   3,752 lines
+DELHI-1     stated 3.0   observed 4.13   p95 10   gap +1.13   2,732 lines
+
+first third of months  3.42 d  (2025-04 .. 2025-08)
+last third of months   4.92 d  (2026-03 .. 2026-07)
+change                +43.9%
+```
+
+Monthly, the deterioration is in both branches and severe in one:
+
+```
+            2025-04   2026-07
+BENGALURU      3.47      5.28   (stated 4.0)
+DELHI-1        2.93      9.26   (stated 3.0)
+```
+
+DELHI-1's most recent month runs at **three times** its stated planning figure.
+That is a description of what the order dates recorded, not a forecast, and the
+page says so.
+
+**Four charts, each answering something the table cannot.** The trend is
+monthly points rather than a rolling mean, because a smoothed line blurs the
+month a change began. The distribution's last bucket is a catch-all so the tail
+shows as a tail. Stated against observed is **grouped, never stacked** —
+stacking would assert the bars add to something, and a supplied planning figure
+plus a measured duration do not. By SKU carries no stated counterpart, because
+Location Master is branch-grained and inventing one would be a fabrication.
+
+`trend` is the first third of the months against the last third, weighted by
+line count, and is deliberately not a fitted slope: a slope implies a model of
+how lead time moves, and there is none here. Weighting matters — a month with
+one line must not swing the window like one with a thousand, and a test pins
+that.
+
