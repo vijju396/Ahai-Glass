@@ -4104,6 +4104,119 @@ The volume-weighted pair needed a WAPE at the window: `WindowScore` now
 accumulates summed absolute error and summed actual (`pooled_wape()`), and
 `add()` took two optional volume arguments while staying backward compatible.
 
+
+## D-104 (arrived from `origin/main`) — AI Recommendations answer at branch × SKU, not at the network
+
+> **The number collides, deliberately left visible.** The same split that
+> produced two D-105s produced two D-104s. The entry above is this line of
+> work's D-104 (the six-month accuracy headline), cited by
+> `accuracy_windows.py` and `CombinedAccuracy`. The entry below is
+> `origin/main`'s D-104, cited by `recommendations.py`, the recommendations
+> route and `RecommendationList`. Renumbering either one breaks citations
+> already in the source, so both are kept and the collision is recorded.
+> Which number survives is a call for whoever settles the two branches.
+
+The page answered at the network. "50 branch × SKU lines are flagged critical"
+is a count of lines, never a line: a planner could read the whole page and
+still not know what to order. The grain a planner acts at is branch × SKU, and
+the facts already carried it — `inventory_recommendations` returns per-line
+rows and `stock_exceptions` returns per-line worst cases. They were being
+summed away before the model saw them.
+
+`app/domain/ais/line_recommendations.py` keeps the line intact: one record per
+branch × SKU with that line's own forecast, stock, cover and replenishment
+figures. It joins, ranks and labels; it does not re-derive an order quantity
+and never scales a forecast. Every figure is copied from what the inventory
+service already computed, and a figure the service could not produce stays
+`None` with the service's own `unavailable_reason` beside it.
+
+**Ranking is the application's, not the model's.** `_urgency` assigns the band
+from measured fields and the reason travels with the line, so the order is
+reproducible between runs and auditable against Supply Intelligence. The model
+is asked only to explain a line that was already ranked. The test order is
+load-bearing: stock is tested before cover, because a zero-stock line whose
+cover happens to be null would otherwise fall through to `medium`.
+
+`cannot_recommend` is deliberately not a severity on the same axis as
+critical/high/medium. A line the service could not serve is the *absence* of a
+recommendation, not a mild one, and it renders as its own state with the
+reason — never as a recommended order of zero.
+
+**Written text is joined to its line by `scope_key`, never by position.** A
+model that dropped or reordered a line would otherwise have its paragraph
+printed against a different branch × SKU — a confident, well-evidenced
+statement about the wrong location, which is the worst thing this page could
+do. A line the model did not write about keeps its computed facts and says the
+prose is missing.
+
+### Two defects found while building this
+
+**The page had never once been written by the model.** The network pass shared
+`ai_max_output_tokens` (900) with the Q&A assistant. Five items of title,
+observation, a 2–4 sentence explanation and evidence do not fit: the JSON was
+truncated mid-string at ~3,480 characters, `json.loads` raised, and `generate`
+fell back to templates on every call while the badge said
+`deterministic_after_provider_error`. The pass now has its own
+`NETWORK_OUTPUT_TOKENS = 2200`; raising the shared setting would have changed
+the assistant's answer length, which is a different question.
+
+**`written_by_model` was true for template-written lines.** `_merge_lines` set
+it from `text is not None`, and the template fallback also produces text. The
+flag exists precisely to tell a reader which wrote the sentence, so reporting
+templates as model-written defeated it. Now passed explicitly as `by_model`.
+
+The two passes are separate calls with separate budgets and timeouts
+(`LINE_OUTPUT_TOKENS = 3000`, `LINE_TIMEOUT_SECONDS = 120`, against the shared
+30-second timeout that was silently timing the line pass out). They fail
+independently, which is the point of splitting them: a truncated line list no
+longer costs the page its network items, and `lines_answered_by` is reported
+separately from `answered_by`.
+
+Network items are kept above the per-line list. Drift and data-quality
+findings genuinely are network-level and have nowhere else to live.
+
+The top 12 lines are written; the cut happens after ranking, never before, and
+the band counts across all ranked lines are reported so a trimmed list says
+what it is not showing.
+
+### Making it fast without making it less accurate
+
+The page took ~35 seconds and showed a skeleton for all of it. Measured, the
+work splits cleanly:
+
+```
+gather facts (no model)    4.99 s
+rank lines   (no model)    0.78 s
+two model calls           ~29 s
+```
+
+Everything a planner acts on — the ranking, every figure, each line's
+`urgency_reason` — is in the first 5.8 seconds. Only the wording needed the
+model. Three changes, in order of effect:
+
+- **`prose=false` returns the computed pass.** The page asks for it first and
+  renders it, then asks again for the written version and swaps the sentences
+  in. The figures do not move between the two, because they were never the
+  model's to produce. `answered_by` is `computed_only` so nothing pretends a
+  model wrote it.
+- **The two model calls run in a pool.** They share no state and neither reads
+  the other's result, so sequencing them only ever added a round trip.
+- **A completed pass is cached for 15 minutes**, keyed on the newest completed
+  forecast run and panel build, so a new run invalidates it immediately.
+  Only a fully model-written pass is cached: caching a fallback would pin a
+  provider blip in place for the whole TTL and the page would keep saying the
+  model could not be reached long after it could.
+
+```
+prose=false     5 s
+written        30 s   (was ~35 s)
+cached          2 s
+```
+
+The honest limit: the line pass alone is ~28 s, so parallelism bought less
+than halving. What actually fixed the complaint is that nobody waits on it any
+more.
+
 ## D-105 — The panel is built and modelled at weekly grain
 
 Requested: "complete the weekly data using in the training and forecasting",

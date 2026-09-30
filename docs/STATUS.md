@@ -4305,3 +4305,208 @@ New tests: `frontend/src/features/recommendations/__tests__/LineDrillDown.test.t
 Tests: **1,072 backend, 254 frontend, all passing.** `tsc --noEmit` clean.
 Verified in the browser: filters, disclosure, paging, no console errors, no
 sideways overflow at 375 px.
+
+---
+
+*The two sections below arrived from `origin/main` in the merge of 30
+September 2026. They record its own D-104 and D-105, which collide with this
+tree's numbers for both — see the two "(arrived from `origin/main`)" entries
+in `docs/DECISIONS.md`. Its test counts (970 backend, 244 frontend) are its
+own and are superseded by the 1,072 / 254 above.*
+## AI Recommendations at branch × SKU — 22 September 2026 (D-104)
+
+Requested: recommendations per branch and SKU, rather than combining all SKUs.
+
+Reproduced first. The live page returned two items:
+
+```
+CRITICAL  Critical supply exceptions are open
+          "50 branch x SKU lines are flagged critical."
+MEDIUM    Recent demand has shifted against the earlier history
+          "National demand has shifted +35.9% over the last 6 months."
+```
+
+A count of lines and a national percentage. Nothing a planner can order
+against. The per-line facts already existed — `inventory_recommendations`
+returns 40 branch × SKU rows with forecast, stock, cover, lead time and
+order-up-to — they were being summed away before the model saw them.
+
+### Built
+
+`app/domain/ais/line_recommendations.py` keeps the line intact and ranks it
+deterministically from measured fields, before any model sees it. The model is
+asked only to explain a line that was already ranked, and written text is
+joined back to its line by `scope_key` rather than by position.
+
+```
+POST → GET /api/assistant/recommendations   now also returns:
+  lines[]            one record per branch x SKU, ranked
+  line_counts        band totals across all 40 ranked lines
+  lines_total / lines_shown
+  lines_answered_by  separate from answered_by - the two passes fail independently
+```
+
+Live, both passes model-written, 34 s:
+
+```
+network : 5 items          | openai
+lines   : 12 of 40 shown   | openai
+bands   : 11 critical, 29 high, 0 medium, 0 cannot_recommend
+
+BENGALURU × FG.BA5.LFH.GCG2120000   Critical   Censored demand
+  No usable stock against a q95 planning demand of 1,462 units a month.
+  q95 demand 1,462 · point 652 · usable stock 0 · cover 0 d · protection 34 d
+  · recommended order 1,633
+```
+
+### Two defects found on the way
+
+**The page had never once been written by the model.** The network pass shared
+`ai_max_output_tokens` (900) with the Q&A assistant; five items do not fit, the
+JSON was truncated mid-string at ~3,480 characters, `json.loads` raised, and
+every call silently fell back to templates. Own budget now
+(`NETWORK_OUTPUT_TOKENS = 2200`).
+
+**`written_by_model` was true for template-written lines** — `_merge_lines` set
+it from `text is not None`, and templates also produce text. Caught by a test
+written to assert the opposite. The flag exists to tell a reader which wrote
+the sentence, so this defeated it entirely.
+
+The line pass was also timing out against the shared 30-second limit; it now
+has `LINE_TIMEOUT_SECONDS = 120` and `LINE_OUTPUT_TOKENS = 3000`.
+
+### Known and stated
+
+- **Load time fixed.** Measured: facts 4.99 s, ranking 0.78 s, model calls
+  ~29 s. The page now renders the computed pass (`prose=false`, 5 s) and swaps
+  the wording in when the written pass lands; the two model calls run in a
+  pool, and a completed pass is cached for 15 minutes keyed on the forecast
+  run and panel build.
+
+```
+prose=false     5 s     figures and ranking, final
+written        30 s     wording replaces the templates
+cached          2 s
+```
+
+  The figures are identical across both passes, which a test asserts — if the
+  fast pass ever differed it would have become a degraded pass rather than an
+  early one.
+- Network items are kept above the per-line list, as requested. They now tend
+  to name lines too, because the facts carry `worst_lines`.
+- The top 12 of 40 lines are written; the cut is after ranking, and the band
+  counts across all 40 are shown so the page says what it is not showing.
+- Ranking thresholds (`usable_stock <= 0`, `cover < protection`) are stated
+  rules, not learned ones. There is no inventory-policy backtest to validate
+  them against, and the page does not claim otherwise.
+
+```
+backend 939 passed · frontend 243 passed (21 files) · tsc --noEmit clean
+```
+
+## Supply Intelligence removed; lead time analysed fresh — 23 September 2026 (D-105)
+
+Requested: remove Supply Intelligence from the UI, do a fresh lead-time
+analysis using the fields that already exist in both client files.
+
+**Removed.** Supply Intelligence is out of the nav and the router. Its page,
+components, tests and endpoints are untouched under `features/supply`; index 7
+is now a gap in `REQUIRED_NAV_INDEXES`, and the accessibility test asserts no
+link to it survives anywhere in the shell. **Lead Time** (index 24) takes its
+place in Operations.
+
+**Built.** `GET /api/analytics/lead-time-observed` puts Location Master's
+stated figures beside the mean of `Despatch Date − Order Date` per branch.
+Neither source file is written to; the aggregate is cached to parquet under
+`runtime/storage`.
+
+```
+cold build   128.8 s   (775,912 rows out of .xlsx)
+cached read    0.09 s
+branches          57   all 53 order branches join the master
+usable lines 775,628 of 775,912
+flagged           16
+```
+
+### Measured
+
+```
+stated mean across branches   4.25 days
+observed mean across branches 3.15 days
+observed > stated             12 of 53 branches
+
+RUDRAPUR             stated 0.0  observed 4.75  p95  8  gap +4.75   2,034 lines
+MANDI                stated 0.0  observed 3.37  p95  5  gap +3.37     153 lines
+THIRUVANANTHAPURAM   stated 0.0  observed 3.23  p95  6  gap +3.23  12,127 lines
+GOA                  stated 0.0  observed 2.76  p95  5  gap +2.76   3,973 lines
+DELHI-1              stated 3.0  observed 4.08  p95 10  gap +1.08  25,099 lines
+```
+
+Four branches state a zero-day lead time and take 2.8–4.8 days. Observed spread
+is wider than stated almost everywhere — DELHI-1 states a std of 0.72 against
+an observed 2.80.
+
+### Three findings that changed what got built
+
+- **Despatch → Invoice is not a sequential leg.** 285,995 of 708,317 lines
+  (40%) are invoiced *before* despatch, clustered at −1 and −2 days. Reported
+  as a shape; never averaged into a duration.
+- **`Service Factor` cannot be used as-is.** It reads 1.0 on 55 of 57 rows
+  (≈84% service, below the q95 already in use), and one row carries 225 — the
+  file's own totals line, which has no branch name and is excluded.
+- **216 order lines carry impossible durations**, worst a 2002 despatch against
+  a 2025 order. Excluded and counted, not dropped silently.
+
+### Stated limits
+
+- This is a comparison, not a correction. Nothing feeds a forecast, a
+  recommendation or safety stock; the protection period still uses the master's
+  average alone.
+- Order → Despatch is not end-to-end replenishment time. The file has no
+  goods-receipt date, so the leg after despatch is not observable.
+- A gap is not proof of error — the master figure may be a planning allowance.
+  The page says so.
+
+```
+backend 958 passed · frontend 244 passed (21 files) · tsc --noEmit clean
+```
+
+## Lead time scoped to the demo workspace, with charts — 23 September 2026 (D-105)
+
+Requested: run the lead-time analysis on the 2 branches and 20 SKUs, and add
+graphs.
+
+The page is now workspace-scoped like every other page, with the banner
+stating it; `?all=true` keeps the network view. The restriction is applied to
+the per-line durations before any aggregate, and the per-line frame is what is
+cached, so changing scope costs nothing.
+
+```
+scope        BENGALURU, DELHI-1 · 20 SKUs · 6,484 of 775,628 lines
+SKU join     Oracle No (D-017) — all 20 workspace SKUs present
+
+BENGALURU    stated 4.0  observed 3.72  p95  6  gap -0.28  3,752 lines
+DELHI-1      stated 3.0  observed 4.13  p95 10  gap +1.13  2,732 lines
+```
+
+**The finding: lead time is deteriorating, sharply in DELHI-1.**
+
+```
+first third of months  3.42 d  (2025-04 .. 2025-08)
+last third of months   4.92 d  (2026-03 .. 2026-07)   +43.9%
+
+             2025-04   2026-07
+BENGALURU       3.47      5.28   against a stated 4.0
+DELHI-1         2.93      9.26   against a stated 3.0
+```
+
+DELHI-1's most recent month is three times its stated planning figure. This is
+what the order dates recorded — not a forecast, and the page says so.
+
+Four charts: monthly trend (with the stated average as a reference line),
+duration distribution, stated-vs-observed grouped bars, and per-SKU. Verified
+in the browser: 16 months, 32 line points, 62 bars, both trend lines rising.
+
+```
+backend 970 passed · frontend 244 passed (21 files) · tsc --noEmit clean
+```
