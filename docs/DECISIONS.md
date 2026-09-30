@@ -4084,3 +4084,1109 @@ for the run being asked about, `leaderboard_payload` serves the board that
 selection stored — otherwise the screen would rank a model first that the
 forecast does not use, and contradict itself.
 
+
+## D-104 — The combined accuracy panel leads with the six-month total
+
+Refines D-098. The panel (`CombinedAccuracy`, on the landing page and Training
+at All/All) still shows metric *types*, but the headline number is now the
+accuracy at the recommended window — the six-month total — not the all-lines
+champion-average median. That is the 86.8% figure a plan is actually held to,
+shown with its average miss (13.2%) and a volume-weighted pair (82.6% accuracy
+/ 17.4% miss). The backend returns it as a new `combined_metrics_best` block on
+`accuracy-windows`, computed from the recommended window's own score; the
+all-lines median stays as `combined_metrics` but is no longer the headline. The
+panel's note names the window, because a pooled six-month median is a middle
+line, not a floor — 19 of 40 lines clear 85% over it, and the four green marks
+(D-099) are the stricter, displayed-accuracy set. The "Which one should I read?"
+explanation was removed ("no need of reasons").
+
+The volume-weighted pair needed a WAPE at the window: `WindowScore` now
+accumulates summed absolute error and summed actual (`pooled_wape()`), and
+`add()` took two optional volume arguments while staying backward compatible.
+
+## D-105 — The panel is built and modelled at weekly grain
+
+Requested: "complete the weekly data using in the training and forecasting",
+and, when asked how weekly and monthly should coexist, **weekly replaces
+monthly** — forecasts produced per week and added up to months and to the
+six-month total for display.
+
+`AIS_PANEL_GRAIN` selects it. The grain is not a flag sprinkled through the
+pipeline: `app/ml/features/grain.py` is the only module that knows what a
+period *is*, and every other module treats a period as an opaque integer
+counter and does integer arithmetic on it. That was already nearly true before
+weekly existed — `panel.month_index`/`index_to_period` were the sole month-aware
+pair in the ML layer and `ais_preprocessing.month_key` the sole date-to-period
+function in ingestion — so weekly is those functions taught a second
+vocabulary, not a second pipeline.
+
+Three specifics that are easy to get wrong and were verified rather than
+assumed:
+
+- **The week index is derived from the ordinal of the week's Monday**, not from
+  `year * 52 + week`. ISO years are 52 or 53 weeks long — 2026 has 53 — and the
+  naive form silently collides on the long ones. Round-trip and monotonicity are
+  asserted across 2024–2027.
+- **A week reports under the month containing its Thursday**, the same rule that
+  fixes its ISO year. Splitting a week's units across two months by day count
+  would invent a daily profile the source does not contain. Because no week is
+  split, the month totals add back to the weekly totals exactly.
+- **The mandated origins are derived, not typed.** The monthly contract is
+  training through 2025-09 and 2026-01; the weekly pair is the last ISO week
+  reporting under each of those months, which is `2025-W39` and `2026-W05`.
+  Hand-typing gave `2025-W40`, which runs 29 Sep–5 Oct with its Thursday on
+  2 October and therefore reports as *October* — training through it would have
+  handed the weekly run an extra week of real time the monthly run never saw,
+  and every comparison between the two would have been unfair by a week.
+
+What weekly buys, measured on the real panel range: **78 training observations
+at the primary origin and 96 at the second, against 18 and 22 monthly.**
+
+**No accuracy figure is claimed here.** Every measured number in the app and
+docs was produced at monthly grain and is stale the moment this lands. It has
+to be re-measured before any of it is quoted again.
+
+## D-105 (arrived from `origin/main`) — Supply Intelligence out of the UI; lead time compared against the order dates
+
+> **The number collides, deliberately left visible.** Two branches numbered
+> their decisions independently, and both reached 105. The entry above is this
+> line of work's D-105 (weekly grain), cited by `app/ml/features/grain.py`,
+> `panel_service` and the grain modules. The entry below is `origin/main`'s
+> D-105, cited seven times by the lead-time files that came with it
+> (`lead_time_observed.py`, `lead_time_service.py`, the `/lead-time-observed`
+> route, `LeadTimePage`, `navigation.ts`, `routes.tsx`). Renumbering either one
+> breaks citations already in the source, so the collision is recorded rather
+> than papered over. Which number survives is a call for whoever merges the two
+> branches; the same collision exists at D-104.
+
+Supply Intelligence was removed from the nav and the router on request. Its
+page, components and endpoints are untouched under `features/supply`, so the
+route can be restored by putting the item and index 7 back. **Lead Time**
+(index 24) takes its place in the Operations section.
+
+The new page puts two things that already exist in the client's own files
+beside each other, and edits neither:
+
+- Location Master: `Avg Lead Time`, `Std. LeadTime`, `Transit Lead Time`,
+  `Service Factor`, `Truck (MoQ)` — static, supplied per branch.
+- Orders & Receipts: `Order Date`, `Despatch Date`, `Invoice Date` — raw
+  timestamps per line.
+
+Subtracting one existing date column from another is the same kind of derived
+view `MRP Value` already is in that file (Quantity × MRP Rate). It reads two
+columns together; it changes neither.
+
+**It compares, it does not correct.** No master value is rewritten, no order
+line is dropped, and nothing here feeds a forecast, a recommendation or a
+safety-stock figure. A gap is put on screen for the client to judge, because
+the master's number may be a deliberate planning allowance rather than a claim
+about observed timing — and this application cannot know which.
+
+**Not workspace-restricted, deliberately.** The point is to check a master
+against an order history across the network; showing 2 of 53 branches would
+defeat it. Every row is labelled by branch, so no figure can read as a national
+total.
+
+### What the measurement found
+
+All 53 branches join. 775,628 of 775,912 order lines produce a usable
+duration.
+
+```
+stated mean across branches   4.25 days
+observed mean across branches 3.15 days
+branches where observed > stated   12 of 53
+
+RUDRAPUR             stated 0.0   observed 4.75   p95  8   gap +4.75   2,034 lines
+MANDI                stated 0.0   observed 3.37   p95  5   gap +3.37     153 lines
+THIRUVANANTHAPURAM   stated 0.0   observed 3.23   p95  6   gap +3.23  12,127 lines
+GOA                  stated 0.0   observed 2.76   p95  5   gap +2.76   3,973 lines
+DELHI-1              stated 3.0   observed 4.08   p95 10   gap +1.08  25,099 lines
+```
+
+Four branches state a **zero-day** lead time and take 2.8–4.8 days. The
+observed spread is also routinely wider than the stated one — DELHI-1 carries a
+stated `Std. LeadTime` of 0.72 against an observed 2.80, and a p95 of 10 days
+against a stated 3-day average.
+
+### Three things this refuses to do
+
+**Despatch → Invoice is not a third leg.** 285,995 of 708,317 lines — 40% — are
+invoiced *before* despatch, and the negatives cluster at exactly −1 and −2 days
+rather than scattering. That is a billing practice, not corruption, so the page
+reports the leg's shape (before / same day / after) and refuses to average it.
+A "despatch to invoice" duration over those rows would mean nothing.
+
+**`Service Factor` is not plugged into a formula.** It is a z-score — 1.0 is
+about 84% service, 1.65 about 95%. It reads **1.0 for 55 of 57 rows**, so using
+it as-is in a reorder point would plan to a *lower* service level than the q95
+the application already uses. One row carries **225**, which cannot be a
+service factor: that row has no branch name and is the file's own totals line,
+excluded by requiring a branch name.
+
+**216 order lines are excluded and counted, not dropped silently.** The worst
+carries a despatch date of 2002-05-26 against a 2025 order.
+
+### Cost
+
+Parsing 775,912 rows out of `.xlsx` takes ~129 s, which a page load cannot do.
+The per-branch aggregate is 57 rows, so it is computed once and cached to
+parquet under `runtime/storage`, keyed on a fingerprint of both source files.
+Cached reads are 0.09 s. The fingerprint is size and mtime rather than a hash,
+because hashing a 90 MB workbook costs most of what parsing costs.
+
+Nothing in this work writes to `data/source/`.
+
+### Scoped to the workspace, and charted
+
+Requested next: run the analysis on the two branches and twenty SKUs, with
+graphs. The page now applies the workspace restriction like every other page —
+a two-branch figure can never read as a national one, and the banner states it.
+`?all=true` keeps the network comparison, which is where the four zero-day
+branches live.
+
+The restriction is applied to the per-line durations **before** any aggregate
+is taken. Restricting afterwards would compute over 53 branches and then label
+the result with two names, which is the exact failure `workspace_scope` exists
+to prevent (D-049). The per-line frame is what is cached, so switching scope
+does not re-parse 775,912 rows.
+
+SKU comes from `Oracle No`, the order file's master join key (D-017), not
+`Material Code`. All 20 workspace SKUs appear in the order file; the scoped
+slice is 6,484 lines.
+
+**The measurement that came out of it:**
+
+```
+BENGALURU   stated 4.0   observed 3.72   p95  6   gap -0.28   3,752 lines
+DELHI-1     stated 3.0   observed 4.13   p95 10   gap +1.13   2,732 lines
+
+first third of months  3.42 d  (2025-04 .. 2025-08)
+last third of months   4.92 d  (2026-03 .. 2026-07)
+change                +43.9%
+```
+
+Monthly, the deterioration is in both branches and severe in one:
+
+```
+            2025-04   2026-07
+BENGALURU      3.47      5.28   (stated 4.0)
+DELHI-1        2.93      9.26   (stated 3.0)
+```
+
+DELHI-1's most recent month runs at **three times** its stated planning figure.
+That is a description of what the order dates recorded, not a forecast, and the
+page says so.
+
+**Four charts, each answering something the table cannot.** The trend is
+monthly points rather than a rolling mean, because a smoothed line blurs the
+month a change began. The distribution's last bucket is a catch-all so the tail
+shows as a tail. Stated against observed is **grouped, never stacked** —
+stacking would assert the bars add to something, and a supplied planning figure
+plus a measured duration do not. By SKU carries no stated counterpart, because
+Location Master is branch-grained and inventing one would be a fabrication.
+
+`trend` is the first third of the months against the last third, weighted by
+line count, and is deliberately not a fitted slope: a slope implies a model of
+how lead time moves, and there is none here. Weighting matters — a month with
+one line must not swing the window like one with a thousand, and a test pins
+that.
+
+## D-106 — `month_index` becomes `period_index`
+
+A function called `month_index` that returns a week counter is exactly how a
+grain bug survives review. The pair in `app/ml/features/panel.py` is now
+`period_index`/`index_to_period`, both taking the grain, and the 31 call sites
+and tests were renamed with them. `ais_preprocessing.month_key` keeps its name
+because callers and tests import it, and its docstring states plainly that it
+no longer necessarily returns a month.
+
+## D-107 — Weekly does not rescue the annual cycle, and the honest answer is unchanged
+
+At monthly grain the reference profile's only candidate is 12, which needs 24
+observations for two complete cycles; the panel offers at most 22 training
+months, so 12 can never be satisfied and all four Exponential Smoothing
+variants are permanently Ineligible. It would be convenient if weekly fixed
+this. **It does not**: 52 needs 104 observations and weekly offers 78 and 96, so
+the reference profile still resolves to `None` for the same reason.
+
+What weekly does change is the relaxed profile. Monthly's fallbacks (6, 4, 3)
+were scraping against an 18-period fold; weekly's (26, 13, 4) clear their
+two-cycle floor with real headroom.
+
+## D-108 — Feature spans are counted in the grain's own periods
+
+Reusing the monthly numbers would have been silent corruption: a
+`rolling_mean_3` means three months monthly and three *weeks* weekly — a
+different feature wearing the same name. Each set covers a comparable span
+instead. Lags go from (1..6, 9, 12) to (1..6, 13, 26, 52); rolling windows from
+(3, 6, 12) to (4, 13, 52); non-zero counts from (6, 12) to (13, 52); and the
+year-ago seasonal lag from 12 periods back to 52.
+
+`calendar_month` could not follow the same rule. Monthly it is arithmetic on
+the counter (`index % 12 + 1`); weekly it is a real lookup through the Thursday
+rule, because a week's month is not a function of the week number alone — ISO
+week 5 is February in one year and January in the next.
+
+## D-109 — auto_arima's seasonal ceiling follows the grain
+
+Sodexo's guard caps the seasonal period at 24 so the stepwise search cannot
+explode. At weekly, 26 and 52 are legitimate periods and 24 would refuse them
+**silently**, which reads as a model choice rather than a limit. The weekly
+ceiling is 53 — not 52, so a leap-week year is not excluded. A search at m=52 is
+genuinely expensive; this raises the ceiling rather than pretending otherwise,
+and a fit that overruns is reported as **Timed out** by the per-model budget,
+which is a visible answer.
+
+## D-110 — The display grains are whatever the panel can be aggregated *up* to
+
+`analytics.GRAIN_NOTE` claimed a weekly view "would have to invent values the
+source data does not contain". That was true of a monthly panel and is false of
+this one — the source carries transaction dates, which is where the weekly
+panel comes from. Available grains are now resolved from the panel grain:
+weekly/monthly/quarterly on a weekly panel, monthly/quarterly on a monthly one.
+Daily is still refused at both, because splitting a period's units across its
+days would invent a profile that genuinely is not there.
+
+`_bucket` also had to change. It bucketed by *index* arithmetic (`// 12` for the
+year), which meant "the year" on a monthly panel and nothing at all on a weekly
+one. It now buckets by the period **label**, which carries its own calendar and
+works at either grain.
+
+## D-111 — An origin's result carries its own grain
+
+`OriginResult` gained a `grain` field, set from the `Origin` that produced it.
+
+A result outlives the origin object: the champion path reads `train_end_period`
+off the *latest completed* result long after the origins list is gone, and the
+serialised `origins_json` is read back from the database with no origin in
+scope at all. Both then have to turn a period label into an index, or an index
+back into a label, and neither can do that without knowing the calendar.
+
+Found the hard way. The first weekly training run reported
+`completed_with_warnings` and wrote **zero** model rows: every one of the 40
+series failed with `AttributeError: 'OriginResult' object has no attribute
+'grain'`. The run looked like it had succeeded — a green status, a duration, a
+progress bar to 100% — because the failure was caught per series and recorded
+as a warning. A status that can read "completed" over an empty result table is
+the part worth remembering.
+
+Two sibling calls were fixed with it: `index_to_period(int(p))` in the
+validation-period list, which had been silently rendering weekly indices as
+month labels such as `8797-05`.
+
+`OriginResult.as_dict()` serialises `grain` too, so a result read back out of
+`model_run.origins_json` carries its own calendar. The rows already stored by
+run `101df724512542928d072a4698079b05` predate that field and have `grain`
+absent; nothing reads it yet, and the next training run writes it.
+
+## D-112 — Drift is defined in months, so a weekly panel is rolled up before it
+
+`app/domain/ais/drift.py` is untouched by the weekly work. Its caller in
+`app/api/routes/analytics.py` sums the weekly panel into calendar months first.
+
+Drift asks a question that is stated in months: a six-month window against the
+six before it, and a measurement change dated to `2025-04`. Six *weeks* against
+six weeks is a different question that would carry the same name and the same
+20% reading aid, and the aid was calibrated on months. Teaching drift a second
+calendar would have made the panel's headline number quietly incomparable with
+every earlier reading of it.
+
+Cost of the alternative, observed before the fix: `/api/analytics/drift`
+returned 500 on every request (`invalid literal for int() with base 10: 'W14'`)
+because drift parses `YYYY-MM` with its own private splitter.
+
+## D-113 — The six-month roll-up sums quantiles, and says so
+
+`GET /api/forecasts/series` now returns `monthly_rollup` and `horizon_total`
+beside the weekly rows. The point forecasts add back to the horizon total
+exactly, because the Thursday rule puts every week in exactly one month.
+
+The quantile columns are a plain sum of the weekly quantiles, and **a summed
+quantile is not the quantile of a sum**. Adding five weekly q95 values describes
+the world where every week peaks at once, which is more pessimistic than a 95%
+month. Two alternatives were rejected: rescaling by √n assumes independent
+weekly errors, which intermittent demand does not have; and dropping the columns
+removes a band a planner asked for. It is summed, shown, and named — in the
+docstring, in the API, and in the panel's own note.
+
+A month the horizon only partly covers is flagged `complete: false`. A partial
+month read as a whole one looks like a fall in demand that is not there.
+
+## D-114 — A "sum of children" scope shows no prediction interval at all
+
+Where a scope's forecast is the sum of the series beneath it, the API returns
+the point forecast in the quantile fields. The roll-up panel detects that the
+band is identical to the point forecast and drops the three columns, showing
+the reason instead.
+
+Three columns repeating the point forecast read as a measured band. They are
+not one: adding up each SKU's upper bound assumes every SKU misses high in the
+same week, which is not what the residuals show. The page already said this in
+a footnote elsewhere; it now refuses to draw the columns that contradict it.
+
+## D-115 — The default forecast horizon is derived, not typed
+
+`ForecastRunRequest.horizons` defaults to `range(1, settings.forecast_horizon + 1)`
+— six monthly, twenty-six weekly — evaluated per request rather than at import,
+because the grain is configuration and a module constant would freeze whichever
+grain happened to be set when the process started.
+
+Two tests asserted the literal `"1,2,3,4,5,6"`. Both now assert against the
+setting, so they say "the default is the whole mandated horizon" rather than
+pinning the grain the suite happens to run at.
+
+## D-116 — The headline accuracy is the six-month total, with the per-week figure kept beside it
+
+`GET /api/training/{id}/accuracy-windows` now returns `combined_metrics_horizon`
+— the pooled accuracy of the same forecasts scored on the six-month total —
+alongside the per-period `combined_metrics` it always returned. Every headline
+tile on Training and the per-line tile on Forecasting lead with the six-month
+figure.
+
+Measured on run `101df724512542928d072a4698079b05`, pooled over every completed
+registered model: **26.21% average miss over six months against 79.78% per
+week**. The six-month number is not a better model; it is the same forecasts
+scored on the quantity a plant actually buys against, and over- and
+under-forecasts inside the window cancel.
+
+`combined_metrics_horizon` is computed unconditionally, unlike the existing
+`combined_metrics_best`, which is `None` when no window clears 85%. That is
+exactly the run that still needs a stated headline, so the run that fails the
+target is the run that must not fall back to a blank tile.
+
+Cancelling is not guaranteed and the page says so with counts, not a slogan:
+**35 of 40 lines are more accurate over six months and 5 are less**, one of them
+0.00% over six months against 60.31% per week. A model that misses the same way
+every week compounds rather than cancels. The per-line tile therefore shows the
+six-month figure with the per-week figure in its sublabel — showing only the
+better of the two would be picking per line.
+
+**Open, and deliberately not changed here:** the champion is still selected on
+per-period error. Ranking the same models by six-month-total error reorders them
+sharply (XGBoost-exog moves eleven places). Changing the selection quantity
+changes what "champion" means on every page, so it is recorded as a decision to
+take rather than taken in passing.
+
+## D-117 — The replenishment calculation is fed a month, not a panel period
+
+`app.domain.ais.inventory` takes a **monthly** quantity and scales it to a
+protection period of roughly one month. A forecast row is one panel period, and
+on a weekly panel that is a week, so `inventory_service` was handing a month's
+arithmetic seven days of demand.
+
+Measured before the fix, `BENGALURU|FG.BA5.LFH.GCG2120000` at q95:
+order-up-to 1,705 units against a real requirement of 5,071 — the page
+recommended about a quarter of what the branch needs, on every line.
+
+The service now adds the forecast rows reporting under the month up first
+(`_to_month`), by the same Thursday rule the display roll-up uses, and the two
+paths agree exactly: 558.7287065727975 units and q95 4539.6582958324725 from
+both `forecast_service._rollup_rows` and the inventory path. The domain module
+is untouched; it still receives, and still documents, a monthly quantity.
+
+Quantiles are summed, carrying D-113's caveat, and the response says so in a
+note. A month the horizon only partly covers is flagged on the row as a warning
+rather than silently under-ordering.
+
+## D-118 — A count of panel periods is never printed with the word "months"
+
+Several strings counted panel periods and named them months, which read as a
+count of weeks wearing the wrong word once the panel went weekly. All of them
+now take the noun from the grain (`grain.period_noun` on the backend,
+`app/period.periodNoun` on the frontend):
+
+- Per Branch & SKU: "122 months" under Ordered demand — the window is the
+  panel's own, at the panel grain, and the grain picker above it re-buckets the
+  charts without changing what the panel is made of.
+- Assistant, demand trend: "Window — 122 months … mean 2,603 units/month" in the
+  same sentence. The count and the endpoints now come from the monthly trend
+  itself: "28 months, 2024-04 to 2026-07".
+- Training, fold table: the "Months" column header over `train_rows`.
+- Exponential Smoothing ineligibility: "48 zero and 0 negative month(s)".
+
+## D-119 — The green dot in the line picker follows whatever the drill-in shows
+
+`useLinesAtTarget` marks the lines at the 85% target in the SKU picker. It has
+now been wrong in both directions, so what is recorded here is the rule, not the
+answer: **the mark must match the figure the next screen puts on screen.**
+
+It first read the six-month flag while the drill-in showed the per-period
+figure — 19 dots, 15 of which opened below 85%, one at 48.8%. It was then moved
+to `champion_meets_target`, which was correct until D-116 moved the headline to
+the six-month total. On the weekly panel that flag is true for **0 of 40 lines**,
+so the dot stopped appearing at all, while **16 lines** open on a six-month
+figure at or above 85%.
+
+It now reads `horizon_meets_target`, and the docstring says it changes again if
+the lead figure changes again.
+
+## D-120 — The champion is picked on the six-month total, and the training page shows it
+
+On request: *"in training page also we have to show the consolidated accuracy
+numbers for each of the model and have to selection based on that only."*
+
+D-116 moved every headline figure to the **error on the six-month total** — the
+same forecasts, added up across the planning window before they are scored,
+because that is the quantity a purchase order is placed for. The champion was
+still ranked on per-period MAPE (D-043). The screens therefore reported one
+number and the model behind them was chosen by another, and the two disagree
+sharply: on run `101df724` the thirteen registered models reorder substantially
+between them.
+
+Three things changed together.
+
+**1. The metric has one definition, in one module.** `app/ml/evaluation/
+horizon_totals.py` holds the blocking arithmetic, the `PLANNING_HORIZON_MONTHS
+= 6` constant, and nothing else. Training writes it onto every `model_run` row
+(`horizon_mape`, `horizon_wape`, `horizon_blocks`), champion selection ranks on
+it, and the accuracy-windows panel imports the same functions instead of its
+own copies. `accuracy_windows.WINDOWS` takes its widest entry from the same
+constant, so the board's order and the panel's headline cannot describe
+different windows.
+
+**2. `AIS_CHAMPION_PRIMARY_METRIC` defaults to `horizon_mape`.** `mape` and
+`wape` are still accepted and still computed on every row; setting the old
+value restores the old ranking with no code change. Ranking is *not* silently
+substituted when the metric is missing: a row with no six-month figure is
+excluded with a reason and keeps its place on the board, like every other
+exclusion.
+
+**Re-selecting on the new metric measurably improved the figure the screens
+report.** Champions were re-selected for the 40 series scopes of run
+`101df724` with no retraining — only the ranking changed:
+
+| Six-month figures for run `101df724`, 40 series | ranked on per-period MAPE | ranked on the six-month total |
+|---|---|---|
+| Accuracy (median block) | 82.76% | **89.18%** |
+| Volume-weighted accuracy | 74.72% | **86.57%** |
+| Lines clearing 85% on their own | 16 of 40 | **26 of 40** |
+| Lines *worse* over six months than per period | 5 | **2** |
+
+Both columns are the same 40 lines and the same stored backtests; only which
+model each line uses changed. The "before" column was recomputed from the
+superseded `ChampionSelection` rows, which are kept rather than deleted, so it
+is a measurement and not a memory. The "after" column matches what
+`GET /api/training/{run}/accuracy-windows` returns live.
+
+**3. The cost is sample size, and it is on the screen rather than in a
+footnote.** A six-month block needs a whole validation origin, so each row
+rests on **one or two** blocks where per-period MAPE rests on 52 points. Every
+payload carries `horizon_blocks`, the per-line leaderboard prints it as `×1` /
+`×2` beside the error, and the per-model table prints how many lines each model
+was scored on. Four models ran on 5 of 40 lines and score far better there;
+without that count beside them the table would read as though they were simply
+the best models, which is a claim about a different set of lines.
+
+### What the Training page now shows
+
+- **A per-model consolidated table** (`ModelAccuracyTable.tsx`), the piece that
+  was missing: the page had per-line leaderboards and one combined headline and
+  nothing in between. Each of the thirteen, its accuracy, its MAPE, and how
+  many lines it won — so the column that decided the winner is the column the
+  winner is read from.
+- **Both tables show accuracy and MAPE, and nothing else**, on request:
+  *"in the leader board also sho only accuracy and mape (consolidated) …
+  no extra things needed."* Both are the six-month figure and MAPE is
+  100 minus accuracy, so the pair is one number said twice — which is the
+  point: the ranking, the headline and the column a reader looks at are now
+  the same measurement.
+- **What was dropped, and where it went.** The per-line leaderboard previously
+  carried per-period accuracy, per-period MAPE, WAPE, bias, the test-point
+  count and a paragraph of explanation; the per-model table carried a
+  per-period column and a "lines scored" count. All of it is still on the API
+  and still in `/api/training/explain`'s metric definitions. One item is worth
+  naming because dropping it costs something real: four models ran on **5 of
+  40 lines** and score far better on those, so the top row of the per-model
+  table wins nothing at all. The count now lives on the row's tooltip instead
+  of in a column.
+- **The race bars are the six-month accuracy.** They were the per-period
+  figure, which floors at zero: on `BENGALURU|FG.BA5.LFH.GCG2120000` all
+  thirteen bars read 0.0% while the table beneath them read 77%. Both were
+  true and together they were unreadable.
+- **The metric is named in words, not as a column name.** "HORIZON_MAPE" on a
+  tile names nothing; `primary_metric_label` carries "error on the six-month
+  total" through `/api/training/explain` and the leaderboard payload.
+
+### The backfill had to read each run's own grain
+
+The migration first scored every historical row against the *current* grain,
+which gave every older monthly run zero blocks — a 26-period window never fits
+inside a 6-period validation. It now reads the grain from each row's own stored
+period labels (`grain.grain_of_period`: `2026-W13` is a week, `2026-03` is a
+month), falling back to the parent run's origins and then to the setting. One
+run had recorded no origins of its own, and without the per-row rule all 678 of
+its model runs would have stayed unscored.
+
+2,701 of 2,707 completed rows now carry a six-month figure. The six that do not
+are honest NULLs: four baselines on a branch whose six-month actual total is
+zero, so there is no denominator, and the two pooled rows, whose `origins_json`
+predates storing predictions. Pooled runs written from now on compute it
+per series from the validation frame itself.
+
+## D-121 — Overall Analysis opens on orders, sales and the difference
+
+The page led with four tiles: ordered demand value, unfilled demand, fill rate
+and ordered-demand share. The first question actually asked of it is simpler
+than any of those — **how much came in, how much went out, what is the
+difference** — and that question was spread across two of the four tiles with
+two unrelated ones between them.
+
+The row is now three tiles that reconcile by subtraction:
+
+| Tile | Figure | Under it |
+| --- | --- | --- |
+| Orders received | `ordered_value_known` — ₹15.75Cr | `ordered_units_known` — 46.4K |
+| Sales despatched | `despatch_value` — ₹13.70Cr | `despatched_units` — 40.1K |
+| Orders not despatched | `gap_value` — ₹2.05Cr | `gap_units` — 6.3K, and 87.0% covered |
+
+₹15.75Cr − ₹13.70Cr = ₹2.05Cr. 46,414 − 40,116 = 6,298. Tile 3 is a real
+subtraction, not two numbers measured apart and differenced anyway.
+
+Unfilled demand and ordered-demand share were not deleted — both still have
+their own panels further down the same page, where they have room to be read
+properly rather than as a number on a tile.
+
+### Why the first tile is not the ₹24.22Cr this page used to lead with
+
+The panel does not hold orders for its whole span. Reading `order_share_pct`
+month by month over the current workspace:
+
+- **2024-04 → 2025-03** — `order_share_pct` is 0. Every row is a **sales-proxy**
+  row: quantity derived from sales, no order behind it, and no despatch figure
+  either. 2,639 rows, ₹8.47Cr of demand.
+- **2025-04 → 2026-07** — `order_share_pct` is 100, and despatch is recorded on
+  most rows. 2,209 rows carry both sides.
+
+A tile headed "orders received" that reports ₹24.22Cr is therefore counting a
+year of sales proxy as orders, and subtracting despatches from it would report
+a stretch where no order was ever placed as a stack of undelivered orders. The
+tiles are computed on the rows that carry both measurements, and
+`comparable_window` reports the stretch those rows span (2025-W14 → 2026-W31,
+70 weeks) so the restriction is stated rather than silently applied.
+
+The ₹24.22Cr is not hidden: `demand_value` is unchanged, the line under the
+tiles names it, and **every panel below the tile row still uses it**. Total
+demand is the right figure for "where is the demand"; it is the wrong figure for
+"how much of what was ordered went out".
+
+### The line under the tiles is part of the decision
+
+A reader who sees ₹24.22Cr elsewhere on the page and ₹15.75Cr on the first tile
+will assume one of them is wrong. The line states both row counts, both stretches
+and the ₹8.47Cr difference, so the two figures are visibly the same data on two
+different row sets rather than a discrepancy.
+
+Coverage is reported on a **value** basis (`fill_rate_value_pct`, 87.0%) because
+the tiles above it are in rupees. The unit-basis `fill_rate_pct` (86.4%) is
+unchanged and is still what every other panel reads.
+
+### The derivation moved out of `load_panel`
+
+`demand_value` and `shortfall_positive` were derived inside `load_panel`, and
+`tests/test_analytics_api.py` carried its own copy of that arithmetic to build
+fixtures. Adding `despatch_value` broke thirteen tests, because the copy had no
+way to know. Both now call `analytics.derive_columns`, so the next derived
+column cannot drift the same way.
+
+## D-122 — Overall Analysis defaults to the weeks that have orders, and loses four panels
+
+**The window.** D-121 put the three tiles on the rows that carry both an order
+and a despatch, but every panel below them still covered the full 122 weeks, so
+the branch ring read ₹24.22Cr under a first tile of ₹15.75Cr. The page now
+starts, by default, at `orders_start_month` (from `/api/analytics/filters`,
+currently 2025-04), the first month holding real orders. Before it the panel is
+sales-proxy rows only.
+
+Measured on that window, everything agrees: total ordered value is ₹15.75Cr on
+the tiles and on every panel, and the 591 order rows without a despatch figure
+carry no ordered units, so no rows are lost between the two views.
+
+**The page cannot reach before that window.** A first version let an earlier
+From month, or "Full history", pull the sales-only weeks back in. The tiles
+stayed at ₹15.75Cr (there are no orders to count before April 2025) while every
+panel grew to ₹24.22Cr, which is exactly the mismatch this was meant to remove.
+So the From month is now clamped to `orders_start_month`. The calendar will not
+offer an earlier month, a forced earlier value snaps back, and the reset button
+reads "Reset dates", since it returns to the orders window rather than the full
+history. `MonthRange` gained optional `minMonth` and `resetLabel` props; every
+other page keeps the old behaviour.
+
+**Audited, not assumed.** Every breakdown on the page (branch, value class, glass
+type, vehicle category, vehicle age, SKU, product group, the branch × value-class
+columns, branch over time and the trend) was summed from the live payload and
+compared with the tiles. They agree to the rupee and the unit (₹15.7529Cr,
+46,414 units) with no filter, on BENGALURU alone, on value class B alone, on
+2025-10 → 2026-03, and at weekly, monthly and quarterly grain. The Demand by
+Branch ring also read "top 10 of 2"; it now says "2 branches" and keeps "top 10
+of N" only when there are more than ten.
+
+**One gap is left, and it is explained rather than forced to match.** The
+unfilled panels count gross positive shortfall, 7.4K units. The third tile is
+net, 6.3K units, because over-despatched lines offset short ones. Both figures
+are correct, and `CLAUDE.md` requires them to be reported separately. The line
+under the tiles gives both numbers and the reason.
+
+**Removed at the user's request:**
+- Branch Operational Scorecard (and its score explanations). The page no longer
+  calls `/api/analytics/branch-scorecard`; the endpoint itself is unchanged and
+  still documented.
+- Service Risk by SKU. Top SKUs by Ordered Demand now spans the full width and
+  still shows the unfilled part of each SKU in amber.
+- Demand Signal Mix. On the orders window it is a flat line at 100% orders.
+- Every "How to read this" expander. `Panel` turns a note longer than 90
+  characters into one of these, so each long note on this page was cut to a
+  single line.
+
+## D-123 — Overall Analysis is split into three sections; delivery charts merged; SKU Pareto added
+
+**Three sections, each answering one question.** The panels below the tiles now
+sit under "Where the demand comes from", "How demand moves over time" and "How
+well we deliver". A row of buttons above the tiles jumps to each section. Every
+row fills the width at 1440 px (4-column grid on wide screens, 2 on medium, 1 on
+phones).
+
+**Delivery over time is one chart instead of four.** Coverage, Unfilled Demand
+Trend, Fill Rate (trend) and the old Ordered vs Despatched all plotted the same
+two series (ordered units and despatched units) or a ratio of them. They are
+replaced by a single "Ordered vs Despatched" chart: ordered units as a shaded
+area, despatched units as a line, and fill rate as a second line on a right-hand
+0–120% axis with a 100% guide. The space between the area and the line is the
+unfilled demand, so no separate gap chart is needed. The payload is unchanged;
+all series come from the existing `trend` buckets.
+
+**New: "The SKUs That Carry the Demand".** Every SKU in scope is sorted by ordered
+units. SKUs up to and including the one that takes the running total past 80%
+are drawn dark; the rest are grey. The running-share line and its right-hand
+axis were removed at the user's request. The running share is shown in two
+plainer ways instead: a two-part strip above the chart ("Top 9 SKUs · 85% of
+orders" against a plain "15%", since the small segment is too narrow to hold a
+sentence) and each SKU's own share of orders printed on its bar. The strip's
+second half uses `--color-surface-2` and `--color-text`, so it stays readable in
+the dark theme.
+The strip shows the true share of the top group (85%), not a rounded 80%,
+because that group includes the SKU that takes the total past 80%. On the current data, the
+top 9 of 20 SKUs make 85% of ordered units. It is computed in the page from the
+existing `by_sku` breakdown, so it follows every filter and agrees with the
+tiles (D-122).
+
+**Demand Concentration removed** at the user's request (the share of each
+branch's volume in its top 5 SKUs). The SKU chart above already makes the same
+point. Volume vs Value by SKU widened to fill the row.
+
+**Other candidate charts were measured but not built.** They are waiting for the
+user's review. They cover repeat shortages by line, sales saved by substitutes,
+over-despatch, stock cover, and order size.
+
+## D-124 — The assistant reads the orders window, and finds a leaderboard that exists
+
+**The assistant and the Overall Analysis page disagreed on screen.** Asked for
+the demand trend, the assistant answered ₹24.22Cr over 28 months from 2024-04
+while the page beside it showed ₹15.75Cr over 16 months from 2025-04. Both were
+arithmetically right and one of them was misleading: the page clamps to the
+weeks that hold real orders (D-122), the assistant read the whole panel, and the
+early weeks are sales-proxy rows with no order and no despatch behind them.
+
+The clamp now lives in one place. `analytics.orders_start_month(panel)` returns
+the first month with real orders as YYYY-MM — the same value `filters()` puts on
+`orders_start_month`, so the page and the assistant cannot drift apart — and
+`assistant.tools._analytics_scope` sets it as `start_period` on every scope it
+builds. All three analytics reads in the assistant go through it: the demand
+trend, the branch breakdown (which had been building a bare `AnalyticsScope()`
+of its own) and the stock exceptions. The assistant now answers ₹15.75Cr,
+Bengaluru ₹9.42Cr, 16 months — the figures on the page.
+
+`start_period` takes a month, not a panel period. Passing the period key
+("2025-W14") raises deep inside `first_period_of_month`, which is why the helper
+returns the month and is named for it.
+
+**"No model has been ranked" was false.** `model_leaderboard` read the newest
+completed training run and filtered to `scope_level == "national"`. The newest
+completed run was local-tier only — 680 series rows, no national rows — so the
+filter emptied and the assistant reported that nothing had been ranked, while a
+full national leaderboard sat one run back. It now selects the newest completed
+run that actually holds national rows, and distinguishes the two empty cases:
+no completed run at all, against a completed run that ran only at series level.
+On the stored runs it now returns 12 ranked models with Exponential Smoothing
+Additive champion at 10.326% WAPE.
+
+**The assistant named a different champion than the rest of the application.**
+`model_leaderboard` crowned the top of its own WAPE table. On this run that is
+Auto ARIMA at 30.426% measured by `holdout_fast` on 26 validation points, while
+the stored selection is Exponential Smoothing Additive at 31.968% measured by
+`rolling_origin` on 44 - a lower error on fewer points, which the tool's own
+caveat already warned against comparing. It now reads the active
+`ChampionSelection` for the run's `overall` scope and reports that, with the
+evaluation mode and point count beside it, and falls back to the lowest WAPE
+only when no selection exists - saying so when it does.
+
+**A new training run was run** over all three tiers (aggregate, local, pooled),
+because the newest completed run covered only the local tier: 693 model runs,
+none failed, 266 seconds. Champion selection is a separate step and `series` is
+not in its default scope list, so the run produced no series champions and the
+accuracy windows read zero until selection was run for `series` explicitly.
+With champions selected the six-month total is 89.18% accuracy, 86.57%
+volume-weighted, clearing the 85% target from the three-month window on.
+
+## D-125 — Six defects found by asking the assistant thirteen kinds of question
+
+The assistant and the recommendations page were exercised across question
+types: trend, breakdown, chart-by-name (line, bar, pie), exceptions,
+leaderboard, forecast, inventory, data quality, branch-scoped, greeting,
+out-of-scope, a privacy probe, and a follow-up that depends on history. All
+thirteen answered, every figure agreeing with the pages (D-124). Charts are
+returned on the top-level `chart` field and render: line with 16 points, bar
+with 2, pie when a pie is asked for, leaderboard bar with 10.
+
+Six things were wrong.
+
+**The greeting stated three wrong numbers.** It was a constant reading "53
+branches, about 2,300 SKUs, forecast at branch x SKU x month". This deployment
+is scoped to 2 branches and 20 SKUs and forecasts weeks, so every conversation
+opened with three false figures before answering its first question correctly.
+`llm.greeting_message(db)` now builds it from `resolve_workspace` and
+`panel_grain`, and falls back to "this workspace" if either is unavailable - a
+greeting must never fail to greet.
+
+**The leaderboard invited replacing the champion.** With both figures in the
+facts the model wrote "Next step: Consider Auto ARIMA for improved accuracy,
+though the champion is Exponential Smoothing Additive". The facts now carry
+`how_to_read_this_ranking`, saying the table is sorted by WAPE and not by
+trustworthiness, that the `champion` field is the application's decision, and
+that a higher-ranked row is never to be recommended over it.
+
+**Recommendations fell back to templates about half the time.** The cause was
+not the provider: `max_tokens` was the chat cap of 900, and five items with an
+observation, an explanation and evidence each do not fit, so the JSON was cut
+off mid-string and the parse failed. The page showed template text with no
+error a reader could see. `ai_recommendations_max_output_tokens` (default 2600)
+now covers this call. Six consecutive runs came back from the model with five
+items and no fallback.
+
+**Unit counts carried decimal tails.** "units: 7414.0" on the evidence chips,
+"national_shift_pct = 35.73525957246886", and a recommended order read as
+"5070.994 units" - not a quantity anyone can place. Counts are now whole in the
+recommendation titles, observations and evidence, and `recommended_order` and
+`order_up_to_level` are whole in the assistant's own facts.
+
+**A branch comparison could only answer for one branch.** `branch_demand`
+returned units and value but no fill rate, so "compare BENGALURU and DELHI-1 on
+fill rate" gave Bengaluru's rate from the network trend and said Delhi's was
+not in the facts. Each branch row now carries `despatched_units`,
+`shortfall_units` and `fill_rate_pct`: BENGALURU 82.59%, DELHI-1 92.69%.
+
+**Two behaviours were checked and left alone.** Asked where a baseline beats the
+champion it answers that none does, which is true at national scope. Asked for
+the worst SKU-level accuracy it says SKU-level accuracy is not in its facts,
+which is also true. Both are correct refusals, not gaps.
+
+## D-126 — The panel build applies the workspace scope itself
+
+The live panel could not be rebuilt from this repository. `AIS_WORKSPACE_SKUS`
+restricted what the *pages* showed, but the panel artifact they read was cut
+down by a script that was never committed — so changing the setting without
+that script produced an application claiming 136 SKUs while serving 20.
+
+`panel_service._scope_artifacts` now cuts the five preprocessed tables to the
+resolved workspace before `AisPanelBuilder` sees them, and records the cut in
+`panel_manifest.json` and `build.summary_json` as `workspace_scope`. Fact
+tables are cut on both axes, `branch_dim` on branch only and `product_dim` on
+SKU only — cutting a dimension on an axis it does not carry would empty it.
+The originals are never written to; scoped copies go under the build directory.
+
+This is also what keeps the build affordable. The panel is a full
+branch × SKU × period grid, so an unrestricted build materialises every series
+in the extract — the attempt that exhausted memory. Cutting 582,324 order rows
+to 12,171 first is why the build takes 0.9 s.
+
+`scripts/export_scoped_slice.py` regenerates `data/scoped/` from the live panel
+and the resolved workspace, replacing the hand-maintained export that drifted
+(D-091). Nine tests in `tests/test_panel_scope.py` cover the cut.
+
+## D-127 — 136 SKUs, not 135
+
+The request was the top 135 SKUs by combined BENGALURU + DELHI-1 invoiced value
+among the 1,131 SKUs both branches sell — 80.1% of the two branches' combined
+revenue. The configured set is those 135 **plus `FG.MP8.FDR.G00300A000`**,
+which ranks 177th and so falls outside the cut.
+
+It is kept because it was one of the original twenty, chosen deliberately for
+spread over vehicle category, glass type, value class and vehicle age
+(D-075, D-081, D-082, D-083). Dropping it would lose that spread for one rank
+position. Nineteen of the original twenty are inside the 135 on merit.
+
+Measured after the rebuild: 271 series, 32,341 panel rows, 122 weekly periods
+(2024-W14 → 2026-W31). Training reached 281 scopes in 1,179 s — 4,779 model
+runs, 3,754 completed, 0 failed, 0 timed out, 1,025 ineligible with a stated
+requirement. 270 of the 271 series were trained; the one excluded,
+DELHI-1 × FG.ALP.LFH.GCG2120000, has 8 weeks of history and 2 non-zero weeks,
+below the 12-observed-month floor, and is covered by the pooled tier instead.
+Champions: 272, of which 261 series. 9 series were skipped rather than given
+an arbitrary champion. The forecast run wrote 7,072 rows over 272 scopes,
+coherent, with no reconciliation fallback.
+
+**The pooled tier ran end to end** for the first time — 2 pooled scopes,
+3.96 s over 32,341 origin feature rows. The "never run end to end" gap in
+CLAUDE.md no longer holds.
+
+## D-128 — The scope banner states the network, not the slice
+
+Every panel-backed page carries a `workspace_scope` saying which slice it
+shows. It read **"2 of 2 branches · 136 of 136 SKUs"** — a sentence whose only
+job is to say what the page hides, saying nothing, and reading as full
+coverage.
+
+The totals were counted from the panel frame, and the panel *is* the workspace
+slice, so the denominator was the numerator. The order book actually holds 53
+branches and 2,063 SKUs. `_demand_universe` in `api/routes/analytics.py` now
+reads those two columns from the preprocessing artifact, which is never cut to
+the workspace — 0.07 s over 582,324 rows, cached per artifact path. It returns
+no totals rather than raising: a banner that cannot state its denominator drops
+the "of N" and still names the slice; one that 500s takes the page with it.
+
+Supply Intelligence was already correct at "2 of 57", reading the unscoped
+branch dimension. The two populations differ legitimately — 57 depots in the
+location master, 53 with orders — and each page states its own.
+
+## D-129 — Four assistant defects found by asking it about the wider workspace
+
+Expanding to 136 SKUs made the branches carry different SKU lists for the first
+time, and that exposed four defects. All were reproducible across repeated runs
+at temperature 0.3.
+
+**Every rupee figure was a tenth of the truth.** The facts carried the raw
+amount and the prompt asked for "₹8.9Cr", so the model did the conversion — and
+divided by 10^8 rather than 10^7, every time. ₹60.24Cr was reported as
+₹6.02Cr. `tools._rupees` now writes the figure and rule 3 forbids converting a
+`*_rupees` value by hand. `tools.py`'s own docstring already named this failure
+mode: a model allowed to do arithmetic on facts will do it wrong in the same
+confident voice.
+
+**"How many SKUs?" answered 271.** That is the series count. The facts gave a
+per-branch SKU count and no workspace total, so the model added 136 and 135.
+It was invisible while both branches carried the same twenty. `branch_demand`
+now publishes `skus_total` and says the per-branch counts must not be summed.
+
+**The system prompt still claimed 53 branches and 2,300 SKUs.** D-125 removed
+that constant from the greeting but left it in the system prompt, where the
+model read it before every answer. It now states that the deployment is a
+restricted slice and that scope comes from the facts. The greeting's
+"horizons 1-6" was also a constant; a weekly build forecasts 26.
+
+**"Why is this model champion" was answered with an invented reason.** The
+facts carried WAPE but not the metric the champion is actually chosen on, so
+seeing a lower WAPE elsewhere the model guessed: "it was evaluated on fewer
+validation points or different evaluation". The real answer is horizon error —
+Exponential Smoothing Additive at 1.964% against XGBoost's 8.297%. The
+leaderboard facts now carry `ranking_metric_pct` on every model, every
+baseline and the champion, and `beaten_by_baseline` is reported from the stored
+field rather than inferred by comparing columns.
+
+**One weakness remains.** Asked where a baseline outperforms the champion, the
+answer still opens by comparing WAPE — where ma6 does lead — before correctly
+reporting that the champion is not beaten and giving both metrics. The facts
+now contain everything needed; the table is still sorted and labelled by WAPE,
+which is what leads the model there.
+
+## D-130 — A flat drift trend projected 31 quadrillion months
+
+`project_next_crossing` guarded with `if slope <= 0`. A dead-level series does
+not give an OLS slope of exactly zero — it gives about 1e-18 — so a flat trend
+passed the guard as rising and the projection read "about 31118141019627308
+months away". The guard is now `slope <= FLAT_SLOPE_PP_PER_MONTH` (1e-3), below
+which the trend is flat; `slope_pct_per_month` is rounded to three places
+anyway, so such a slope already displayed as 0.0.
+
+Pre-existing on committed code and unrelated to the SKU expansion — found by
+the full suite during this work, where it was the only failing test.
+
+## D-131 — Every panel says which slice it is; the recommendations name a line
+
+Two questions, asked together: do the other panels use the same two-branch,
+136-SKU workspace, and what exactly is the AI Recommendations agent producing?
+
+### The data was always scoped. Four labels said otherwise.
+
+Every panel reads the restricted slice and always did — the panel is physically
+cut to the workspace at build time (D-126), so nothing downstream can widen it.
+Checked against the running app: `analytics/summary` returns BENGALURU and
+DELHI-1 with 136 SKUs, `analytics/filters` the same two branches,
+`analytics/lead-time-observed` the same two, `inventory/recommendations` 261
+rows over those two branches and 134 SKUs (2 × 136 = 272 combinations, 11 of
+which have no forecast and stock position, so no row).
+
+The **labels** were the problem, in two separate places.
+
+**The assistant's tools told the model the figures were national.**
+`scope_note()` returned the literal `"the whole network"` whenever the question
+named no branch or SKU — which is most questions — and two tools hardcoded
+`"national"` and `"national aggregate (the whole network summed per month)"`.
+Those strings are handed to the model as facts, sitting next to the numbers,
+while the scope note in `caveats` said the opposite. A model given two
+contradictory facts will use either, and the counts made the wrong one
+plausible: 516 exception lines and 261 replenishment rows read like a network,
+not like 272 series. All four now resolve through `_workspace_phrase(db)` and
+read `this workspace only — 2 branch(es) (BENGALURU, DELHI-1) and 136 SKU(s)`.
+An unrestricted deployment still reads "the whole network", so the fix does not
+invent a limit where there is none.
+
+`scope_level == "national"` in the forecast and leaderboard tables is the name
+of a **tier** — the top of the hierarchy — not a claim about the country. Those
+labels now say which tier they mean.
+
+**Two of the seven pages carried no banner, and two carried a partial one.**
+AI Recommendations stated the restriction only in a caveat below the list, so
+its headline counts read as network figures. AI Assistant said nothing at all,
+under a headline reading "Ask about this network." — which is the claim the
+banner exists to prevent. Training and Lead Time showed `2 branches · 136 SKUs`
+without denominators: the restriction stated, but not how much of the network
+it hides.
+
+All seven pages now render the identical `ScopeBanner`, measured from the UI:
+`2 of 53 branches · 136 of 2063 SKUs`. The recommendations payload carries
+`workspace_scope` like every analytics payload — which required declaring the
+field on the `Recommendations` pydantic model, because `response_model` was
+silently dropping it — and `/assistant/status` carries it too, on the status
+call rather than the answer so the page can say what is in scope before the
+first question is asked.
+
+The assistant's own scope chip is a different thing and stays: that is the
+scope of the conversation so far, *inside* the workspace.
+
+### The recommendations answered at the network; now they name a line
+
+The page said "Short despatch affects 240 branch × SKU lines" and "BENGALURU
+branch has 300 exception lines". Those are counts of lines, never a line — a
+planner cannot act on one, because it never says *which*. One of the five items
+named a SKU.
+
+`origin/main`'s D-104 was pulled for this: a second pass builds one card per
+branch × SKU, ranked by `line_recommendations` before any model sees it, each
+carrying that line's own forecast, stock, cover and replenishment figures. 261
+lines ranked, 12 shown, bands reported across all 261 (85 critical, 155 high,
+11 medium, 10 with no recommendation). The computed pass renders in about half
+a second and the written one replaces its sentences.
+
+Three further defects were found and fixed while verifying it.
+
+**The figure chips came from the model.** `_merge_lines` copied the model's
+`evidence` array onto the card, and the model echoed the raw fact payload back:
+`q95 planning demand: 409.4224468979937`, `usable_stock: 0.0`,
+`is_censored: true`. Field names and sixteen decimal places, printed directly
+beneath a table of the same figures rounded.
+
+**So the figures moved between the two passes** — which is precisely what the
+page tells the reader they do not do, because the numbers were never the
+model's to produce. The fast pass showed `q95 planning demand = 409
+units/month`; the written pass showed the sixteen-decimal echo of the same
+measurement.
+
+**And the chips repeated the table.** Every computed chip restated a row the
+card already prints. Meanwhile the exception join — short-despatched units,
+units ordered against zero stock — was carried on the payload and rendered
+nowhere, so the only way it reached the screen was the model's raw echo.
+
+`_line_evidence` now builds the chips from the line's own fields, identical in
+both passes, carrying only what the table cannot hold: the exception join, a
+censoring note where there is no exception row, units already on order,
+backorders, and the demand pattern. Measured on the running app:
+`Short despatch: 2,658 units · Zero stock, live demand: 695 units · demand
+pattern: erratic`. The line prompt no longer asks the model for figures at all
+— asking for something that is then discarded only invites it to try.
+
+**Every "check this on" pointed at a page the UI does not have.** The five
+`VERIFY_ON` labels read "Operational Exceptions", "Supply Intelligence", "Model
+Leaderboard", "Forecast Explorer" and "Demand Analytics"; none matches a nav
+label today, and the first two are pages that were unrouted (D-052, D-105). The
+per-line template said "Open Supply Intelligence and filter to this branch and
+SKU." A destination the reader cannot reach is worse than none — they spend the
+trip before finding out. They now name Training, Forecasting and Overall
+Analysis; the exception and replenishment figures have no page of their own any
+more, so those two point at the per-line list on the recommendations page
+itself, which is where they actually are.
+
+### What this does not do
+
+Nothing here changes a number. The ranking is computed, the figures are copied
+from what the inventory service already stored, and no arithmetic was added.
+There is still no inventory-policy backtest in this project, so nothing on the
+page can claim that acting on it would have helped.
+
+Tests: 1,069 backend, 244 frontend, all passing. `tsc --noEmit` clean. All
+seven pages verified in the browser with no console errors.
+
+## D-132 — Every count on the recommendations page opens into the lines behind it
+
+D-131 moved the page from network counts to per branch × SKU cards, and then
+recreated the same problem one level down. Twelve of 261 lines were shown. A
+reader told "85 lines are critical" still could not see **which** 85, at which
+branch, for which SKU — which is the only form the number is actionable in.
+
+Both halves are needed: the summary to know where to look, the detail to act on
+it. So neither replaces the other.
+
+### The whole ranking is listed
+
+`_gather_lines` returns all 261 ranked lines, not `ranked[:MAX_LINES]`. The
+twelve is now only how many get **written prose** — the prompt has a size and
+the wording is the expensive part. Every other line is shown with its computed
+`urgency_reason` and its own figures, and the card says `computed — no written
+explanation` rather than looking like a model that chose to be terse. The
+payload carries `lines_written` beside `lines_shown` because they are different
+numbers and the page has to state both.
+
+`_write_lines` sends `ranked[:MAX_LINES]` to the model and merges the result
+into the **full** ranking, so a line the model never saw keeps its facts instead
+of dropping off the page.
+
+### Every count is a filter
+
+Urgency bands and exception kinds render as buttons carrying their counts.
+Clicking one narrows the list to exactly the lines behind it, and the header
+then states how many of the listed lines matched — a filtered list never reads
+as a complete one. Measured on the running app: `Critical 85 · High 155 ·
+Medium 11 · No recommendation 10` and `Short despatch 237 · Over-despatch 189 ·
+Zero stock, live demand 81 · SKU not in product master 1`; clicking
+*Zero stock, live demand* gives 81 of 261, and adding *Critical* gives 79.
+
+`_exception_tally` counts over **the lines on this page**, not over the
+exceptions payload, so a chip that says 237 filters to 237 cards. The two
+genuinely differ — the exceptions payload has 240 short-despatch lines, and
+three of them are branch × SKU combinations with no forecast and no stock
+position, so they produce no recommendation and are not there to be clicked.
+Counting the other way would have made the chip a lie by three.
+
+### The exception join covered 25 lines of 516
+
+`_gather_lines` joined against `exceptions()["top_lines"]`, which is
+`ranked.head(25)`. `rows` is `head(200)`. Against 516 exception lines, neither
+can answer "which lines?" of a headline that says 240, and a drill-down that
+silently stops at 200 is worse than none because it reads as the whole list.
+`exceptions()` now also returns `all_lines` — every line, uncapped, in a slim
+shape without the definition text `rows_for` repeats per row. The join moved to
+it, and 239 of the 261 recommendation lines now carry their own findings, up
+from about 25.
+
+### Each card opens into every figure
+
+An `All figures` disclosure per line shows what the six-number summary cannot
+hold: forecast month and model, demand pattern, service level, point and
+planning demand, usable stock, already on order, backorders, days of cover,
+average lead time, protection period, order-up-to level, recommended order, how
+demand was measured, whether despatch fell short, and the exception rows with
+their units. A `cannot_recommend` line opens to its reason and shows **no**
+order figures at all — the absence of a recommendation is not an order of zero.
+
+The list renders 25 cards at a time. The number not yet rendered is stated with
+buttons for the next 25 and for all of them; 261 open cards is a slow page and
+an unreadable one, but a silent cut would read as a short list.
+
+### Cost
+
+The payload is 372 KB for 261 lines. That is the price of a list someone can
+act on, and it is served from a cache after the first call. If it ever matters,
+the fix is transport compression, not a shorter list.
+
+Tests: 1,072 backend, 254 frontend, all passing. `tsc --noEmit` clean. Verified
+in the browser — filters, disclosure, paging, no console errors, and no sideways
+overflow at 375 px.

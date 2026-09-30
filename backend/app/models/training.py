@@ -195,6 +195,17 @@ class ModelRun(Base, UuidPkMixin, TimestampMixin):
     bias_abs: Mapped[float | None] = mapped_column(Float)
     naive_mae: Mapped[float | None] = mapped_column(Float)
 
+    #: The same backtest scored on the **total** the plan is held to, rather
+    #: than on one period at a time. `app/ml/evaluation/horizon_totals.py` owns
+    #: the definition; this is where it is stored so the leaderboard and the
+    #: champion ranking read it without re-deriving it from `origins_json`.
+    #: `horizon_blocks` is the sample size and is kept beside the metrics,
+    #: because on a two-origin plan these rest on one or two observations where
+    #: the per-period figures rest on fifty-two.
+    horizon_mape: Mapped[float | None] = mapped_column(Float)
+    horizon_wape: Mapped[float | None] = mapped_column(Float)
+    horizon_blocks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
     #: The reference projects' own six values, computed by the parity port.
     #: Stored separately so the legacy ranking is never confused with the AIS
     #: one (docs/DECISIONS.md D-011).

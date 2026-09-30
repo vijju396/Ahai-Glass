@@ -104,14 +104,24 @@ data until you supply the first two:
 | `runtime/` | Generated — database, MLflow, Parquet, logs | Created on first run |
 
 `data/scoped/` **is** committed: the derived slice the deployment actually
-reports on — BENGALURU and DELHI-1, 20 SKUs, 40 series, 1,118 panel rows over
-2024-04 → 2026-07. `manifest.json` beside the parquet files records the
+reports on — BENGALURU and DELHI-1, 136 SKUs, 271 series, 32,341 panel rows
+over 2024-W14 → 2026-W31. `manifest.json` beside the parquet files records the
 branches, the SKUs and which decisions chose them.
 
 It is a convenience export and a readable record, not the system of record,
 and nothing reads it at runtime. Regenerate it after changing
-`AIS_WORKSPACE_BRANCHES` or `AIS_WORKSPACE_SKUS` — it silently described the
-previous workspace for several selections before anyone noticed.
+`AIS_WORKSPACE_BRANCHES` or `AIS_WORKSPACE_SKUS` and rebuilding the panel — it
+silently described the previous workspace for several selections before anyone
+noticed. That is now one command rather than a hand edit, which is what let it
+drift:
+
+```
+cd backend && ./.venv/bin/python ../scripts/export_scoped_slice.py
+```
+
+It reads the panel artifact the application is currently serving and the
+resolved workspace, so the export cannot claim a branch or SKU the panel does
+not contain.
 
 #### Source files
 
@@ -153,9 +163,12 @@ cp backend/.env.example backend/.env
 Then read it. Two settings decide what the application shows:
 
 - **`AIS_WORKSPACE_BRANCHES` / `AIS_WORKSPACE_SKUS`** — the slice every page
-  reports on. Shipped set to the POC's two branches and twenty SKUs. Leave both
+  reports on. Shipped set to the POC's two branches and 136 SKUs. Leave both
   blank for the whole network. This is not a UI filter; it is stated on every
-  payload as `workspace_scope` (D-049).
+  payload as `workspace_scope` (D-049). Changing either means rebuilding the
+  panel: the build cuts the preprocessed tables to this scope before it
+  materialises the grid, so the setting alone will not widen what the pages
+  can show.
 - **`OPENAI_API_KEY`** — optional. Blank is fine: the AI Assistant and AI
   Recommendations pages fall back to templates and **say so on the page**.
   Every other page is unaffected. The key never reaches the browser — React
@@ -211,13 +224,28 @@ Two of these have a trap worth knowing before you hit it:
 - **`forecasts/runs` takes `horizons` as a list**, not a count:
   `{"horizons": [1,2,3,4,5,6], "reconciliation": "mint_shrinkage"}`.
 
-Measured timings on the POC slice — 2 branches, 20 SKUs, 49 scopes:
+Changing `AIS_WORKSPACE_SKUS` starts the sequence at **preprocessing**, not at
+the panel: the fact tables carry a `period` label written at the deployment's
+grain, so a monthly fact table cannot be read by a weekly panel build at all.
+
+Measured timings on the earlier 20-SKU slice — 2 branches, 49 scopes:
 
 ```
 ingestion    ~475 s   streams ~2.6 M rows (docs/API_CONTRACT.md)
 training      469 s   833 fits = 17 candidates x 49 scopes
 forecast       84 s   294 rows = 49 scopes x 6 months
 ```
+
+On the current 136-SKU slice — 2 branches, 271 series, 281 scopes:
+
+```
+preprocessing 102 s   582 K order rows, 975 K sales rows, weekly labels
+panel build   0.9 s   32,341 panel rows, 271 series, 745,916 training rows
+```
+
+The panel build is fast because it is scoped before the grid is materialised —
+the 582 K order rows are cut to 12 K first. An unscoped build of the same
+extract is 68,675 series and is what exhausted memory previously.
 
 A full-network run is very much larger. `POST /api/training/estimate` returns a
 cost projection before you commit to one; it currently runs about **54% high**

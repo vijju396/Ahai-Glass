@@ -213,9 +213,9 @@ export function TrainingConsole({
     <>
       {!live && (
         <p className="mb-1.5 text-[10.5px] text-[var(--color-text-muted)]">
-          Each bar is that model&apos;s measured accuracy on{' '}
-          <span className="mono">{scopeKey!.replace('|', ' · ')}</span> alone — the same figures as
-          the table below, replayed.
+          Each bar is that model&apos;s accuracy over a six-month total on{' '}
+          <span className="mono">{scopeKey!.replace('|', ' · ')}</span> alone — the same figures
+          as the table below, replayed.
         </p>
       )}
       <BarRace

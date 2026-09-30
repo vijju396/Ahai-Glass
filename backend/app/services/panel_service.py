@@ -16,6 +16,7 @@ from app.core.errors import ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.db.session import session_scope
 from app.domain.ais.panel_builder import AisPanelBuilder
+from app.domain.ais.workspace import resolve_workspace
 from app.jobs.runner import CancellationToken, JobCancelled, get_runner
 from app.ml.features.feature_builder import DEFAULT_HORIZONS
 from app.models.mappings import PreprocessingRun
@@ -123,6 +124,70 @@ def start_build(
     return build
 
 
+#: Which preprocessed table carries which axis. `branch_dim` and `product_dim`
+#: are dimensions, so they are cut on one axis only; the three fact tables
+#: carry both.
+_SCOPE_AXES: dict[str, tuple[str | None, str | None]] = {
+    "order_fact": ("canonical_branch", "canonical_sku"),
+    "sales_fact": ("canonical_branch", "canonical_sku"),
+    "stock_position": ("canonical_branch", "canonical_sku"),
+    "branch_dim": ("canonical_branch", None),
+    "product_dim": (None, "canonical_sku"),
+}
+
+
+def _scope_artifacts(
+    artifacts: dict[str, str], output_dir: Any, scope: Any
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Cut the preprocessed tables down to the workspace, before the build.
+
+    The panel is a full branch x SKU x period grid, so an unrestricted build
+    materialises every series the extract contains - 68,675 of them, which is
+    what exhausted memory the first time it was attempted
+    (docs/STATUS.md, "the registered panel build is the workspace slice").
+    Scoping here rather than on read keeps the grid to the slice the
+    deployment actually reports on, and makes the build reproducible: the
+    previous workspace panel was produced by a script that was never committed.
+
+    Returns the artifacts dict to build from and a record of what was cut, so
+    the manifest can state it rather than leaving a reader to infer it.
+    """
+    if not scope.is_restricted:
+        return artifacts, {"applied": False, "reason": "no workspace restriction is configured"}
+
+    scoped_dir = output_dir / "scoped_inputs"
+    scoped_dir.mkdir(parents=True, exist_ok=True)
+    out = dict(artifacts)
+    record: dict[str, Any] = {
+        "applied": True,
+        "branches": list(scope.branches) if scope.branches else None,
+        "skus": list(scope.skus) if scope.skus else None,
+        "source": scope.source,
+        "detail": scope.detail,
+        "tables": {},
+    }
+
+    branches = {b.upper() for b in scope.branches} if scope.branches else None
+    skus = {s.upper() for s in scope.skus} if scope.skus else None
+
+    for name, (branch_col, sku_col) in _SCOPE_AXES.items():
+        path = artifacts.get(name)
+        if not path:
+            continue
+        frame = pd.read_parquet(path)
+        before = len(frame)
+        if branches is not None and branch_col and branch_col in frame.columns:
+            frame = frame[frame[branch_col].astype("string").str.upper().isin(branches)]
+        if skus is not None and sku_col and sku_col in frame.columns:
+            frame = frame[frame[sku_col].astype("string").str.upper().isin(skus)]
+        target = scoped_dir / f"{name}.parquet"
+        frame.to_parquet(target, index=False)
+        out[name] = str(target)
+        record["tables"][name] = {"rows_before": before, "rows_after": len(frame)}
+
+    return out, record
+
+
 def _run_build_job(build_id: str, *, token: CancellationToken) -> None:
     settings = get_settings()
 
@@ -143,12 +208,16 @@ def _run_build_job(build_id: str, *, token: CancellationToken) -> None:
         artifacts = dict(run.artifacts_json or {}) if run else {}
         cut = build.training_cut_period
         horizons = tuple(int(h) for h in build.horizons.split(","))
+        scope = resolve_workspace(db)
         build.status = "running"
         build.started_at = datetime.now(timezone.utc)
         build.stage_detail = "Starting"
 
     try:
         output_dir = settings.runtime_dir / "storage" / "prepared" / f"panel_{build_id}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        progress("Applying the workspace scope", 1.0)
+        artifacts, scope_record = _scope_artifacts(artifacts, output_dir, scope)
         builder = AisPanelBuilder(artifacts, progress=progress)
         result = builder.run(output_dir, horizons=horizons, training_cut_period=cut)
         token.raise_if_cancelled()
@@ -165,6 +234,7 @@ def _run_build_job(build_id: str, *, token: CancellationToken) -> None:
                 "duration_seconds": round(result.duration_seconds, 2),
                 "training_cut_period": cut,
                 "horizons": list(horizons),
+                "workspace_scope": scope_record,
                 "artifacts": result.artifacts,
                 "summary": result.summary,
                 "warnings": result.warnings,
@@ -191,7 +261,11 @@ def _run_build_job(build_id: str, *, token: CancellationToken) -> None:
             build.feature_count = int(features.get("feature_count", 0))
             build.manifest_path = str(manifest_path)
             build.artifacts_json = result.artifacts
-            build.summary_json = {**result.summary, "warnings": result.warnings}
+            build.summary_json = {
+                **result.summary,
+                "warnings": result.warnings,
+                "workspace_scope": scope_record,
+            }
     except JobCancelled:
         with session_scope() as db:
             build = db.get(PanelBuild, build_id)

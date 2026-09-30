@@ -53,10 +53,10 @@ from app.ml.evaluation.segmentation import (
     profile_series,
     segment_counts,
 )
-from app.ml.features.panel import month_index
+from app.ml.features.panel import period_index
 
-PANEL_START = month_index("2024-04")
-PANEL_END = month_index("2026-07")
+PANEL_START = period_index("2024-04")
+PANEL_END = period_index("2026-07")
 
 
 # ----------------------------------------------------------------------
@@ -344,14 +344,14 @@ class TestFolds:
     def test_a_mandate_the_panel_cannot_satisfy_is_dropped_not_truncated(self):
         # Panel ends 2026-02, so the primary origin's window (to 2026-03) does
         # not fit. It must be absent rather than silently shortened.
-        origins = mandated_origins(PANEL_START, month_index("2026-02"))
+        origins = mandated_origins(PANEL_START, period_index("2026-02"))
         assert [o.name for o in origins] == []
 
     def test_min_train_periods_is_one_annual_cycle(self):
         assert MIN_TRAIN_PERIODS == 12
 
     def test_an_origin_below_the_training_floor_is_refused(self):
-        start = month_index("2025-01")
+        start = period_index("2025-01")
         assert mandated_origins(start, PANEL_END) == [
             o for o in mandated_origins(start, PANEL_END) if o.train_periods >= 12
         ]
@@ -360,10 +360,10 @@ class TestFolds:
 
     def test_horizon_of_maps_a_period_to_its_step_ahead(self):
         primary = mandated_origins(PANEL_START, PANEL_END)[0]
-        assert primary.horizon_of(month_index("2025-10")) == 1
-        assert primary.horizon_of(month_index("2026-03")) == 6
-        assert primary.horizon_of(month_index("2026-04")) is None
-        assert primary.horizon_of(month_index("2025-09")) is None
+        assert primary.horizon_of(period_index("2025-10")) == 1
+        assert primary.horizon_of(period_index("2026-03")) == 6
+        assert primary.horizon_of(period_index("2026-04")) is None
+        assert primary.horizon_of(period_index("2025-09")) is None
 
     def test_fast_holdout_takes_the_origin_with_most_training_history(self):
         origins = build_origins(PANEL_START, PANEL_END)

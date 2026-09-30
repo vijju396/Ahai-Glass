@@ -184,6 +184,17 @@ export interface LeaderboardRow {
   bias_abs: number | null;
   legacy_mape: number | null;
   legacy_valid: boolean;
+  /**
+   * The same backtest scored on the **six-month total** instead of on one
+   * period at a time — the quantity a purchase order is held to, and the
+   * metric `rank` is produced by. `horizon_blocks` is the sample size behind
+   * it and is small by construction: a six-month block needs a whole
+   * validation origin, so it is typically 1 or 2.
+   */
+  horizon_mape?: number | null;
+  horizon_wape?: number | null;
+  horizon_accuracy?: number | null;
+  horizon_blocks?: number;
   validation_points: number;
   distinct_test_points: number;
   origins_completed: number;
@@ -252,6 +263,11 @@ export interface LeaderboardResponse {
   /** `as_selected` when these rows are the board the champion was chosen on. */
   ranking_source?: string;
   ranking_note?: string | null;
+  /** Which metric produced `rank`, and the same in plain words. */
+  primary_metric?: string;
+  primary_metric_label?: string;
+  /** "weekly" or "monthly" — what a test point counts. */
+  panel_grain?: string | null;
 }
 
 export interface ComparisonPoint {
@@ -439,6 +455,25 @@ export interface SeriesForecastResponse {
   reconciliation_method: string | null;
   coherent: boolean;
   snapshot_caveat: string;
+  /** The grain `forecasts[].period` is stated in: "monthly" or "weekly". */
+  panel_grain: string;
+  /** Weekly forecasts added into the months they report under. Empty is not
+   *  an error - a monthly run needs no roll-up. */
+  monthly_rollup: MonthlyRollup[];
+  horizon_total: number | null;
+}
+
+export interface MonthlyRollup {
+  month: string;
+  point_forecast: number;
+  q80: number | null;
+  q90: number | null;
+  q95: number | null;
+  /** Periods summed into this month: 1 monthly, 4 or 5 weekly. */
+  periods: number;
+  /** False where the horizon covers only part of the month, so this is a
+   *  partial total rather than a forecast of a short month. */
+  complete: boolean;
 }
 
 export interface LevelTotals {

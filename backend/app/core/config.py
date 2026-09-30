@@ -73,6 +73,17 @@ class Settings(BaseSettings):
     control_tolerance_pct: float = 0.5
 
     # --- forecasting -------------------------------------------------------
+    #: The grain the panel is built and modelled at: "weekly" or "monthly".
+    #:
+    #: Weekly is the live setting (D-105). Every period in the system - panel
+    #: rows, folds, origins, lags, the horizon - follows from this one value
+    #: through `app.ml.features.grain`; nothing else reads a calendar. Setting
+    #: it back to "monthly" restores the monthly pipeline with no code change,
+    #: but a run trained at one grain cannot be read at the other, so the panel
+    #: has to be rebuilt and training re-run after changing it.
+    panel_grain: str = "weekly"
+    #: The planning window, in months, at either grain. The horizon in periods
+    #: is derived from it: 6 monthly, 26 weekly.
     forecast_horizon_months: int = 6
     service_levels: list[int] = Field(default_factory=lambda: [80, 90, 95])
     random_seed: int = 42
@@ -90,11 +101,22 @@ class Settings(BaseSettings):
     lstm_timeout_seconds: float = 300.0
     max_training_workers: int = 4
 
-    #: Which metric orders the leaderboard and picks the champion: "mape" or
-    #: "wape". Both are computed and shown either way. MAPE is the default so
-    #: the ranking agrees with the reported accuracy, which is 100 - MAPE
-    #: (docs/DECISIONS.md D-043).
-    champion_primary_metric: str = "mape"
+    #: Which metric orders the leaderboard and picks the champion:
+    #: "horizon_mape", "mape" or "wape". All are computed and shown either way.
+    #:
+    #: The default is **horizon_mape** - the error on the six-month total,
+    #: which is the quantity a purchase is actually held to (D-120). It
+    #: replaced per-period MAPE (D-043) because ranking on one period at a time
+    #: crowned models that are not the ones you would buy glass on: over this
+    #: run the same thirteen models reorder sharply between the two, and the
+    #: screens now report the six-month figure everywhere, so the board had to
+    #: be sorted on the number being shown.
+    #:
+    #: The cost is sample size, and it is not hidden: a six-month block needs a
+    #: whole validation origin, so each row rests on one or two blocks against
+    #: fifty-two per-period points. `horizon_blocks` travels on every row.
+    #: `AIS_CHAMPION_PRIMARY_METRIC=mape` restores the old ranking.
+    champion_primary_metric: str = "horizon_mape"
 
     #: Locations this deployment reports on, across every screen. Empty means
     #: "whatever the active training run covered" (see
@@ -144,6 +166,19 @@ class Settings(BaseSettings):
     ai_max_output_tokens: int = Field(
         default=900,
         validation_alias=AliasChoices("AI_MAX_OUTPUT_TOKENS", "AIS_AI_MAX_OUTPUT_TOKENS"),
+    )
+    #: Output cap for the RECOMMENDATIONS call, which is larger than a chat
+    #: answer's because it returns up to five items as one JSON object, each
+    #: with an observation, an explanation and its evidence. At the chat cap of
+    #: 900 the JSON was cut off mid-string on roughly half the runs, the parse
+    #: failed and the page fell back to templates with no error the reader
+    #: could see (docs/DECISIONS.md D-125).
+    ai_recommendations_max_output_tokens: int = Field(
+        default=2600,
+        validation_alias=AliasChoices(
+            "AI_RECOMMENDATIONS_MAX_OUTPUT_TOKENS",
+            "AIS_AI_RECOMMENDATIONS_MAX_OUTPUT_TOKENS",
+        ),
     )
     ai_request_timeout_seconds: float = Field(
         default=30.0,
@@ -205,6 +240,20 @@ class Settings(BaseSettings):
     default_lead_time_days: float = 3.0
     stock_snapshot_date: str = "2026-08-01"
 
+    @field_validator("panel_grain")
+    @classmethod
+    def _check_grain(cls, value: str) -> str:
+        from app.ml.features.grain import normalise_grain
+
+        return normalise_grain(value)
+
+    @property
+    def forecast_horizon(self) -> int:
+        """The horizon in periods at the configured grain."""
+        from app.ml.features.grain import periods_spanning_months
+
+        return periods_spanning_months(self.forecast_horizon_months, self.panel_grain)
+
     @field_validator("min_history_profile")
     @classmethod
     def _check_profile(cls, value: str) -> str:
@@ -241,7 +290,7 @@ class Settings(BaseSettings):
     @field_validator("champion_primary_metric")
     @classmethod
     def _check_primary_metric(cls, value: str) -> str:
-        allowed = {"mape", "wape"}
+        allowed = {"horizon_mape", "mape", "wape"}
         if value not in allowed:
             raise ValueError(f"champion_primary_metric must be one of {sorted(allowed)}")
         return value

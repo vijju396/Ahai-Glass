@@ -101,6 +101,13 @@ interface MonthRangeProps {
   first?: string | null;
   last?: string | null;
   months?: number;
+  /** What a period is called at the panel's grain - "weeks" on a weekly panel. */
+  periodNoun?: string;
+  /** Earliest month (`YYYY-MM`) the calendar may offer, when a page is limited
+   *  to part of the data. Defaults to `first`. */
+  minMonth?: string | null;
+  /** Text of the button that clears both pickers. */
+  resetLabel?: string;
 }
 
 export function MonthRange({
@@ -111,8 +118,11 @@ export function MonthRange({
   first,
   last,
   months,
+  periodNoun = 'months',
+  minMonth,
+  resetLabel = 'Full history',
 }: MonthRangeProps) {
-  const min = first ?? undefined;
+  const min = minMonth ?? first ?? undefined;
   const max = last ?? undefined;
   // A backwards range returns nothing, so the pickers constrain each other:
   // `to` can never precede `from`, and `from` can never follow `to`.
@@ -120,7 +130,7 @@ export function MonthRange({
   const toMin = from || min;
   const range =
     first && last
-      ? `${monthLabel(first)} – ${monthLabel(last)}${months ? ` · ${months} months` : ''}`
+      ? `${monthLabel(first)} – ${monthLabel(last)}${months ? ` · ${months} ${periodNoun}` : ''}`
       : null;
 
   return (
@@ -151,7 +161,7 @@ export function MonthRange({
             onToChange('');
           }}
         >
-          Full history
+          {resetLabel}
         </button>
       )}
       {range && (

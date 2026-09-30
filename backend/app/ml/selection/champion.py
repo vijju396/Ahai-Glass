@@ -51,14 +51,32 @@ MIN_TEST_POINT_SHARE = 0.5
 #: right by luck.
 MIN_VALIDATION_POINTS = 3
 
-#: Metrics that may rank a scope. Both are computed for every row either way;
-#: this only decides which one orders the leaderboard and picks the champion.
+#: Metrics that may rank a scope. All three are computed for every row either
+#: way; this only decides which one orders the leaderboard and picks the
+#: champion.
 #:
-#: **MAPE** is the default because the reported accuracy figure is
-#: `100 - MAPE`, and a leaderboard ordered by one metric while the headline
-#: number comes from another can put a model with the better accuracy in
-#: second place. Ranking by the metric the accuracy is derived from keeps the
-#: two consistent. It is also what both reference projects rank by.
+#: **`horizon_mape` is the default**: the error on the six-month total, which
+#: is the quantity the plan is actually held to. A plant buys glass on a
+#: half-year horizon, so a model that is wrong week by week in both directions
+#: and right on the half-year total is the better model *for the decision being
+#: made* - and ranking on a per-week figure cannot see that. Measured on run
+#: `101df724`, the two orderings disagree sharply: ranking by the six-month
+#: total instead of per-week MAPE moves XGBoost-with-exogenous eleven places up
+#: and SARIMAX four places down.
+#:
+#: What it costs, stated because it is real: a six-month total is one
+#: observation per origin, so on this project's two-origin plan the ranking
+#: metric rests on **one or two blocks** where the per-period MAPE rests on
+#: fifty-two points. `horizon_blocks` travels on every row so the thinness is
+#: visible rather than implied, and the per-period metric stays on the row and
+#: on the screen.
+#:
+#: **MAPE** (per period) was the previous default, because the reported
+#: accuracy figure is `100 - MAPE` and a leaderboard ordered by one metric
+#: while the headline comes from another can put the better-accuracy model in
+#: second place. That argument still holds - which is why the headline moved to
+#: the six-month figure at the same time as the ranking did, rather than the
+#: two being allowed to drift apart again.
 #:
 #: **WAPE** remains available and is still shown on every row. It is the more
 #: robust choice on intermittent data, because MAPE drops zero actuals
@@ -72,8 +90,16 @@ MIN_VALIDATION_POINTS = 3
 #: under-forecast in 75% of scopes against 70% for WAPE, with a median bias of
 #: -5.21% against -4.12%. For an inventory system, under-forecasting is a
 #: stockout (docs/DECISIONS.md D-043).
-PRIMARY_METRIC_CHOICES: tuple[str, ...] = ("mape", "wape")
-DEFAULT_PRIMARY_METRIC = "mape"
+PRIMARY_METRIC_CHOICES: tuple[str, ...] = ("horizon_mape", "mape", "wape")
+DEFAULT_PRIMARY_METRIC = "horizon_mape"
+
+#: What each ranking metric is called on screen, so an endpoint never has to
+#: invent the phrase and two pages never disagree about it.
+PRIMARY_METRIC_LABELS: dict[str, str] = {
+    "horizon_mape": "error on the six-month total",
+    "mape": "error on one period at a time",
+    "wape": "volume-weighted error, one period at a time",
+}
 
 
 class Ineligibility(StrEnum):
@@ -94,9 +120,10 @@ INELIGIBILITY_REASONS: dict[str, str] = {
         "and reason are shown on the row."
     ),
     Ineligibility.NO_PRIMARY_METRIC: (
-        "WAPE is undefined for this validation window - every actual in it was "
-        "zero, so there is no denominator. Undefined is reported rather than "
-        "substituted."
+        "The ranking metric is undefined for this validation window - there was "
+        "no denominator to divide by, because every actual in it was zero, or "
+        "no complete planning total could be summed from it. Undefined is "
+        "reported rather than substituted."
     ),
     Ineligibility.TOO_FEW_VALIDATION_POINTS: (
         f"Fewer than {MIN_VALIDATION_POINTS} validation points. A metric over "
@@ -148,6 +175,12 @@ class Candidate:
     bias_abs: float | None = None
     legacy_mape: float | None = None
     legacy_valid: bool = False
+    #: The same backtest scored on the six-month total. `horizon_blocks` is the
+    #: number of complete totals behind it - 1 or 2 on this project's plan - and
+    #: is carried so a thin metric is visibly thin.
+    horizon_mape: float | None = None
+    horizon_wape: float | None = None
+    horizon_blocks: int = 0
     validation_points: int = 0
     distinct_test_points: int = 0
     origins_completed: int = 0
@@ -157,7 +190,16 @@ class Candidate:
     extra: dict[str, Any] = field(default_factory=dict)
 
     def primary(self, metric: str = DEFAULT_PRIMARY_METRIC) -> float | None:
-        """The value this row is ranked on. Lower is better for both choices."""
+        """The value this row is ranked on. Lower is better for every choice.
+
+        A row with no value for the chosen metric is **not** silently ranked on
+        a different one: it returns `None` and the caller excludes it with a
+        stated reason. Substituting the per-period figure for a missing
+        six-month one would rank two models on two different questions and
+        present the result as one order.
+        """
+        if metric == "horizon_mape":
+            return self.horizon_mape
         return self.mape if metric == "mape" else self.wape
 
     def sort_bias_abs(self) -> float:
@@ -214,6 +256,12 @@ class RankedRow:
             "bias_abs": c.bias_abs,
             "legacy_mape": c.legacy_mape,
             "legacy_valid": c.legacy_valid,
+            "horizon_mape": c.horizon_mape,
+            "horizon_wape": c.horizon_wape,
+            "horizon_accuracy": (
+                None if c.horizon_mape is None else max(0.0, 100.0 - c.horizon_mape)
+            ),
+            "horizon_blocks": c.horizon_blocks,
             "validation_points": c.validation_points,
             "distinct_test_points": c.distinct_test_points,
             "origins_completed": c.origins_completed,
@@ -237,10 +285,19 @@ class Leaderboard:
     ranked_count: int
     excluded_count: int
     notes: list[str] = field(default_factory=list)
+    #: Which metric this order was produced by, and the same in plain words.
+    #: A table sorted on the six-month total looks wrong to anyone reading it
+    #: as a per-period board - XGBoost-exog moves eleven places between the
+    #: two - so the board says which question it answered rather than leaving
+    #: it to be inferred from the column order (D-120).
+    primary_metric: str = DEFAULT_PRIMARY_METRIC
+    primary_metric_label: str = PRIMARY_METRIC_LABELS[DEFAULT_PRIMARY_METRIC]
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "rows": [row.as_dict() for row in self.rows],
+            "primary_metric": self.primary_metric,
+            "primary_metric_label": self.primary_metric_label,
             "champion_model_id": self.champion_model_id,
             "challenger_model_id": self.challenger_model_id,
             "legacy_champion_model_id": self.legacy_champion_model_id,
@@ -421,12 +478,13 @@ def rank_candidates(
 
     notes: list[str] = []
     if beaten and best_baseline is not None and ranked:
+        metric_name = PRIMARY_METRIC_LABELS.get(primary_metric, primary_metric)
         notes.append(
             f"The best non-registry baseline ({best_baseline.model_id}, "
-            f"{primary_metric.upper()} "
-            f"{best_baseline.primary(primary_metric):.4f}) beats the champion "
-            f"({ranked[0].model_id}, {primary_metric.upper()} "
-            f"{ranked[0].primary(primary_metric):.4f}). The champion "
+            f"{metric_name} "
+            f"{best_baseline.primary(primary_metric):.4f}%) beats the champion "
+            f"({ranked[0].model_id}, {metric_name} "
+            f"{ranked[0].primary(primary_metric):.4f}%). The champion "
             "is still the best of the 13 registered models; it is not the best "
             "available forecast for this scope."
         )
@@ -483,6 +541,10 @@ def rank_candidates(
         ranked_count=len(ranked),
         excluded_count=len(rows) - len(ranked),
         notes=notes,
+        primary_metric=primary_metric,
+        primary_metric_label=PRIMARY_METRIC_LABELS.get(
+            primary_metric, primary_metric
+        ),
     )
 
 

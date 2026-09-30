@@ -8,6 +8,8 @@ from typing import Any
 from pydantic import Field
 
 from app.schemas.common import ApiModel
+from app.core.config import get_settings
+from app.ml.features.feature_builder import horizons_for
 
 PERIOD_PATTERN = r"^\d{4}-\d{2}$"
 
@@ -17,7 +19,11 @@ class PanelBuildRequest(ApiModel):
     #: The training cut, as YYYY-MM. Origins after it are excluded, and so is
     #: any row whose target period falls after it.
     training_cut_period: str | None = Field(default=None, pattern=PERIOD_PATTERN)
-    horizons: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5, 6])
+    #: Defaults to every horizon the configured grain covers - 1..6 monthly,
+    #: 1..26 weekly - so a request that names none still plans six months.
+    horizons: list[int] = Field(
+        default_factory=lambda: list(horizons_for(get_settings().panel_grain))
+    )
 
 
 class PanelBuildOut(ApiModel):

@@ -105,6 +105,9 @@ def _candidate(row: ModelRun) -> Candidate:
         bias_abs=row.bias_abs,
         legacy_mape=row.legacy_mape,
         legacy_valid=row.legacy_valid,
+        horizon_mape=row.horizon_mape,
+        horizon_wape=row.horizon_wape,
+        horizon_blocks=row.horizon_blocks,
         validation_points=row.validation_points,
         distinct_test_points=max(
             row.total_test_points - row.duplicate_test_points, 0
@@ -286,6 +289,9 @@ def leaderboard_payload(
         {
             "training_run_id": run_id,
             "panel_build_id": run.panel_build_id if run else None,
+            # What a "period" is on this board, so a reader is not left to
+            # guess whether a count of test points is weeks or months.
+            "panel_grain": get_settings().panel_grain,
             "scope_level": scope_level,
             "scope_key": scope_key,
             "models_missing": [
@@ -457,6 +463,7 @@ def _build_deployability(run: TrainingRun) -> tuple[_Deployability | None, str |
             run.xgboost_training_profile or settings.xgboost_training_profile
         ),
         "random_seed": settings.random_seed,
+        "panel_grain": settings.panel_grain,
     }
     return _Deployability(panel, config, GATE_HORIZONS), None
 

@@ -29,17 +29,48 @@ import numpy as np
 import pandas as pd
 
 from app.ml.evaluation.folds import smallest_fold_train_size
+from app.ml.features.grain import MONTHLY, PERIODS_PER_YEAR, WEEKLY
 
-#: The annual cycle. The only candidate the reference profile will accept at
-#: monthly grain.
-ANNUAL_PERIOD = 12
+#: The annual cycle at monthly grain. Kept as a module constant because callers
+#: and tests name it directly; `annual_period(grain)` is the grain-aware form.
+ANNUAL_PERIOD = PERIODS_PER_YEAR[MONTHLY]
 
-#: Candidates per history profile, strongest first. The relaxed profile keeps
-#: 12 at the front so a series with enough history still gets the annual cycle.
-SEASONAL_CANDIDATES: dict[str, tuple[int, ...]] = {
-    "reference": (ANNUAL_PERIOD,),
-    "monthly_relaxed": (ANNUAL_PERIOD, 6, 4, 3),
+
+def annual_period(grain: str = MONTHLY) -> int:
+    """The annual cycle in periods: 12 monthly, 52 weekly."""
+    return PERIODS_PER_YEAR[grain]
+
+
+#: Candidates per history profile, strongest first, per grain. The relaxed
+#: profile keeps the annual cycle at the front so a series with enough history
+#: still gets it, then steps down through half-year, quarter and month.
+#:
+#: **Weekly does not rescue the annual cycle.** 52 needs 104 observations for
+#: two complete cycles and the weekly panel offers 78 at the primary origin and
+#: 96 at the second, so the reference profile still resolves to `None` and the
+#: four Exponential Smoothing variants stay Ineligible - the same honest answer
+#: monthly gave, for the same reason. What weekly does change is the relaxed
+#: profile: 26, 13 and 4 all clear their two-cycle floor with room to spare,
+#: where monthly's 6, 4 and 3 were scraping against an 18-period fold (D-107).
+_CANDIDATES_BY_GRAIN: dict[str, dict[str, tuple[int, ...]]] = {
+    MONTHLY: {
+        "reference": (12,),
+        "monthly_relaxed": (12, 6, 4, 3),
+    },
+    WEEKLY: {
+        "reference": (52,),
+        "monthly_relaxed": (52, 26, 13, 4),
+    },
 }
+
+#: Monthly candidates, under the name callers already import.
+SEASONAL_CANDIDATES: dict[str, tuple[int, ...]] = _CANDIDATES_BY_GRAIN[MONTHLY]
+
+
+def seasonal_candidates(profile: str, grain: str = MONTHLY) -> tuple[int, ...]:
+    """Candidate cycles for a profile at a grain, strongest first."""
+    by_profile = _CANDIDATES_BY_GRAIN[grain]
+    return by_profile.get(profile, by_profile["reference"])
 
 
 @dataclass
@@ -67,6 +98,7 @@ def resolve_seasonal_period(
     *,
     profile: str = "reference",
     reference_length: int | None = None,
+    grain: str = MONTHLY,
 ) -> SeasonalResolution:
     """The seasonal period to use, and why the others were rejected.
 
@@ -80,7 +112,7 @@ def resolve_seasonal_period(
     """
     values = pd.to_numeric(target, errors="coerce").dropna().astype(float)
     length = reference_length if reference_length is not None else len(values)
-    candidates = SEASONAL_CANDIDATES.get(profile, SEASONAL_CANDIDATES["reference"])
+    candidates = seasonal_candidates(profile, grain)
 
     rejected: dict[int, str] = {}
     best_period: int | None = None
@@ -131,5 +163,5 @@ def _autocorrelation(values: pd.Series, lag: int) -> float | None:
 #: Re-exported, not redefined. Fold arithmetic lives in `folds.py`; keeping a
 #: second copy here is exactly the drift D-036 was about. Existing callers and
 #: tests import it from this module, so the name stays available.
-__all__ = ["ANNUAL_PERIOD", "SEASONAL_CANDIDATES", "SeasonalResolution",
+__all__ = ["ANNUAL_PERIOD", "SEASONAL_CANDIDATES", "annual_period", "seasonal_candidates", "SeasonalResolution",
            "resolve_seasonal_period", "smallest_fold_train_size"]

@@ -527,6 +527,11 @@ export function seriesForecastFixture(
     coherent: true,
     snapshot_caveat:
       'Forecasts carry the target-source mix of the window they were fitted on; a `sales_proxy` row is a labelled substitute, not ordered demand.',
+    // The default fixture is a monthly panel, where a period is already a
+    // month and the roll-up is empty. A weekly case overrides all three.
+    panel_grain: 'monthly',
+    monthly_rollup: [],
+    horizon_total: points.reduce((sum, [, value]) => sum + value, 0),
     ...overrides,
   };
 }

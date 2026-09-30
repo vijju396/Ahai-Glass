@@ -23,7 +23,7 @@ import pandas as pd
 import pytest
 
 from app.domain.ais import analytics as A
-from app.ml.features.panel import month_index
+from app.ml.features.panel import period_index
 
 
 def _frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -54,15 +54,14 @@ def _frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
     records = []
     for index, row in enumerate(rows):
         merged = {**defaults, **row}
-        merged.setdefault("period_index", month_index("2025-01") + index)
+        merged.setdefault("period_index", period_index("2025-01") + index)
         records.append(merged)
     frame = pd.DataFrame(records)
     frame["period"] = frame["period_index"].map(A.index_to_period)
-    frame["demand_value"] = pd.to_numeric(frame["target"], errors="coerce").fillna(0.0) * pd.to_numeric(
-        frame["mean_mrp"], errors="coerce"
-    ).fillna(0.0)
-    frame["shortfall_positive"] = pd.to_numeric(frame["shortfall_qty"], errors="coerce").clip(lower=0.0)
-    return frame
+    # Derived by the module under test rather than recomputed here: this
+    # fixture used to carry its own copy of the arithmetic, and it went stale
+    # the moment a derived column was added.
+    return A.derive_columns(frame)
 
 
 @pytest.fixture(autouse=True)
@@ -70,6 +69,73 @@ def _clear_caches():
     A.clear_caches()
     yield
     A.clear_caches()
+
+
+class TestTheHeadlineTilesReconcile:
+    """Overall Analysis leads with orders, sales and the difference (D-121).
+
+    The three have to subtract exactly, and they only can because all three are
+    measured on the rows that carry both an order and a despatch. Every test
+    here is really one assertion: a sales-proxy row must not be able to leak
+    into the comparison and turn a stretch with no orders into a backlog.
+    """
+
+    def test_the_three_tiles_subtract_exactly(self):
+        frame = _frame(
+            [
+                {"target": 100.0, "despatched_qty": 80.0, "mean_mrp": 10.0, "target_source": "order"},
+                {"target": 50.0, "despatched_qty": 50.0, "mean_mrp": 10.0, "target_source": "order"},
+            ]
+        )
+        k = A.summary(frame, A.AnalyticsScope())["kpis"]
+        assert k["ordered_value_known"] == 1500.0
+        assert k["despatch_value"] == 1300.0
+        assert k["gap_value"] == 200.0
+        assert k["ordered_value_known"] - k["despatch_value"] == k["gap_value"]
+        assert k["ordered_units_known"] - k["despatched_units"] == k["gap_units"]
+
+    def test_a_proxy_row_never_enters_the_subtraction(self):
+        # The real panel opens with twelve months of sales proxy: no order was
+        # placed and no despatch recorded. Counting that as ordered-not-
+        # despatched would invent a backlog out of a stretch of missing data.
+        frame = _frame(
+            [
+                {"target": 100.0, "despatched_qty": 80.0, "mean_mrp": 10.0, "target_source": "order"},
+                {"target": 900.0, "despatched_qty": None, "mean_mrp": 10.0, "target_source": "sales_proxy"},
+            ]
+        )
+        k = A.summary(frame, A.AnalyticsScope())["kpis"]
+        assert k["demand_value"] == 10_000.0  # the proxy row is still real demand
+        assert k["ordered_value_known"] == 1000.0  # but it is not an order
+        assert k["gap_value"] == 200.0  # and it is not a backlog
+
+    def test_the_narrower_window_is_reported_not_assumed(self):
+        frame = _frame(
+            [
+                {"target": 10.0, "despatched_qty": None, "target_source": "sales_proxy"},
+                {"target": 10.0, "despatched_qty": 10.0, "target_source": "order"},
+            ]
+        )
+        payload = A.summary(frame, A.AnalyticsScope())
+        window, comparable = payload["window"], payload["kpis"]["comparable_window"]
+        assert comparable["periods"] < window["periods"]
+        assert comparable["start"] > window["start"]
+
+    def test_a_selection_with_no_despatch_at_all_reports_nothing_rather_than_zero(self):
+        frame = _frame([{"target": 100.0, "despatched_qty": None, "target_source": "sales_proxy"}])
+        k = A.summary(frame, A.AnalyticsScope())["kpis"]
+        assert k["ordered_value_known"] is None
+        assert k["despatch_value"] is None
+        assert k["gap_value"] is None
+        assert k["comparable_window"] is None
+
+    def test_coverage_on_value_matches_the_tiles_it_sits_under(self):
+        frame = _frame(
+            [{"target": 100.0, "despatched_qty": 80.0, "mean_mrp": 10.0, "target_source": "order"}]
+        )
+        k = A.summary(frame, A.AnalyticsScope())["kpis"]
+        assert k["fill_rate_value_pct"] == 80.0
+        assert k["despatch_value"] / k["ordered_value_known"] * 100 == k["fill_rate_value_pct"]
 
 
 class TestUnknownIsNotZero:
@@ -133,8 +199,19 @@ class TestSummaryShape:
         assert payload["trend"][0]["demand_units"] == 60.0
 
     def test_only_the_grains_the_data_supports_are_offered(self):
+        """A display grain is offered only where it is a real roll-up of rows
+        that exist. A weekly panel can honestly be shown by week, month or
+        quarter; a monthly one cannot be shown by week. Daily is never offered
+        at either, because no source row is finer than a week."""
+        assert A.available_grains("monthly") == ("monthly", "quarterly")
+        assert A.available_grains("weekly") == ("weekly", "monthly", "quarterly")
+        for panel_grain in ("monthly", "weekly"):
+            assert "daily" not in A.available_grains(panel_grain)
+            assert "invent" in A.grain_note(panel_grain)
+
+        # And the payload offers whatever the live panel supports.
         payload = A.summary(_frame([{}]), A.AnalyticsScope())
-        assert payload["available_grains"] == ["monthly", "quarterly"]
+        assert payload["available_grains"] == list(A.available_grains())
         assert "invent" in payload["grain_note"]
 
     def test_an_unknown_grain_falls_back_to_monthly_rather_than_failing(self):
@@ -301,6 +378,13 @@ class TestAssistantWithoutAKey:
         assert "sk-" not in blob
         assert "key_length" not in blob
         assert "openai_api_key" not in body
+        # An exact set, not a subset: a field added here is a field returned to
+        # a browser, and this test exists so that is a decision rather than an
+        # accident. `workspace_scope` is the branch and SKU restriction the
+        # assistant answers under, added so the page can render the same banner
+        # as the other six (D-131). It carries no key material - branch names,
+        # SKU codes and counts - and `test_the_workspace_scope_carries_no_key`
+        # below says so independently.
         assert set(body) == {
             "enabled",
             "configured",
@@ -308,7 +392,20 @@ class TestAssistantWithoutAKey:
             "steps",
             "notes",
             "suggested_questions",
+            "workspace_scope",
         }
+
+    def test_the_status_workspace_scope_says_what_the_assistant_can_see(self, client):
+        """The page had no banner, so a restricted answer read as a network one."""
+        body = client.get("/api/assistant/status").json()
+        scope = body["workspace_scope"]
+
+        # Unrestricted in this fixture, resolvable either way - what matters is
+        # that the field is present and shaped like the analytics payloads', so
+        # the same banner component renders it.
+        assert scope is None or "restricted" in scope
+        if scope:
+            assert "sk-" not in json.dumps(scope).lower()
 
     def test_a_question_is_answered_deterministically(self, client):
         response = client.post(

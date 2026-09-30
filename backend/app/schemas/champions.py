@@ -17,6 +17,7 @@ from typing import Any
 
 from pydantic import Field, field_validator
 
+from app.ml.selection.champion import DEFAULT_PRIMARY_METRIC, PRIMARY_METRIC_LABELS
 from app.models.champions import MIN_OVERRIDE_REASON_CHARS, SCOPE_KINDS
 from app.schemas.common import ApiModel
 
@@ -48,6 +49,19 @@ class LeaderboardRow(ApiModel):
     bias_abs: float | None = None
     legacy_mape: float | None = None
     legacy_valid: bool = False
+
+    #: The same backtest scored on the **six-month total** rather than on one
+    #: period at a time - the quantity a purchase order is held to, and since
+    #: D-120 the metric this board is ordered on. `horizon_accuracy` is
+    #: 100 - `horizon_mape`, floored at 0, matching the `accuracy` convention.
+    #: `horizon_blocks` is the sample size and travels with them: a six-month
+    #: block needs a whole validation origin, so it is typically 1 or 2 where
+    #: `validation_points` is in the dozens. `None` means not measured - a row
+    #: with no stored origins, not a row that scored zero.
+    horizon_mape: float | None = None
+    horizon_wape: float | None = None
+    horizon_accuracy: float | None = None
+    horizon_blocks: int = 0
 
     validation_points: int = 0
     distinct_test_points: int = 0
@@ -108,6 +122,8 @@ class ChampionSelectionOut(ApiModel):
 class LeaderboardResponse(ApiModel):
     training_run_id: str
     panel_build_id: str | None = None
+    #: The grain the test points are counted in - "weekly" or "monthly".
+    panel_grain: str | None = None
     scope_level: str
     scope_key: str
 
@@ -136,6 +152,11 @@ class LeaderboardResponse(ApiModel):
     #: a reader is looking at is not something to leave them guessing at.
     ranking_source: str = "recomputed"
     ranking_note: str | None = None
+    #: Which metric produced `rank`, and the same in plain words. Shown beside
+    #: the table because the order changes a great deal between the choices,
+    #: and a reader cannot tell which question was asked from the columns.
+    primary_metric: str = DEFAULT_PRIMARY_METRIC
+    primary_metric_label: str = PRIMARY_METRIC_LABELS[DEFAULT_PRIMARY_METRIC]
 
 
 class ComparisonPoint(ApiModel):

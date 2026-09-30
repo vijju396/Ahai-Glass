@@ -37,6 +37,8 @@ import { MarkedSelect } from '@/components/ui/MarkedSelect';
 import { monthLabel } from '@/components/charts/Chart';
 import { ApiError } from '@/api/client';
 import { fetchCurrentForecastRun, fetchSeriesForecast, forecastKeys } from '@/api/forecasts';
+import { accuracyKeys, fetchAccuracyWindows, fetchCurrentRun, trainingKeys } from '@/api/training';
+import { periodNounOne } from '@/app/period';
 import { fetchScopes, leaderboardKeys } from '@/api/leaderboard';
 import {
   analyticsKeys,
@@ -187,9 +189,53 @@ export function ForecastingPage() {
     retry: false,
   });
 
+  // This line's accuracy over the six-month total — the same window the
+  // headline panel reports — so drilling into a line does not swap the
+  // measurement out from under the reader. Read from the accuracy-windows
+  // endpoint rather than recomputed: the frontend carries no forecasting
+  // arithmetic.
+  const currentRun = useQuery({
+    queryKey: trainingKeys.current,
+    queryFn: fetchCurrentRun,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const accuracyRunId = currentRun.data?.id;
+  const accuracy = useQuery({
+    queryKey: accuracyKeys.windows(accuracyRunId ?? '', null),
+    queryFn: () => fetchAccuracyWindows(accuracyRunId as string, null),
+    enabled: !!accuracyRunId,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const lineAccuracy =
+    scopeLevel === 'series'
+      ? (accuracy.data?.series ?? []).find((row) => row.scope_key === scopeKey)
+      : undefined;
+
   const data = series.data;
   const forecasts = data?.forecasts ?? [];
   const metrics = data?.validation_metrics;
+  // The roll-up is only worth a panel when a period is not already a month.
+  const rollup = data?.panel_grain === 'weekly' ? (data?.monthly_rollup ?? []) : [];
+  // A "sum of children" aggregate carries no prediction interval of its own,
+  // and the API returns the point forecast in the quantile fields rather than
+  // null. Three columns repeating the point forecast read as a band that was
+  // measured; they are dropped instead, with the reason shown.
+  const rollupHasBand = rollup.some(
+    (m) => m.q95 != null && m.q95 !== m.point_forecast,
+  );
+  const firstRollup = rollup[0];
+  const nextMonth = firstRollup
+    ? {
+        value: firstRollup.point_forecast,
+        label: `${monthLabel(firstRollup.month)}${
+          firstRollup.complete ? '' : ' (part month)'
+        } · ${firstRollup.periods} weeks`,
+      }
+    : forecasts[0]
+      ? { value: forecasts[0].point_forecast, label: monthLabel(forecasts[0].period) }
+      : null;
 
 
   return (
@@ -310,10 +356,16 @@ export function ForecastingPage() {
       {data && (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {/* A planner buys by the month, so this tile stays a month even
+                when the panel is weekly: at weekly grain it shows the first
+                month of the roll-up rather than the first week, and says how
+                many weeks that month was built from. Showing a single week
+                under a "next month" label would understate demand roughly
+                fourfold. */}
             <StatTile
               label="Next-month forecast"
-              value={formatInt(forecasts[0]?.point_forecast)}
-              sublabel={forecasts[0] ? `${monthLabel(forecasts[0].period)} · reconciled units` : 'unavailable'}
+              value={formatInt(nextMonth?.value)}
+              sublabel={nextMonth ? `${nextMonth.label} · reconciled units` : 'unavailable'}
               tint="blue"
               accent
             />
@@ -328,10 +380,30 @@ export function ForecastingPage() {
                 name is the error that chose it. WAPE is still computed and
                 still on the leaderboard; quoting it here named one metric while
                 the selection used another. */}
+            {/* The six-month figure where this line has one, because that is
+                what the headline panel reports and what a plan is held to.
+                The single-period figure stays in the sublabel rather than
+                being dropped: on five lines of this run the six-month number
+                is the *worse* of the two, and a tile showing only the
+                flattering one would be picking per line. */}
             <StatTile
-              label="Measured error"
-              value={metrics?.mape == null ? '—' : `${metrics.mape.toFixed(2)}% MAPE`}
-              sublabel={`out of sample · ${formatInt(metrics?.validation_points)} points`}
+              label={lineAccuracy?.horizon_accuracy_pct != null ? 'Accuracy, six-month total' : 'Measured error'}
+              value={
+                lineAccuracy?.horizon_accuracy_pct != null
+                  ? `${lineAccuracy.horizon_accuracy_pct.toFixed(1)}%`
+                  : metrics?.mape == null
+                    ? '—'
+                    : `${metrics.mape.toFixed(2)}% MAPE`
+              }
+              sublabel={
+                lineAccuracy?.horizon_accuracy_pct != null
+                  ? `one ${periodNounOne(data.panel_grain)}: ${
+                      lineAccuracy.champion_accuracy_pct == null
+                        ? '—'
+                        : `${lineAccuracy.champion_accuracy_pct.toFixed(1)}%`
+                    } · out of sample`
+                  : `out of sample · ${formatInt(metrics?.validation_points)} points`
+              }
               tint="teal"
             />
             <StatTile
@@ -386,6 +458,89 @@ export function ForecastingPage() {
                 SKU for that.
               </p>
             </div>
+          )}
+
+          {rollup.length > 0 && (
+            <Panel
+              title="The six months, added up from the weeks"
+              accent={BLUE}
+              note="Forecast per ISO week, then added into the calendar months. A week is reported under the month containing its Thursday, so no week is split and the months add back to the horizon total exactly."
+            >
+              <div className="table-scroll">
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>Month</th>
+                      <th className="num">Weeks</th>
+                      <th className="num">Point forecast</th>
+                      {rollupHasBand && (
+                        <>
+                          <th className="num">q80</th>
+                          <th className="num">q90</th>
+                          <th className="num">q95</th>
+                        </>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rollup.map((m) => (
+                      <tr key={m.month}>
+                        <td className="mono text-[11px]">
+                          {m.month}
+                          {!m.complete && (
+                            <span
+                              className="ml-1.5 text-[10px] text-[var(--color-text-muted)]"
+                              title="The horizon covers only part of this month, so this is a partial total - not a forecast of a short month."
+                            >
+                              part month
+                            </span>
+                          )}
+                        </td>
+                        <td className="num">{m.periods}</td>
+                        <td className="num">{formatInt(m.point_forecast)}</td>
+                        {rollupHasBand && (
+                          <>
+                            <td className="num">{formatInt(m.q80)}</td>
+                            <td className="num">{formatInt(m.q90)}</td>
+                            <td className="num">{formatInt(m.q95)}</td>
+                          </>
+                        )}
+                      </tr>
+                    ))}
+                    <tr className="font-semibold">
+                      <td>Six-month total</td>
+                      <td className="num">{forecasts.length}</td>
+                      <td className="num">{formatInt(data.horizon_total)}</td>
+                      {rollupHasBand && (
+                        <>
+                          <td className="num">—</td>
+                          <td className="num">—</td>
+                          <td className="num">—</td>
+                        </>
+                      )}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+                {rollupHasBand ? (
+                  <>
+                    <strong>The quantile columns are sums, and a summed quantile is not the
+                    quantile of the sum.</strong> Adding five weekly q95 values describes the
+                    case where every week peaks at once, which is more pessimistic than a 95%
+                    month. Size a month&rsquo;s cover from the point forecast and the
+                    series&rsquo; own error, not from this column.
+                  </>
+                ) : (
+                  <>
+                    <strong>No prediction interval is shown.</strong> This scope is the sum of
+                    the series beneath it and carries no interval of its own — adding up each
+                    SKU&rsquo;s upper bound would assume every SKU misses high in the same
+                    week. Pick a location and a SKU for a band that was measured.
+                  </>
+                )}
+              </p>
+            </Panel>
           )}
 
           {metrics && (

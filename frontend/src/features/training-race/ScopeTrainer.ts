@@ -12,6 +12,16 @@
  * which is deliberately worst-first so the field converges on the winner
  * rather than starting at the answer.
  *
+ * The bar is the **six-month** accuracy - the figure the champion is picked on
+ * (docs/DECISIONS.md D-120) - because that is what the table beneath it is
+ * ordered by, and the panel says the two are the same figures. Racing the
+ * per-period number instead put thirteen bars at 0.0% on a line whose
+ * leaderboard read 77%: both were true, and together they were unreadable. The
+ * per-period MAPE still travels on the finished event, so the tooltip can show
+ * it. Where a model has no six-month figure the per-period accuracy is used
+ * rather than an empty lane, and a model with neither keeps its lane and its
+ * reason.
+ *
  * A model that did not run emits `failed` with its real reason, so an
  * ineligible model keeps its lane and its explanation instead of disappearing
  * into an empty bar (CLAUDE.md: a model that did not run never disappears).
@@ -19,6 +29,16 @@
 import type { ModelDef } from '@/config/models';
 import type { LeaderboardRow } from '@/types/phase7';
 import type { Trainer, TrainingEvent } from './types';
+
+/** What a bar's length means: the line's six-month accuracy, falling back to
+ *  the per-period figure only where no six-month window could be scored. Both
+ *  are 100 minus an error, floored at zero. */
+function raceValue(row: LeaderboardRow | null): number | null {
+  if (row == null) return null;
+  if (row.horizon_accuracy != null) return row.horizon_accuracy;
+  if (row.horizon_mape != null) return Math.max(0, 100 - row.horizon_mape);
+  return row.accuracy ?? (row.mape == null ? null : Math.max(0, 100 - row.mape));
+}
 
 /** Frames per model. Enough motion to read as a race, short enough to settle. */
 const STEPS = 12;
@@ -42,7 +62,7 @@ export class ScopeTrainer implements Trainer {
        and there would be no overtakes to watch. */
     const field = models
       .map((model) => ({ model, row: byId.get(model.id) ?? null }))
-      .sort((a, b) => (b.row?.mape ?? 9e9) - (a.row?.mape ?? 9e9));
+      .sort((a, b) => (b.row?.horizon_mape ?? b.row?.mape ?? 9e9) - (a.row?.horizon_mape ?? a.row?.mape ?? 9e9));
 
     for (const { model } of field) {
       onEvent({ type: 'started', modelId: model.id, totalEpochs: STEPS });
@@ -50,8 +70,7 @@ export class ScopeTrainer implements Trainer {
 
     if (this.instant) {
       for (const { model, row } of field) {
-        const target =
-          row?.accuracy ?? (row?.mape == null ? null : Math.max(0, 100 - row.mape));
+        const target = raceValue(row);
         if (row == null || target == null) {
           onEvent({
             type: 'failed',
@@ -70,6 +89,7 @@ export class ScopeTrainer implements Trainer {
               accuracy: target,
               ...(row.mape == null ? {} : { mape: row.mape }),
               ...(row.wape == null ? {} : { wape: row.wape }),
+              ...(row.horizon_mape == null ? {} : { horizon_mape: row.horizon_mape }),
             },
           });
         }
@@ -84,8 +104,7 @@ export class ScopeTrainer implements Trainer {
       const entry = field[index];
       if (!entry) return;
       const { model, row } = entry;
-      const target =
-        row?.accuracy ?? (row?.mape == null ? null : Math.max(0, 100 - row.mape));
+      const target = raceValue(row);
 
       if (row == null || target == null) {
         onEvent({
@@ -111,6 +130,7 @@ export class ScopeTrainer implements Trainer {
               accuracy: target,
               ...(row.mape == null ? {} : { mape: row.mape }),
               ...(row.wape == null ? {} : { wape: row.wape }),
+              ...(row.horizon_mape == null ? {} : { horizon_mape: row.horizon_mape }),
             },
           });
           index += 1;

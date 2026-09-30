@@ -183,7 +183,13 @@ def test_every_item_names_a_page_its_figures_can_be_checked_on():
         ]
     )
 
-    assert kept[0]["verify_on"] == "Operational Exceptions"
+    # "Operational Exceptions" until D-131. It is not a tab in this UI — that
+    # page was unrouted — and the exception figures now have no page of their
+    # own, so the label points at the per-line list on the recommendations page
+    # itself, which is where they actually are. A destination the reader cannot
+    # reach is worse than none: they spend the trip before finding out.
+    assert kept[0]["verify_on"] == R.VERIFY_ON["stock_exceptions"]
+    assert "Operational Exceptions" not in kept[0]["verify_on"]
 
 
 def test_an_unrecognised_source_is_not_passed_through():

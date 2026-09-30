@@ -22,11 +22,11 @@ from app.ml.features.feature_builder import (
     build_scoring_frame,
     build_training_frame,
 )
-from app.ml.features.panel import build_period_grid, index_to_period, month_index
+from app.ml.features.panel import build_period_grid, index_to_period, period_index
 
 
 def _panel(values: list[float], *, series: str = "AGRA|FG.X", start: str = "2024-04") -> pd.DataFrame:
-    start_index = month_index(start)
+    start_index = period_index(start)
     return pd.DataFrame(
         {
             "series_id": series,
@@ -203,7 +203,7 @@ class TestTrainingFrame:
         six months past the cut - chronological-looking, still a leak."""
         panel = _panel(list(range(1, 25)))
         features = build_origin_features(panel)
-        cut = month_index("2025-03")
+        cut = period_index("2025-03")
         frame = build_training_frame(
             panel, features, horizons=(1, 6), max_origin_period=cut
         )
@@ -287,10 +287,10 @@ class TestPeriodGrid:
         observations = pd.DataFrame(
             {
                 "series_id": ["A|X", "A|X"],
-                "period_index": [month_index("2025-01"), month_index("2025-04")],
+                "period_index": [period_index("2025-01"), period_index("2025-04")],
             }
         )
-        grid, stats = build_period_grid(observations, panel_end=month_index("2025-04"))
+        grid, stats = build_period_grid(observations, panel_end=period_index("2025-04"))
         assert len(grid) == 4
         assert stats.observed_rows == 2
         assert stats.materialised_zero_rows == 2
@@ -300,29 +300,29 @@ class TestPeriodGrid:
         observations = pd.DataFrame(
             {
                 "series_id": ["A|X", "B|Y"],
-                "period_index": [month_index("2024-04"), month_index("2026-06")],
+                "period_index": [period_index("2024-04"), period_index("2026-06")],
             }
         )
-        grid, _ = build_period_grid(observations, panel_end=month_index("2026-07"))
+        grid, _ = build_period_grid(observations, panel_end=period_index("2026-07"))
         b_rows = grid[grid["series_id"] == "B|Y"]
-        assert b_rows["period_index"].min() == month_index("2026-06")
+        assert b_rows["period_index"].min() == period_index("2026-06")
         assert len(b_rows) == 2
 
     def test_panel_start_policy_aligns_every_series(self) -> None:
         observations = pd.DataFrame(
             {
                 "series_id": ["A|X", "B|Y"],
-                "period_index": [month_index("2024-04"), month_index("2026-06")],
+                "period_index": [period_index("2024-04"), period_index("2026-06")],
             }
         )
         grid, _ = build_period_grid(
-            observations, panel_end=month_index("2026-07"), start_policy="panel_start"
+            observations, panel_end=period_index("2026-07"), start_policy="panel_start"
         )
         assert grid.groupby("series_id")["period_index"].min().nunique() == 1
 
     def test_an_unknown_policy_is_rejected(self) -> None:
         observations = pd.DataFrame(
-            {"series_id": ["A|X"], "period_index": [month_index("2024-04")]}
+            {"series_id": ["A|X"], "period_index": [period_index("2024-04")]}
         )
         with pytest.raises(ValueError, match="start_policy"):
             build_period_grid(observations, panel_end=1, start_policy="nonsense")
@@ -332,11 +332,11 @@ class TestPeriodGrid:
             {
                 "series_id": ["A|X"] * 3,
                 "period_index": [
-                    month_index("2024-04"), month_index("2024-09"), month_index("2025-02")
+                    period_index("2024-04"), period_index("2024-09"), period_index("2025-02")
                 ],
             }
         )
-        grid, _ = build_period_grid(observations, panel_end=month_index("2025-02"))
+        grid, _ = build_period_grid(observations, panel_end=period_index("2025-02"))
         steps = grid.sort_values("period_index")["period_index"].diff().dropna()
         assert (steps == 1).all()
 
@@ -344,13 +344,13 @@ class TestPeriodGrid:
 class TestMonthIndex:
     def test_it_round_trips(self) -> None:
         for period in ("2024-01", "2024-04", "2025-12", "2026-07"):
-            assert index_to_period(month_index(period)) == period
+            assert index_to_period(period_index(period)) == period
 
     def test_consecutive_months_differ_by_one(self) -> None:
-        assert month_index("2025-01") - month_index("2024-12") == 1
+        assert period_index("2025-01") - period_index("2024-12") == 1
 
     def test_a_year_is_twelve(self) -> None:
-        assert month_index("2026-04") - month_index("2025-04") == 12
+        assert period_index("2026-04") - period_index("2025-04") == 12
 
 
 class TestFeatureManifest:

@@ -12,16 +12,20 @@ from __future__ import annotations
 
 import logging
 
+from functools import lru_cache
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
+from app.ml.features.grain import MONTHLY, is_period, period_month
 from app.core.errors import ConflictError
 from app.db.session import get_db
 from app.domain.ais import analytics
 from app.domain.ais.workspace import WorkspaceScope, resolve_workspace
+from app.services import lead_time_service
 from app.models.mappings import PreprocessingRun
 from app.models.panel import PanelBuild
 
@@ -64,6 +68,54 @@ def _panel_path(build: PanelBuild) -> str:
     return str(path)
 
 
+@lru_cache(maxsize=4)
+def _demand_universe_from(order_fact_path: str) -> tuple[int, int]:
+    """How many branches and SKUs the *unrestricted* order book holds.
+
+    Two columns of the order fact, so it costs 0.07 s over 582 K rows, and is
+    cached per artifact path besides - a new preprocessing run writes to a new
+    path, so the cache key invalidates itself.
+    """
+    import pandas as pd
+
+    frame = pd.read_parquet(
+        order_fact_path, columns=[analytics.BRANCH_COL, analytics.SKU_COL]
+    )
+    return (
+        int(frame[analytics.BRANCH_COL].nunique()),
+        int(frame[analytics.SKU_COL].nunique()),
+    )
+
+
+def _demand_universe(db: Session) -> tuple[int | None, int | None]:
+    """The denominator for every scope banner, or `(None, None)` if unknowable.
+
+    It cannot be counted from the panel. The panel *is* the workspace slice, so
+    counting it gives "2 of 2 branches - 136 of 136 SKUs": a banner whose whole
+    job is to say what the page hides, saying nothing. The preprocessing
+    artifacts are never cut to the workspace, so they carry the real universe -
+    53 branches and 2,063 SKUs against this extract.
+
+    Never raises. A banner that cannot state its denominator drops the "of N"
+    and still says which slice is shown; a banner that 500s takes the page with
+    it.
+    """
+    try:
+        run = db.scalars(
+            select(PreprocessingRun)
+            .where(PreprocessingRun.status == "completed")
+            .order_by(PreprocessingRun.created_at.desc())
+            .limit(1)
+        ).first()
+        path = (run.artifacts_json or {}).get("order_fact") if run else None
+        if not path:
+            return None, None
+        return _demand_universe_from(str(path))
+    except Exception:  # noqa: BLE001 - logged, and the banner degrades instead
+        logger.warning("demand_universe_unavailable", exc_info=True)
+        return None, None
+
+
 def _panel(db: Session):
     """The newest completed panel build, cut to this workspace's locations.
 
@@ -80,10 +132,12 @@ def _panel(db: Session):
     # than in each endpoint is what makes the location list on Demand
     # Analytics, Operational Exceptions and the scorecard identical by
     # construction instead of by coincidence.
-    scope = resolve_workspace(db).with_total(
-        int(frame[analytics.BRANCH_COL].nunique()) if not frame.empty else None,
-        int(frame[analytics.SKU_COL].nunique()) if not frame.empty else None,
-    )
+    #
+    # The totals are the *unrestricted* universe, not this frame's. Counting
+    # the frame reports "136 of 136 SKUs" for a workspace holding 136 of 2,063,
+    # which reads as full coverage - see `_demand_universe`.
+    total_branches, total_skus = _demand_universe(db)
+    scope = resolve_workspace(db).with_total(total_branches, total_skus)
     return scope.restrict(frame, analytics.BRANCH_COL), build, str(path), scope
 
 
@@ -119,12 +173,19 @@ def _stamp(payload: dict[str, Any], scope: WorkspaceScope) -> dict[str, Any]:
     Unconditional: an unrestricted workspace reports `restricted: false`, so a
     client can tell "everything" from "narrowed" rather than having to infer
     it from a missing key.
+
+    `notes` is a list of sentences on every payload but one: the lead-time
+    comparison uses it for a dict of line counts the page reads figures out of
+    (`lines_usable`, `lines_out_of_range`, the invoice-ordering split). Writing
+    a list over that dict emptied all seven figures, so a `notes` that is not a
+    list is left exactly as it is — the scope sentence is already on
+    `workspace_scope.note`, which is what `ScopeBanner` actually renders.
     """
     stamped = dict(payload)
     stamped["workspace_scope"] = scope.as_dict()
     note = scope.note()
-    if note:
-        notes = payload.get("notes")
+    notes = payload.get("notes")
+    if note and (notes is None or isinstance(notes, list)):
         existing = list(notes) if isinstance(notes, list) else []
         # Guard the content as well as the object: a payload that already
         # carries this note must not gain a second copy.
@@ -237,6 +298,48 @@ def _branch_dim(db: Session) -> "pd.DataFrame":
             remediation="Re-run preprocessing, then reload this page.",
         )
     return pd.read_parquet(path)
+
+
+@router.get(
+    "/lead-time-observed",
+    summary="Location Master's stated lead time beside what the order dates show",
+)
+def get_lead_time_observed(
+    refresh: bool = Query(False),
+    all_branches: bool = Query(
+        False,
+        alias="all",
+        description=(
+            "Ignore the workspace restriction and compare every branch in both "
+            "files. The network view is where the four zero-day branches are "
+            "visible."
+        ),
+    ),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """A monitoring view over two files that are read and never written.
+
+    `Avg Lead Time` from Location Master beside the mean of Despatch Date minus
+    Order Date from Orders & Receipts, per branch. Both columns already exist;
+    subtracting one date from another is a derived view, not an edit (D-105).
+
+    Scoped to the workspace by default, like every other page, so a two-branch
+    figure can never read as a national one. `all=true` drops the restriction,
+    and that is where the four zero-day branches are visible.
+
+    `refresh=true` re-parses the order file, which takes about two minutes.
+    """
+    # With the denominators, so this banner reads "2 of 53 branches - 136 of
+    # 2,063 SKUs" like the analytics pages rather than a bare "2 branches",
+    # which states the restriction without stating how much it hides (D-131).
+    total_branches, total_skus = _demand_universe(db)
+    scope = resolve_workspace(db).with_total(total_branches, total_skus)
+    payload = lead_time_service.build(
+        refresh=refresh,
+        branches=None if all_branches else (list(scope.branches) if scope.branches else None),
+        skus=None if all_branches else (list(scope.skus) if scope.skus else None),
+    )
+    return _stamp(payload, scope)
 
 
 @router.get("/lead-time", summary="Per-branch lead time, its variability, and what looks wrong")
@@ -419,8 +522,21 @@ def get_drift(
             scope,
         )
 
+    # Drift is defined in months - a six-month window against the six before
+    # it, and a measurement change dated to a month - so a weekly panel is
+    # added up to months before it gets here rather than drift being taught a
+    # second calendar. Six weeks against six weeks would be a different
+    # question with the same name.
+    panel_grain = get_settings().panel_grain
+    periods = frame["period"].astype(str)
+    if panel_grain != MONTHLY:
+        periods = periods.map(
+            lambda value: period_month(value, panel_grain)
+            if is_period(value, panel_grain)
+            else value
+        )
     monthly = (
-        frame.groupby("period", observed=True)[analytics.TARGET_COL]
+        frame.groupby(periods, observed=True)[analytics.TARGET_COL]
         .sum()
         .sort_index()
     )

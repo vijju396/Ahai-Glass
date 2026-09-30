@@ -29,6 +29,7 @@ import {
 } from '@/api/analytics';
 import { Badge, Card, ClearChip } from '@/components/ui/Dashboard';
 import { ErrorState } from '@/components/ui/States';
+import { ScopeBanner } from '@/components/ui/ScopeBanner';
 import { ChatChart } from '@/features/assistant/components/ChatChart';
 import { Explain } from '@/components/ui/Explain';
 
@@ -144,8 +145,11 @@ export function AssistantPage() {
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-primary)]">
             AI Assistant
           </p>
+          {/* Not "this network". The workspace is two branches of fifty-three,
+              and a headline that says otherwise is the claim the banner below
+              then has to contradict (D-131). */}
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[var(--color-text)]">
-            Ask about this network.
+            Ask about what is in scope.
           </h1>
           <Explain label="About this page" variant="note">
             Every figure is read from this application&apos;s own data. The assistant explains numbers
@@ -159,6 +163,13 @@ export function AssistantPage() {
           </div>
         )}
       </header>
+
+      {/* The same banner the six analytics pages carry. This page had none, so
+          the assistant answered from a two-branch workspace while nothing on
+          screen said so — and the answers read as network ones (D-131). The
+          chip above is a different thing: that is the scope of the conversation
+          so far, inside this one. */}
+      <ScopeBanner scope={status?.workspace_scope} />
 
       {statusQuery.isError && <ErrorState error={statusQuery.error} />}
 

@@ -28,6 +28,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from app.ml.features.grain import HORIZON, MONTHLY, WEEKLY, annual_lag, calendar_month_number
+
 #: Lags in months back from the forecast origin. `lag_1` is the origin's own
 #: value. Ported from the AIS feature list (docs/DATA_CONTRACT.md SS4).
 LAG_MONTHS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 9, 12)
@@ -38,8 +40,59 @@ ROLLING_WINDOWS: tuple[int, ...] = (3, 6, 12)
 #: Windows over which non-zero observations are counted.
 NONZERO_WINDOWS: tuple[int, ...] = (6, 12)
 
+#: The same three feature spans at weekly grain. They are not the monthly
+#: numbers reused: a 3-period rolling mean means three months monthly and three
+#: *weeks* weekly, which is a different feature wearing the same name. Each set
+#: below covers a comparable span - recent history, quarter, half-year, year -
+#: counted in the grain's own periods (D-108).
+_LAGS_BY_GRAIN: dict[str, tuple[int, ...]] = {
+    MONTHLY: LAG_MONTHS,
+    WEEKLY: (1, 2, 3, 4, 5, 6, 13, 26, 52),
+}
+_ROLLING_BY_GRAIN: dict[str, tuple[int, ...]] = {
+    MONTHLY: ROLLING_WINDOWS,
+    WEEKLY: (4, 13, 52),
+}
+_NONZERO_BY_GRAIN: dict[str, tuple[int, ...]] = {
+    MONTHLY: NONZERO_WINDOWS,
+    WEEKLY: (13, 52),
+}
+
+
+def lags_for(grain: str = MONTHLY) -> tuple[int, ...]:
+    """Lag offsets, in periods back from the origin, at this grain."""
+    return _LAGS_BY_GRAIN[grain]
+
+
+def rolling_windows_for(grain: str = MONTHLY) -> tuple[int, ...]:
+    """Rolling-mean windows, in periods, at this grain."""
+    return _ROLLING_BY_GRAIN[grain]
+
+
+def nonzero_windows_for(grain: str = MONTHLY) -> tuple[int, ...]:
+    """Non-zero-count windows, in periods, at this grain."""
+    return _NONZERO_BY_GRAIN[grain]
+
 #: The horizons a single fitted model answers, because horizon is a feature.
-DEFAULT_HORIZONS: tuple[int, ...] = (1, 2, 3, 4, 5, 6)
+#: Monthly by default; `horizons_for(grain)` gives 1..26 at weekly, the same six
+#: months of demand counted in weeks.
+DEFAULT_HORIZONS: tuple[int, ...] = tuple(range(1, HORIZON[MONTHLY] + 1))
+
+
+def trend_feature_name(grain: str = MONTHLY) -> str:
+    """The short-minus-long momentum feature's name, at this grain.
+
+    Named after the windows it actually subtracts - `trend_3_minus_6` monthly,
+    `trend_4_minus_13` weekly - rather than carrying the monthly name onto a
+    weekly feature that no longer computes it (D-106, D-108).
+    """
+    short, long_, *_ = rolling_windows_for(grain)
+    return f"trend_{short}_minus_{long_}"
+
+
+def horizons_for(grain: str = MONTHLY) -> tuple[int, ...]:
+    """Every step ahead a fitted model answers, at this grain."""
+    return tuple(range(1, HORIZON[grain] + 1))
 
 
 @dataclass
@@ -96,11 +149,13 @@ class FeatureManifest:
 def build_feature_manifest(
     *,
     static_columns: tuple[str, ...] = (),
-    horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+    horizons: tuple[int, ...] | None = None,
+    grain: str = MONTHLY,
 ) -> FeatureManifest:
+    horizons = horizons_for(grain) if horizons is None else horizons
     specs: list[FeatureSpec] = []
 
-    for lag in LAG_MONTHS:
+    for lag in lags_for(grain):
         specs.append(
             FeatureSpec(
                 name=f"lag_{lag}",
@@ -113,7 +168,7 @@ def build_feature_manifest(
                 max_lookback_months=lag - 1,
             )
         )
-    for window in ROLLING_WINDOWS:
+    for window in rolling_windows_for(grain):
         specs.append(
             FeatureSpec(
                 name=f"rolling_mean_{window}",
@@ -135,7 +190,7 @@ def build_feature_manifest(
                 max_lookback_months=window - 1,
             )
         )
-    for window in NONZERO_WINDOWS:
+    for window in nonzero_windows_for(grain):
         specs.append(
             FeatureSpec(
                 name=f"nonzero_count_{window}",
@@ -161,9 +216,12 @@ def build_feature_manifest(
                 max_lookback_months=0,
             ),
             FeatureSpec(
-                name="trend_3_minus_6",
+                name=trend_feature_name(grain),
                 kind="trend",
-                definition="rolling_mean_3 minus rolling_mean_6, both as of the origin",
+                definition=(
+                    f"rolling_mean_{rolling_windows_for(grain)[0]} minus "
+                    f"rolling_mean_{rolling_windows_for(grain)[1]}, both as of the origin"
+                ),
                 uses_target_history=True,
                 max_lookback_months=5,
             ),
@@ -171,8 +229,9 @@ def build_feature_manifest(
                 name="same_month_last_year",
                 kind="seasonal",
                 definition=(
-                    "target 12 months before the TARGET period, i.e. origin+horizon-12; "
-                    "known at the origin whenever horizon <= 12"
+                    f"target {annual_lag(grain)} periods before the TARGET period, i.e. "
+                    f"origin+horizon-{annual_lag(grain)}; known at the origin whenever "
+                    f"horizon <= {annual_lag(grain)}"
                 ),
                 uses_target_history=True,
                 max_lookback_months=11,
@@ -245,6 +304,14 @@ def build_feature_manifest(
     return FeatureManifest(specs=specs, horizons=horizons)
 
 
+def _calendar_month(values: pd.Series, grain: str) -> pd.Series:
+    """Calendar month 1-12 for a column of period indices, at either grain."""
+    if grain != WEEKLY:
+        return values.mod(12).add(1).astype("int64")
+    lookup = {int(v): calendar_month_number(int(v), grain) for v in values.dropna().unique()}
+    return values.map(lookup).astype("int64")
+
+
 def _consecutive_zeros(values: np.ndarray) -> np.ndarray:
     """Length of the unbroken zero run ending at each position, inclusive.
 
@@ -268,6 +335,7 @@ def build_origin_features(
     target_col: str = "target",
     censored_col: str | None = "is_censored",
     source_col: str | None = "target_source",
+    grain: str = MONTHLY,
 ) -> pd.DataFrame:
     """One row per (series, origin) with every history-derived feature.
 
@@ -279,6 +347,10 @@ def build_origin_features(
     """
     if panel.empty:
         return panel.copy()
+
+    lag_offsets = lags_for(grain)
+    rolling_windows = rolling_windows_for(grain)
+    nonzero_windows = nonzero_windows_for(grain)
 
     frame = panel.sort_values([series_col, period_col], kind="mergesort").reset_index(drop=True)
     _assert_gapless(frame, series_col=series_col, period_col=period_col)
@@ -294,10 +366,10 @@ def build_origin_features(
     )
 
     # lag_1 is the origin's own value, so the shift is (lag - 1).
-    for lag in LAG_MONTHS:
+    for lag in lag_offsets:
         features[f"lag_{lag}"] = grouped[target_col].shift(lag - 1).astype("float64")
 
-    for window in ROLLING_WINDOWS:
+    for window in rolling_windows:
         rolling = grouped[target_col].rolling(window, min_periods=1)
         features[f"rolling_mean_{window}"] = rolling.mean().reset_index(level=0, drop=True)
         # Population std (ddof=0) matches the reference implementations'
@@ -309,7 +381,7 @@ def build_origin_features(
     nonzero = (target != 0).astype("float64")
     nonzero_frame = pd.DataFrame({series_col: frame[series_col], "_nz": nonzero})
     nonzero_grouped = nonzero_frame.groupby(series_col, sort=False, observed=True)
-    for window in NONZERO_WINDOWS:
+    for window in nonzero_windows:
         features[f"nonzero_count_{window}"] = (
             nonzero_grouped["_nz"]
             .rolling(window, min_periods=1)
@@ -322,11 +394,12 @@ def build_origin_features(
         .transform(lambda values: _consecutive_zeros(values.to_numpy(dtype="float64")))
         .astype("int64")
     )
-    features["trend_3_minus_6"] = (
-        features["rolling_mean_3"] - features["rolling_mean_6"]
+    short_window, long_window, *_ = rolling_windows
+    features[trend_feature_name(grain)] = (
+        features[f"rolling_mean_{short_window}"] - features[f"rolling_mean_{long_window}"]
     )
     features["series_age_months"] = grouped.cumcount().astype("int64") + 1
-    features["origin_month"] = frame[period_col].mod(12).add(1).astype("int64")
+    features["origin_month"] = _calendar_month(frame[period_col], grain)
 
     if censored_col and censored_col in frame.columns:
         features["origin_is_censored"] = frame[censored_col].astype("int64")
@@ -346,7 +419,8 @@ def build_training_frame(
     panel: pd.DataFrame,
     origin_features: pd.DataFrame,
     *,
-    horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+    horizons: tuple[int, ...] | None = None,
+    grain: str = MONTHLY,
     series_col: str = "series_id",
     period_col: str = "period_index",
     target_col: str = "target",
@@ -360,6 +434,7 @@ def build_training_frame(
     so is any row whose target period falls after it - that is what makes a
     rolling-origin fold honest rather than merely chronological-looking.
     """
+    horizons = horizons_for(grain) if horizons is None else horizons
     if panel.empty or origin_features.empty:
         return pd.DataFrame()
 
@@ -390,12 +465,12 @@ def build_training_frame(
 
         block = block.merge(targets, on=[series_col, "_target_period"], how="inner")
 
-        block["_seasonal_period"] = block["_target_period"] - 12
+        block["_seasonal_period"] = block["_target_period"] - annual_lag(grain)
         block = block.merge(
             seasonal, on=[series_col, "_seasonal_period"], how="left"
         )
 
-        block["calendar_month"] = block["_target_period"].mod(12).add(1).astype("int64")
+        block["calendar_month"] = _calendar_month(block["_target_period"], grain)
         rows.append(block)
 
     frame = pd.concat(rows, ignore_index=True)
@@ -426,7 +501,8 @@ def build_scoring_frame(
     origin_features: pd.DataFrame,
     *,
     origin_period: int,
-    horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+    horizons: tuple[int, ...] | None = None,
+    grain: str = MONTHLY,
     series_col: str = "series_id",
     period_col: str = "period_index",
     target_col: str = "target",
@@ -436,6 +512,7 @@ def build_scoring_frame(
 
     Carries no `y`, because those periods have not happened.
     """
+    horizons = horizons_for(grain) if horizons is None else horizons
     at_origin = origin_features[origin_features[period_col] == origin_period]
     if at_origin.empty:
         return pd.DataFrame()
@@ -458,9 +535,9 @@ def build_scoring_frame(
         block = at_origin.copy()
         block["horizon"] = horizon
         block["target_period"] = origin_period + horizon
-        block["_seasonal_period"] = block["target_period"] - 12
+        block["_seasonal_period"] = block["target_period"] - annual_lag(grain)
         block = block.merge(seasonal, on=[series_col, "_seasonal_period"], how="left")
-        block["calendar_month"] = block["target_period"].mod(12).add(1).astype("int64")
+        block["calendar_month"] = _calendar_month(block["target_period"], grain)
         rows.append(block)
 
     frame = pd.concat(rows, ignore_index=True)

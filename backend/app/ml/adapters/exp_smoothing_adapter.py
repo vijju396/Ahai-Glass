@@ -32,12 +32,14 @@ from typing import Any
 
 import pandas as pd
 
+from app.core.config import get_settings
 from app.ml.adapters.base import (
     Eligibility,
     EligibilityCode,
     ForecastModelAdapter,
     ModelContext,
 )
+from app.ml.features.grain import period_noun
 
 
 class _ExpSmoothingBase(ForecastModelAdapter):
@@ -85,8 +87,9 @@ class _ExpSmoothingBase(ForecastModelAdapter):
                 code=EligibilityCode.INSUFFICIENT_SEASONAL_CYCLES,
                 reason=(
                     f"Exponential Smoothing needs two complete seasonal cycles "
-                    f"({period * 2} months at period {period}); this window has "
-                    f"{len(values)}."
+                    f"({period * 2} "
+                    f"{period_noun(get_settings().panel_grain, plural=True)} at "
+                    f"period {period}); this window has {len(values)}."
                 ),
                 remediation=(
                     "This must hold in every rolling-origin fold, not just the "
@@ -101,16 +104,20 @@ class _ExpSmoothingBase(ForecastModelAdapter):
         if "multiplicative" in self.model_id and (values <= 0).any():
             zeros = int((values == 0).sum())
             negatives = int((values < 0).sum())
+            # The counts are of panel periods, so the word follows the panel
+            # rather than being written as "month" and read on a weekly run.
+            noun = period_noun(get_settings().panel_grain)
             return Eligibility(
                 eligible=False,
                 code=EligibilityCode.NON_POSITIVE_TARGET,
                 reason=(
                     "Multiplicative smoothing requires strictly positive values; "
-                    f"this series has {zeros} zero and {negatives} negative month(s)."
+                    f"this series has {zeros} zero and {negatives} negative "
+                    f"{noun}(s)."
                 ),
                 remediation=(
                     "Nothing to remediate on this series - 62% of AIS series are "
-                    "intermittent, and a zero month is a real observation. No "
+                    f"intermittent, and a zero {noun} is a real observation. No "
                     "positive floor is introduced to force eligibility, because "
                     "that would change what is being forecast."
                 ),

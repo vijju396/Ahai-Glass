@@ -7,7 +7,10 @@ Pydantic schema; OpenAPI is generated at `/api/openapi.json`, with Swagger at
 **Every endpoint listed below is implemented and covered by tests.** The
 `[Live]` markers in sections 3-3b date from earlier phases when part of the
 surface was still planned; nothing in this document is aspirational any more.
-Counted from the running app: 55 routes.
+Counted from the running app's own `/api/openapi.json`: **69 paths, 74
+operations**. This line read "55 routes" and had been stale for some time — the
+two figures differ because a path can carry more than one method. Count it the
+same way when you check it.
 
 ## Conventions
 
@@ -315,13 +318,14 @@ did not persist them. The second must not read as the model's fault.
 ## 6. Forecasts
 
 ```
-POST /api/forecasts/runs                     generate horizons 1-6 (202 + run id)
+POST /api/forecasts/runs                     generate the full horizon (202 + run id)
 GET  /api/forecasts/runs                      list forecast runs
 GET  /api/forecasts/runs/current               the most recent completed run
 GET  /api/forecasts/runs/{run_id}               run detail + reconciliation verdict
 GET  /api/forecasts                              query rows by scope/period/model
 GET  /api/forecasts/series                        one scope: history + horizons +
-                                                  point/q80/q90/q95 + drivers
+                                                  point/q80/q90/q95 + drivers +
+                                                  monthly roll-up
 GET  /api/forecasts/hierarchy                      level totals with the adjustment shown
 ```
 
@@ -330,6 +334,28 @@ the quantile calibration, reconciles the levels, and persists one row per
 (scope, period). `reconciliation` accepts `mint_shrinkage`, `mint_variance`,
 `bottom_up`, `proportional` or `none`; a method whose covariance cannot be
 estimated **falls back and records what it fell back from and why**.
+
+`horizons` defaults to the full mandated horizon **at the panel's grain** — six
+periods monthly, twenty-six weekly, the same six months of demand either way
+(D-115). It is derived from `AIS_PANEL_GRAIN` per request, not a fixed list.
+
+`GET /api/forecasts/series` carries three fields for reading a weekly forecast
+by the month (D-113):
+
+| field | meaning |
+| --- | --- |
+| `panel_grain` | `monthly` or `weekly` — what `forecasts[].period` is |
+| `monthly_rollup[]` | `month`, `point_forecast`, `q80`/`q90`/`q95`, `periods`, `complete` |
+| `horizon_total` | the point forecasts summed over the whole horizon |
+
+A week is reported under the month containing its **Thursday**, so no week is
+split and `monthly_rollup` point forecasts add back to `horizon_total` exactly.
+`periods` is how many periods the month was built from (1 monthly; 4 or 5
+weekly) and `complete` is false where the horizon covers only part of the month
+— a partial month read as a whole one looks like a fall in demand that is not
+there. **The quantile fields are summed, and a summed quantile is not the
+quantile of the sum**; it describes every week peaking at once. At monthly grain
+the roll-up is the same rows restated and `horizon_total` is unchanged.
 
 Every row carries `target_source`, `is_censored`, `reconciliation_method`,
 `reconciliation_adjustment` (as a separate field, never folded into the
@@ -372,6 +398,15 @@ Each recommendation returns the **inputs**, not just the answer:
 `raw_recommended_order` (pre-rounding), `recommended_order`, `days_of_cover`,
 plus `warnings[]` and `unavailable_reason`. Every row is labelled
 `is_current_snapshot_estimate`.
+
+On a sub-monthly panel the `period` on the response and on each row is the
+**calendar month**, not a panel period, and `monthly_point_forecast` /
+`monthly_quantile_forecast` are the sum of the forecast periods reporting under
+that month (Thursday rule, so no period is split). The arithmetic downstream
+takes a monthly quantity; handing it one week's row sized the order at about a
+quarter of the requirement. A `notes[]` entry states the summing, and a row
+built from an incomplete month carries a warning naming how many periods are
+missing.
 
 `scope_level` defaults to `series`, because a replenishment order is placed for
 a branch × SKU. A request at a level the run did not forecast returns a stated
@@ -467,6 +502,46 @@ backtests over one month, a quarter and half a year. It re-fits nothing and
 redefines no metric: the monthly figure is its first row, unchanged, because a
 wider window is a wider question and must not read as a better forecast.
 
+Beside the per-period `combined_metrics` it also returns
+`combined_metrics_horizon` — the same pooled numbers scored on the six-month
+total — plus `lines_better_over_horizon` and `lines_worse_over_horizon`, and
+`horizon_accuracy_pct` / `horizon_meets_target` on each series. Unlike
+`combined_metrics_best`, which is `null` when no window clears 85%,
+`combined_metrics_horizon` is always computed: the run that misses the target is
+the run that most needs a stated headline. The counts are there because
+cancelling is not guaranteed — on run `101df724` five of forty lines are *less*
+accurate over six months. That count is now **two** of forty: re-selecting the
+champions on the six-month total (D-120) changed which model each line uses,
+and the models it picks cancel rather than compound more often.
+
+### The leaderboard is ranked on the six-month total (D-120)
+
+`GET /api/models/leaderboard` gained four fields per row and three on the
+response:
+
+| field | meaning |
+|---|---|
+| `horizon_mape` | the row's error on the six-month total — the same backtest, added up before it is scored |
+| `horizon_wape` | the volume-weighted form of the same |
+| `horizon_accuracy` | `100 - horizon_mape`, floored at 0, matching the `accuracy` convention |
+| `horizon_blocks` | how many complete six-month windows were scored. **1 or 2 on this run**, against 52 per-period points, and reported rather than smoothed over |
+| `primary_metric` | which metric produced `rank`: `horizon_mape` (default), `mape` or `wape` |
+| `primary_metric_label` | the same in plain words, e.g. "error on the six-month total" |
+| `panel_grain` | what a test point counts — `weekly` or `monthly` |
+
+`null` on any metric means *not measured*, never zero. A row whose
+`horizon_mape` is `null` is excluded from the order with a reason and keeps its
+place on the board; the ranker does **not** substitute a different metric,
+because that would rank two models on two different questions.
+
+`GET /api/training/{run_id}/monitor` carries the same figures aggregated per
+model: `horizon_mape`, `horizon_accuracy`, `horizon_scored` (how many scopes
+contributed one) and `horizon_blocks`.
+
+`GET /api/training/explain` reports `selection.primary_metric_label` and
+`selection.primary_metric_labels`, and lists `horizon_mape` /
+`horizon_accuracy` among the defined metrics.
+
 ```
 GET  /api/analytics/filters                 filter options + the grains the data supports
 GET  /api/analytics/summary                 every Demand Analytics panel, for one filter state
@@ -477,6 +552,7 @@ GET  /api/analytics/drift                   measured demand drift, and a labelle
 GET  /api/analytics/impact                  measured error reduction + a benefit projection
 GET  /api/analytics/sample-mix              how far the sampled SKUs distort the composition charts
 GET  /api/analytics/lead-time               per-branch lead time, its variability, and anomalies
+GET  /api/analytics/lead-time-observed      the master's stated average beside the observed order-to-despatch gap
 GET  /api/assistant/status                  whether the assistant is configured, and how to configure it
 POST /api/assistant/ask                     ask a question about this application's data
 GET  /api/assistant/recommendations         what is worth attention, explained
@@ -491,10 +567,42 @@ and `grain_note` explains the absence of daily and weekly: AIS demand history is
 monthly, and a daily split of monthly rows would be invented data. The UI
 renders only the grains this field lists.
 
+**Where orders begin.** `/api/analytics/filters` returns `orders_start_month`, the first
+month (`YYYY-MM`) holding real orders, the same boundary as a panel period
+(`orders_start_period`), and `orders_periods`, the number of panel periods from it to
+the end. Overall Analysis never requests an earlier `start_period` (D-122); earlier
+months are sales proxy only.
+
 **Unknown is never zero.** `fill_rate_pct` is computed only over months that
 carry a despatch figure. A sales-proxy month has none, so it is excluded and
-`despatch_rows_excluded_from_fill_rate` reports how many. `despatched_units`
-and `fill_rate_pct` are `null` for such a period rather than `0`.
+`despatch_rows_excluded_from_fill_rate` reports how many. `despatched_units`,
+`despatch_value` and `fill_rate_pct` are `null` for such a period rather
+than `0`.
+
+**Ordered and despatched are not on the same rows, so `kpis` carries both row
+sets.** Part of the panel is sales-proxy rows — quantity derived from sales, no
+order behind it and no despatch figure against it. Total ordered value includes
+them; despatched value cannot. Fields that mix the two row sets are meaningless,
+so the comparable pair is published separately:
+
+| Field | Row set |
+| --- | --- |
+| `demand_value` / `demand_units` | **every** row in the selection |
+| `despatch_value` / `despatched_units` | only rows that record a despatch |
+| `ordered_value_known` / `ordered_units_known` | ordered, over **those same** rows |
+| `gap_value` / `gap_units` | `ordered_*_known` − `despatch*` — a true subtraction |
+| `fill_rate_value_pct` | `despatch_value / ordered_value_known` |
+| `fill_rate_pct` | the same ratio in units |
+| `comparable_window` | `{start, end, periods}` — the stretch the comparable rows span, or `null` |
+
+`demand_value - despatch_value` is **not** an undelivered total and
+`despatch_value / demand_value` is **not** coverage: both read a sales-proxy row
+with no despatch figure as a fully unfilled order. Use `gap_value` and
+`fill_rate_value_pct`, and report `comparable_window` alongside them so the
+narrower span is visible.
+
+The same fields appear per period on `trend`, `null` in a bucket where no row
+records a despatch.
 
 **Every exception carries its definition.** Each row in
 `/api/analytics/exceptions` names the condition it was found by, its severity,
@@ -579,3 +687,47 @@ today**: the protection period is `review period + average lead time`, so a
 volatile branch is given the same cover as a stable one with the same mean.
 Changing that would move every recommended quantity and is a separate
 decision.
+
+### Lead time, observed
+
+`GET /api/analytics/lead-time-observed` puts the Location Master's stated
+`Avg Lead Time` beside the mean of **Despatch Date minus Order Date** from
+Orders & Receipts, per branch, so a stated figure can be checked against what
+the orders actually show (D-105).
+
+Both columns already exist in read-only source files; subtracting one date from
+another is a derived view, not an edit. Neither file is written.
+
+- **Scoped to the workspace by default**, like every other panel, so a
+  two-branch figure can never read as a national one. `all=true` drops the
+  restriction — that is where the four zero-day branches are visible.
+- **`refresh=true` re-parses the order file**, which takes about two minutes;
+  the parsed result is cached and every later call answers in well under a
+  second.
+- **`notes` is a dict, not a list** — the page reads seven figures out of it
+  (`lines_usable`, `lines_out_of_range`, the invoice-ordering split). The scope
+  sentence therefore lives on `workspace_scope.note` and is never written over
+  it (D-131).
+- **Out-of-range lines are excluded and counted, never clipped.** On the
+  136-SKU workspace, 216 of 30,433 lines carry a despatch date before the order
+  date — one by 8,763 days — and are reported as date errors rather than folded
+  into the mean.
+
+`GET /api/assistant/status` also carries `workspace_scope`, so the AI Assistant
+page can state its slice before the first question is asked.
+
+`GET /api/assistant/recommendations` carries it too, alongside the per-line
+list. That list is **the whole ranking**, not a trim: `lines` holds all 261
+branch × SKU lines, `lines_total` and `lines_shown` agree, and `lines_written`
+says how many of them a model wrote a sentence for — the rest carry the reason
+the application computed. `line_counts` gives the urgency bands and
+`line_exception_counts` gives `{label, lines, units}` per exception kind across
+those lines, so the page can turn a count into the lines behind it rather than
+leaving it as a number to read. Counts there are taken over the lines on the
+page, which is deliberately not the same as the exceptions payload's totals: a
+branch × SKU with an exception but no forecast and no stock position produces no
+recommendation, so it is not on the page to be clicked (D-104, D-131, D-132).
+
+`prose=false` skips both model calls and returns the same ranking and the same
+figures in well under a second, with `answered_by: computed_only`. The payload
+is about 370 KB at 261 lines and is cached.

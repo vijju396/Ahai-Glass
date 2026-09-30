@@ -84,6 +84,18 @@ export interface MonitorModel extends MonitorMetrics {
   fit_seconds: number;
   champion_count: number;
   scored: number;
+  /**
+   * This model's error on the six-month total, pooled across the scopes it
+   * ran on, and the accuracy that is 100 minus it. Since D-120 this is what
+   * the champion is picked on, so it is the figure that explains `champion_count`.
+   * `horizon_scored` is how many scopes contributed one — smaller than
+   * `scored` wherever a scope stored no usable six-month stretch, and shown
+   * so a row resting on five scopes is not read as resting on forty.
+   */
+  horizon_mape?: number | null;
+  horizon_accuracy?: number | null;
+  horizon_scored?: number;
+  horizon_blocks?: number;
 }
 
 /**
@@ -173,6 +185,10 @@ export interface MonitorMetrics {
 export interface AccuracyWindow {
   label: string;
   months: number;
+  /** Forecast periods summed to make this window: equal to `months` monthly, 4/13/26 weekly. */
+  periods: number;
+  grain: string;
+  
   level: string;
   blocks: number;
   median_error_pct: number | null;
@@ -197,9 +213,15 @@ export interface AccuracySeries {
   /** This line clears the target over the recommended window (a six-month
    *  total). Drives the panel's headline, not the filter's dot. */
   meets_target: boolean;
-  /** 100 − the champion's MAPE: this line's accuracy on the average month,
-   *  and the figure the leaderboard and the training console display. */
+  /** 100 − the champion's MAPE: this line's accuracy on the average single
+   *  period. Kept beside the six-month figure, never instead of it. */
   champion_accuracy_pct: number | null;
+  /** This line's accuracy over the six-month total — the window the dashboard
+   *  headline reports. Not always the higher of the two: a model biased one
+   *  way compounds over the window instead of cancelling. */
+  horizon_accuracy_pct: number | null;
+  /** That six-month figure clears the target. */
+  horizon_meets_target: boolean;
   /** That displayed figure clears the target. This is what the filters mark,
    *  because a mark has to predict what the next screen says. */
   champion_meets_target: boolean;
@@ -230,6 +252,30 @@ export interface AccuracyWindows {
   combined_metrics_best:
     | (CombinedMetrics & { window_label: string; window_months: number })
     | null;
+  /** The six-month total, computed whether or not it clears the target — so a
+   *  run that reaches 85% nowhere still has a true six-month headline rather
+   *  than falling back to a single-period figure under a six-month caption. */
+  combined_metrics_horizon:
+    | (CombinedMetrics & {
+        window_label: string;
+        window_months: number;
+        /** Forecast periods summed: 6 on a monthly panel, 26 on a weekly one. */
+        window_periods: number;
+        grain: string;
+        /** How many such stretches were scored. */
+        blocks: number;
+        meets_target: boolean;
+        series_at_target: number;
+        series_scored: number;
+        /** Lines more accurate over six months than over one period, and less.
+         *  Summing only helps where misses alternate; a one-directional bias
+         *  compounds, so the second count is not always zero. */
+        lines_better_over_horizon: number;
+        lines_worse_over_horizon: number;
+      })
+    | null;
+  /** The panel's grain, so a caption can name a period correctly. */
+  panel_grain: string;
   windows: AccuracyWindow[];
   meets_target_at: string | null;
   recommended_months: number | null;

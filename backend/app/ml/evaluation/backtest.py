@@ -43,7 +43,8 @@ from app.ml.evaluation.folds import Origin, fast_holdout_origin
 from app.ml.evaluation.metrics import MetricSet, evaluate, reference_metrics
 from app.ml.evaluation.quantiles import ResidualStore
 from app.ml.evaluation.seasonality import resolve_seasonal_period
-from app.ml.features.panel import index_to_period, month_index
+from app.ml.features.grain import MONTHLY
+from app.ml.features.panel import index_to_period, period_index
 from app.schemas.common import EvaluationMode, ModelRunStatus
 
 AdapterFactory = Callable[[ModelContext], ForecastModelAdapter]
@@ -132,6 +133,10 @@ class OriginResult:
     train_end_period: str
     train_rows: int
     status: ModelRunStatus
+    #: The calendar this origin's period labels are in. Carried from the
+    #: `Origin` because a result outlives the origin object and still has to
+    #: turn its own indices back into labels.
+    grain: str = MONTHLY
     seasonal_period: int | None = None
     metrics: MetricSet | None = None
     legacy_metrics: dict[str, float | None] = field(default_factory=dict)
@@ -153,6 +158,10 @@ class OriginResult:
             "train_end_period": self.train_end_period,
             "train_rows": self.train_rows,
             "status": self.status.value,
+            # Serialised because a stored result is read back with no origin in
+            # scope, and `train_end_period`/`periods` cannot be turned into
+            # indices without knowing which calendar they are in (D-111).
+            "grain": self.grain,
             "seasonal_period": self.seasonal_period,
             "metrics": None if self.metrics is None else self.metrics.as_dict(),
             "legacy_metrics": dict(self.legacy_metrics),
@@ -312,6 +321,7 @@ def _run_one_origin(
         train_end_period=origin.train_end_period,
         train_rows=len(train),
         status=ModelRunStatus.INELIGIBLE,
+        grain=origin.grain,
     )
 
     if validation.empty:
@@ -404,7 +414,9 @@ def _run_one_origin(
         else None
     )
 
-    result.periods = [index_to_period(int(p)) for p in validation[period_col].tolist()]
+    result.periods = [
+        index_to_period(int(p), origin.grain) for p in validation[period_col].tolist()
+    ]
     result.horizons = [
         origin.horizon_of(int(p)) or 0 for p in validation[period_col].tolist()
     ]
@@ -472,7 +484,7 @@ def _finalise(
     predictions = [row[2] for row in ordered]
 
     latest = max(completed, key=lambda o: o.fold_index)
-    insample = frame[frame[period_col] <= month_index(latest.train_end_period)]
+    insample = frame[frame[period_col] <= period_index(latest.train_end_period, latest.grain)]
 
     evaluation.total_test_points = total
     evaluation.distinct_test_points = len(ordered)
@@ -544,9 +556,11 @@ def backtest_baselines(
                 train_end_period=origin.train_end_period,
                 train_rows=len(train),
                 status=ModelRunStatus.COMPLETED,
+                grain=origin.grain,
                 seasonal_period=resolution.period,
                 periods=[
-                    index_to_period(int(p)) for p in validation[period_col].tolist()
+                    index_to_period(int(p), origin.grain)
+                    for p in validation[period_col].tolist()
                 ],
                 horizons=[
                     origin.horizon_of(int(p)) or 0 for p in validation[period_col].tolist()

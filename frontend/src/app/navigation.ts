@@ -48,7 +48,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     label: 'Operations',
     items: [
-      { index: 7, label: 'Supply Intelligence', path: '/supply' },
+      { index: 24, label: 'Lead Time', path: '/lead-time' },
     ],
   },
   {
@@ -68,10 +68,12 @@ export const LANDING_PATH = '/overall';
 
 /** The destinations a test holds the app to - all seven, listed explicitly so
  *  removing one is a deliberate edit here rather than a filter quietly
- *  returning a shorter array. Index 8 (Scenario Planner) was removed from the
- *  UI on request; its page, its API and its tests are untouched, so the route
- *  can be restored by putting the item and the index back. */
-export const REQUIRED_NAV_INDEXES = [20, 21, 22, 23, 7, 13, 14] as const;
+ *  returning a shorter array. Index 8 (Scenario Planner) and index 7 (Supply
+ *  Intelligence) were removed from the UI on request; their pages, APIs and
+ *  tests are untouched, so either route can be restored by putting the item
+ *  and the index back. Index 24 (Lead Time) took Supply Intelligence's place
+ *  in the Operations section (D-105). */
+export const REQUIRED_NAV_INDEXES = [20, 21, 22, 23, 24, 13, 14] as const;
 
 export const REQUIRED_NAV_ITEMS: NavItem[] = NAV_ITEMS.filter((item) =>
   (REQUIRED_NAV_INDEXES as readonly number[]).includes(item.index),

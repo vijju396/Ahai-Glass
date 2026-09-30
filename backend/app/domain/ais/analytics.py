@@ -17,10 +17,12 @@ AIS equivalent, and the mapping is deliberate rather than cosmetic:
 
 Two rules constrain everything here.
 
-**No grain the data does not have.** The panel is monthly. The reference offers
-daily/weekly/monthly; this offers monthly and quarterly, because a quarterly
-roll-up of monthly rows is a real aggregation and a daily split of them is an
-invention. `available_grains` tells the UI which to render.
+**No grain the data does not have.** The grains offered are whatever the panel
+can be aggregated *up* to, never down. On a weekly panel that is weekly,
+monthly and quarterly; on a monthly panel, monthly and quarterly. Daily is
+never offered at either, because splitting a period's units across its days
+would invent a profile the source does not contain. `available_grains` tells
+the UI which to render, and `grain_note` says why the others are missing.
 
 **Unknown is not zero.** `despatched_qty` is null on every sales-proxy row, so
 a fill rate over a proxy month would divide by a number that was never
@@ -39,7 +41,17 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-from app.ml.features.panel import index_to_period, month_index
+from app.core.config import get_settings
+from app.ml.features.grain import (
+    MONTHLY,
+    WEEKLY,
+    first_period_of_month,
+    last_period_of_month,
+    is_period,
+    period_month,
+)
+
+from app.ml.features.panel import index_to_period, period_index
 
 SERIES_COL = "series_id"
 PERIOD_COL = "period_index"
@@ -83,15 +95,43 @@ ANALYTICS_COLUMNS: tuple[str, ...] = (
     "has_negative_row",
 )
 
+#: Display grains on a monthly panel. Kept under the old name because callers
+#: and tests import it; `available_grains()` is the panel-aware form.
 AVAILABLE_GRAINS: tuple[str, ...] = ("monthly", "quarterly")
 
-#: Why `daily` and `weekly` are absent, surfaced in the payload so the UI can
-#: explain the missing control instead of just not having it.
-GRAIN_NOTE = (
-    "AIS demand history is monthly (one row per branch x SKU x month), so only "
-    "monthly and a real quarterly roll-up are offered. A daily or weekly view "
-    "would have to invent values the source data does not contain."
-)
+_GRAINS_BY_PANEL: dict[str, tuple[str, ...]] = {
+    MONTHLY: ("monthly", "quarterly"),
+    WEEKLY: ("weekly", "monthly", "quarterly"),
+}
+
+
+def available_grains(panel_grain: str | None = None) -> tuple[str, ...]:
+    """The display grains this panel can honestly be aggregated up to."""
+    return _GRAINS_BY_PANEL[panel_grain or get_settings().panel_grain]
+
+
+def grain_note(panel_grain: str | None = None) -> str:
+    """Why the absent grains are absent, for the UI to show beside the control."""
+    panel_grain = panel_grain or get_settings().panel_grain
+    if panel_grain == WEEKLY:
+        return (
+            "AIS demand history is weekly (one row per branch x SKU x ISO week), "
+            "so weekly, monthly and quarterly are all real aggregations of rows "
+            "that exist. A week is reported under the month containing its "
+            "Thursday, so no week is split and the month totals add back to the "
+            "weekly totals exactly. Daily is not offered: splitting a week's "
+            "units across its days would invent values the source does not "
+            "contain."
+        )
+    return (
+        "AIS demand history is monthly (one row per branch x SKU x month), so only "
+        "monthly and a real quarterly roll-up are offered. A daily or weekly view "
+        "would have to invent values the source data does not contain."
+    )
+
+
+#: The monthly-panel note, under the name callers already import.
+GRAIN_NOTE = grain_note(MONTHLY)
 
 
 @dataclass
@@ -107,7 +147,7 @@ class AnalyticsScope:
     grain: str = "monthly"
 
     def normalised(self) -> AnalyticsScope:
-        grain = self.grain if self.grain in AVAILABLE_GRAINS else "monthly"
+        grain = self.grain if self.grain in available_grains() else "monthly"
         return AnalyticsScope(
             branch=self.branch or None,
             sku=self.sku or None,
@@ -131,12 +171,44 @@ def load_panel(panel_path: str) -> pd.DataFrame:
     available = set(pd.read_parquet(panel_path, columns=[SERIES_COL]).columns)  # cheap probe
     del available
     frame = pd.read_parquet(panel_path, columns=list(ANALYTICS_COLUMNS))
-    frame["period"] = frame[PERIOD_COL].map(index_to_period)
-    frame["demand_value"] = pd.to_numeric(frame[TARGET_COL], errors="coerce").fillna(0.0) * pd.to_numeric(
-        frame["mean_mrp"], errors="coerce"
-    ).fillna(0.0)
+    panel_grain = get_settings().panel_grain
+    frame["period"] = frame[PERIOD_COL].map(lambda i: index_to_period(int(i), panel_grain))
+    return derive_columns(frame)
+
+
+def derive_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """The columns every analytics function reads but the panel does not store.
+
+    Kept out of `load_panel` so a caller that builds a frame by hand — a test
+    fixture, mostly — derives them the same way rather than reimplementing the
+    arithmetic and drifting from it.
+    """
+    mrp = pd.to_numeric(frame["mean_mrp"], errors="coerce").fillna(0.0)
+    frame["demand_value"] = pd.to_numeric(frame[TARGET_COL], errors="coerce").fillna(0.0) * mrp
+    # Despatched quantity valued on the same mean MRP as ordered quantity, so
+    # "ordered" and "despatched" on the summary tiles are the same measurement
+    # taken twice rather than two different valuations. NaN is preserved where
+    # no despatch was recorded: those rows have no sales figure at all, and
+    # summing them as zero would understate sales rather than exclude them.
+    frame["despatch_value"] = pd.to_numeric(frame["despatched_qty"], errors="coerce") * mrp
     frame["shortfall_positive"] = pd.to_numeric(frame["shortfall_qty"], errors="coerce").clip(lower=0.0)
     return frame
+
+
+def orders_start_month(panel: pd.DataFrame) -> str | None:
+    """The month of the first panel period that holds real orders, or None.
+
+    Returned as YYYY-MM because that is what `AnalyticsScope.start_period`
+    takes. Before this month the panel is sales-proxy rows only - no order and
+    no despatch - so anything that compares ordered with despatched starts
+    here. The Overall Analysis page clamps its window to it (D-122) and the
+    assistant scopes its own reads to it (D-124), so both quote the same
+    totals.
+    """
+    order_periods = panel.loc[panel["target_source"] == "order", "period"]
+    if not len(order_periods):
+        return None
+    return period_month(str(order_periods.min()), get_settings().panel_grain)
 
 
 def filters(panel: pd.DataFrame) -> dict[str, Any]:
@@ -153,6 +225,13 @@ def filters(panel: pd.DataFrame) -> dict[str, Any]:
         ]
 
     periods = sorted(panel["period"].unique())
+    # The first month that holds real orders. Before it the panel is sales-proxy
+    # rows only - no order and no despatch - so a page comparing ordered with
+    # despatched defaults its window to start here (docs/DECISIONS.md D-122).
+    order_periods = panel.loc[panel["target_source"] == "order", "period"]
+    orders_start_month = (
+        period_month(str(order_periods.min()), get_settings().panel_grain) if len(order_periods) else None
+    )
     return {
         "branches": options(BRANCH_COL),
         "product_groups": options(GROUP_COL),
@@ -160,8 +239,15 @@ def filters(panel: pd.DataFrame) -> dict[str, Any]:
         "regions": options("region"),
         "period_range": {"min": periods[0], "max": periods[-1]} if periods else None,
         "periods": periods,
-        "available_grains": list(AVAILABLE_GRAINS),
-        "grain_note": GRAIN_NOTE,
+        "orders_start_month": orders_start_month,
+        # The same boundary as a panel period, and how many periods run from it
+        # to the end - what a page limited to the orders window shows as its
+        # available range.
+        "orders_start_period": str(order_periods.min()) if len(order_periods) else None,
+        "orders_periods": int(sum(1 for p in periods if len(order_periods) and p >= order_periods.min())),
+        "available_grains": list(available_grains()),
+        "panel_grain": get_settings().panel_grain,
+        "grain_note": grain_note(),
         "series_count": int(panel[SERIES_COL].nunique()),
     }
 
@@ -176,20 +262,48 @@ def _apply_scope(panel: pd.DataFrame, scope: AnalyticsScope) -> pd.DataFrame:
         frame = frame[frame[GROUP_COL] == scope.product_group]
     if scope.value_class:
         frame = frame[frame["value_class"] == scope.value_class]
+    # `start_period`/`end_period` arrive month-shaped, because a planner filters
+    # in months whatever the panel is built at. Convert each bound to the index
+    # range that month covers at the panel's own grain rather than comparing a
+    # month counter against a week counter.
+    panel_grain = get_settings().panel_grain
     if scope.start_period:
-        frame = frame[frame[PERIOD_COL] >= month_index(scope.start_period)]
+        first = first_period_of_month(scope.start_period, panel_grain)
+        frame = frame[frame[PERIOD_COL] >= period_index(first, panel_grain)]
     if scope.end_period:
-        frame = frame[frame[PERIOD_COL] <= month_index(scope.end_period)]
+        last = last_period_of_month(scope.end_period, panel_grain)
+        frame = frame[frame[PERIOD_COL] <= period_index(last, panel_grain)]
     return frame
 
 
-def _bucket(frame: pd.DataFrame, grain: str) -> pd.Series:
-    """The period label each row aggregates into."""
+def _bucket(frame: pd.DataFrame, grain: str, panel_grain: str | None = None) -> pd.Series:
+    """The period label each row aggregates into.
+
+    Buckets from the period *label*, not from the period index. The index is a
+    counter whose unit depends on the panel grain, so `// 12` meant "the year"
+    on a monthly panel and means nothing at all on a weekly one; the label
+    carries its own calendar and works at either.
+    """
+    panel_grain = panel_grain or get_settings().panel_grain
+    if grain == "weekly" or panel_grain == MONTHLY and grain == "monthly":
+        return frame["period"]
+    # Read the label's own shape rather than trusting the configured grain. A
+    # frame can legitimately carry month labels while the panel is weekly - an
+    # already-rolled-up aggregate, or a fixture - and a month's "month" is
+    # itself. Trusting configuration here turned "2025-01" into a crash.
+    months = (
+        frame["period"]
+        if panel_grain == MONTHLY
+        else frame["period"].map(
+            lambda value: period_month(str(value), panel_grain)
+            if is_period(str(value), panel_grain)
+            else str(value)
+        )
+    )
     if grain == "quarterly":
-        year = frame[PERIOD_COL] // 12
-        quarter = (frame[PERIOD_COL] % 12) // 3 + 1
-        return year.astype(str) + "-Q" + quarter.astype(str)
-    return frame["period"]
+        quarter = (months.str.slice(5, 7).astype(int) - 1) // 3 + 1
+        return months.str.slice(0, 4) + "-Q" + quarter.astype(str)
+    return months
 
 
 def _safe(value: Any) -> float | None:
@@ -230,10 +344,14 @@ def _trend(frame: pd.DataFrame, grain: str) -> list[dict[str, Any]]:
             "censored": frame["is_censored"].fillna(False).astype(bool).astype("int8"),
             "known": despatched.notna().astype("int8"),
             "despatched": despatched.fillna(0.0),
+            "despatch_value": frame["despatch_value"].astype("float64").fillna(0.0),
             # Ordered quantity restricted to rows that actually carry a despatch
             # figure, so the fill-rate denominator matches its numerator row for
             # row instead of counting proxy months as zero despatch.
             "ordered_known": ordered.where(despatched.notna(), 0.0),
+            # And the same restriction on value, so a caller can put ordered and
+            # despatched money side by side on one row set.
+            "ordered_value_known": frame["demand_value"].astype("float64").where(despatched.notna(), 0.0),
         }
     )
     agg = work.groupby("bucket", observed=True, sort=True).agg(
@@ -241,7 +359,9 @@ def _trend(frame: pd.DataFrame, grain: str) -> list[dict[str, Any]]:
         value=("value", "sum"),
         shortfall=("shortfall", "sum"),
         despatched=("despatched", "sum"),
+        despatch_value=("despatch_value", "sum"),
         ordered_known=("ordered_known", "sum"),
+        ordered_value_known=("ordered_value_known", "sum"),
         order_rows=("is_order", "sum"),
         censored=("censored", "sum"),
         known_rows=("known", "sum"),
@@ -260,6 +380,15 @@ def _trend(frame: pd.DataFrame, grain: str) -> list[dict[str, Any]]:
                 "demand_units": round(total, 2),
                 "demand_value": round(value, 2),
                 "despatched_units": round(float(r["despatched"]), 2) if known_rows else None,
+                "despatch_value": round(float(r["despatch_value"]), 2) if known_rows else None,
+                "ordered_value_known": round(float(r["ordered_value_known"]), 2) if known_rows else None,
+                "ordered_units_known": round(float(r["ordered_known"]), 2) if known_rows else None,
+                "gap_value": (
+                    round(float(r["ordered_value_known"]) - float(r["despatch_value"]), 2) if known_rows else None
+                ),
+                "gap_units": (
+                    round(float(r["ordered_known"]) - float(r["despatched"]), 2) if known_rows else None
+                ),
                 "shortfall_units": round(float(r["shortfall"]), 2),
                 "fill_rate_pct": _ratio(float(r["despatched"]), float(r["ordered_known"])) if known_rows else None,
                 "order_share_pct": _ratio(float(r["order_rows"]), rows),
@@ -465,28 +594,61 @@ def summary(panel: pd.DataFrame, scope: AnalyticsScope) -> dict[str, Any]:
             "scope": resolved.__dict__,
             "empty": True,
             "reason": "No panel row matches this combination of branch, product group, value class and period.",
-            "available_grains": list(AVAILABLE_GRAINS),
-            "grain_note": GRAIN_NOTE,
+            "available_grains": list(available_grains()),
+            "panel_grain": get_settings().panel_grain,
+            "grain_note": grain_note(),
         }
 
     ordered = float(pd.to_numeric(frame[TARGET_COL], errors="coerce").fillna(0.0).sum())
     known = frame[frame["despatched_qty"].notna()]
     despatched = float(pd.to_numeric(known["despatched_qty"], errors="coerce").fillna(0.0).sum())
+    despatched_value = float(pd.to_numeric(known["despatch_value"], errors="coerce").fillna(0.0).sum())
+    # Ordered value restricted to the same rows, so despatched value has a
+    # denominator it can actually be divided by. Total ordered value covers
+    # every row; a sales-proxy row has no despatch figure at all, so dividing
+    # the two totals would read a data gap as an unfilled order.
+    ordered_value_known = float(pd.to_numeric(known["demand_value"], errors="coerce").fillna(0.0).sum())
     ordered_known = float(pd.to_numeric(known[TARGET_COL], errors="coerce").fillna(0.0).sum())
     order_rows = int((frame["target_source"] == "order").sum())
+    # The periods the comparable rows actually span. Ordered and despatched are
+    # both recorded only over part of the window - the earlier part of this
+    # panel is sales-proxy rows with no order and no despatch - so the tiles
+    # that compare the two have to say which stretch they are describing.
+    known_periods = sorted(known["period"].unique())
     periods = sorted(frame["period"].unique())
 
     return {
         "scope": resolved.__dict__,
         "empty": False,
         "window": {"start": periods[0], "end": periods[-1], "periods": len(periods)},
-        "available_grains": list(AVAILABLE_GRAINS),
-        "grain_note": GRAIN_NOTE,
+        "available_grains": list(available_grains()),
+        "panel_grain": get_settings().panel_grain,
+        "grain_note": grain_note(),
         "kpis": {
             "demand_value": round(float(frame["demand_value"].sum()), 2),
             "demand_units": round(ordered, 2),
+            # What was actually despatched, over the rows that carry a despatch
+            # figure at all. Sales-proxy rows have none and are left out of both
+            # the value and the unit count, exactly as they are left out of the
+            # fill rate - counting them as zero sales would be a fabrication.
+            "despatch_value": round(despatched_value, 2) if len(known) else None,
+            "despatched_units": round(despatched, 2) if len(known) else None,
             "shortfall_units": round(float(frame["shortfall_positive"].fillna(0.0).sum()), 2),
+            "ordered_value_known": round(ordered_value_known, 2) if len(known) else None,
+            "ordered_units_known": round(ordered_known, 2) if len(known) else None,
+            # Ordered minus despatched, on those same rows. A straight
+            # subtraction is only meaningful because both sides are the same
+            # rows: total ordered value covers rows that have no despatch
+            # figure at all, and subtracting from it would count a data gap.
+            "gap_value": round(ordered_value_known - despatched_value, 2) if len(known) else None,
+            "gap_units": round(ordered_known - despatched, 2) if len(known) else None,
+            "comparable_window": (
+                {"start": known_periods[0], "end": known_periods[-1], "periods": len(known_periods)}
+                if known_periods
+                else None
+            ),
             "fill_rate_pct": _ratio(despatched, ordered_known),
+            "fill_rate_value_pct": _ratio(despatched_value, ordered_value_known),
             "order_share_pct": _ratio(order_rows, len(frame)),
             "censored_rows": int(frame["is_censored"].fillna(False).astype(bool).sum()),
             "series_count": int(frame[SERIES_COL].nunique()),
@@ -521,6 +683,11 @@ def summary(panel: pd.DataFrame, scope: AnalyticsScope) -> dict[str, Any]:
             "excluded from that ratio rather than counted as zero.",
             "Ordered quantity is the demand target. A sales-proxy row is a labelled "
             "substitute, never the same measurement as an order.",
+            "Despatched value is despatched quantity x that month's mean MRP - the same "
+            "valuation as ordered value, so the two are comparable. It covers only the "
+            f"{len(known):,} row(s) that carry a despatch figure; the "
+            f"{int(len(frame) - len(known)):,} sales-proxy row(s) have no despatch "
+            "figure at all and are excluded rather than counted as zero sales.",
         ],
     }
 
@@ -584,6 +751,7 @@ _EMPTY_EXCEPTION_COLLECTIONS: dict[str, Any] = {
     "by_product_group": [],
     "top_lines": [],
     "rows": [],
+    "all_lines": [],
     "total_rows": 0,
 }
 
@@ -770,6 +938,27 @@ def exceptions(panel: pd.DataFrame, scope: AnalyticsScope, *, recent_months: int
         "by_product_group": group_count("value_class", "product_group"),
         "top_lines": rows_for(ranked.head(25)),
         "rows": rows_for(detail.head(200)),
+        # Every exception line, uncapped, in the slim shape — branch, SKU, type
+        # and units, without the definition text `rows_for` repeats on each row.
+        #
+        # `top_lines` is 25 and `rows` is 200, against 516 exception lines here.
+        # A reader asking "which lines?" of a headline that says 240 cannot be
+        # answered from either, and a drill-down that silently stops at 200 is
+        # worse than none — it reads as the whole list. This is what the
+        # recommendations page joins against so every line it shows can say
+        # what happened on it (D-132).
+        "all_lines": [
+            {
+                "type": str(r["type"]),
+                "label": str(r["label"]),
+                "severity": str(r["severity"]),
+                "branch": str(r[BRANCH_COL]),
+                "sku": str(r[SKU_COL]),
+                "units": float(r["units"]),
+                "occurrences": int(r["occurrences"]),
+            }
+            for _, r in detail.iterrows()
+        ],
         "total_rows": int(len(combined)),
         "notes": [
             "Every exception here is a checkable condition on a real panel or stock row. "
@@ -799,12 +988,25 @@ SCORECARD_SCALES: dict[str, dict[str, Any]] = {
     "coverage": {"good": 100.0, "poor": 40.0, "target": 80.0, "higher_is_better": True, "unit": "%"},
 }
 
-SCORECARD_LABELS = {
-    "fill_rate": "Fill rate",
-    "short_despatch_share": "Short-despatch share",
-    "demand_stability": "Demand variability",
-    "coverage": "Months with demand",
-}
+#: Three of the four are grain-independent. `coverage` counts periods, so its
+#: label follows the panel: "Months with demand" on a monthly panel is simply
+#: wrong on a weekly one, where the count is of weeks.
+_PERIOD_NOUN: dict[str, str] = {MONTHLY: "Months", WEEKLY: "Weeks"}
+
+
+def scorecard_labels(panel_grain: str | None = None) -> dict[str, str]:
+    """The scorecard's measure names, with the period noun the panel uses."""
+    panel_grain = panel_grain or get_settings().panel_grain
+    return {
+        "fill_rate": "Fill rate",
+        "short_despatch_share": "Short-despatch share",
+        "demand_stability": "Demand variability",
+        "coverage": f"{_PERIOD_NOUN.get(panel_grain, 'Periods')} with demand",
+    }
+
+
+#: The monthly labels, under the name callers already import.
+SCORECARD_LABELS = scorecard_labels(MONTHLY)
 
 
 def branch_scorecard(panel: pd.DataFrame, scope: AnalyticsScope, *, limit: int = 8) -> dict[str, Any]:
@@ -817,7 +1019,12 @@ def branch_scorecard(panel: pd.DataFrame, scope: AnalyticsScope, *, limit: int =
     resolved = scope.normalised()
     frame = _apply_scope(panel, resolved)
     if frame.empty:
-        return {"scales": SCORECARD_SCALES, "labels": SCORECARD_LABELS, "branches": [], "empty": True}
+        return {
+            "scales": SCORECARD_SCALES,
+            "labels": scorecard_labels(),
+            "branches": [],
+            "empty": True,
+        }
 
     window_periods = int(frame[PERIOD_COL].nunique())
     branches: list[dict[str, Any]] = []
@@ -875,7 +1082,7 @@ def branch_scorecard(panel: pd.DataFrame, scope: AnalyticsScope, *, limit: int =
 
     return {
         "scales": SCORECARD_SCALES,
-        "labels": SCORECARD_LABELS,
+        "labels": scorecard_labels(),
         "branches": branches[:limit],
         "total_branches": len(branches),
         "empty": False,

@@ -39,9 +39,17 @@ import pandas as pd
 from app.core.logging import get_logger
 from app.jobs.runner import CancellationToken
 from app.ml.evaluation.folds import Origin
+from app.ml.evaluation.horizon_totals import PLANNING_HORIZON_MONTHS, horizon_totals
 from app.ml.evaluation.metrics import evaluate, reference_metrics
 from app.ml.evaluation.quantiles import ResidualStore
 from app.schemas.common import EvaluationMode, ModelRunStatus
+from app.ml.features.feature_builder import (
+    lags_for,
+    nonzero_windows_for,
+    rolling_windows_for,
+    trend_feature_name,
+)
+from app.ml.features.grain import MONTHLY, periods_spanning_months
 
 logger = get_logger(__name__)
 
@@ -51,15 +59,33 @@ logger = get_logger(__name__)
 #:
 #: `mean_mrp` is deliberately absent. It is a historical column whose future
 #: value is unknown, and mapping rule R5 exists to stop exactly this promotion.
-NUMERIC_FEATURES: tuple[str, ...] = (
-    "lag_1", "lag_2", "lag_3", "lag_4", "lag_5", "lag_6", "lag_9", "lag_12",
-    "rolling_mean_3", "rolling_std_3",
-    "rolling_mean_6", "rolling_std_6",
-    "rolling_mean_12", "rolling_std_12",
-    "nonzero_count_6", "nonzero_count_12",
-    "consecutive_zero_months", "trend_3_minus_6",
-    "series_age_months", "horizon", "calendar_month", "same_month_last_year",
-)
+def numeric_features(grain: str = MONTHLY) -> tuple[str, ...]:
+    """The numeric feature names the pooled tier reads, at this grain.
+
+    Derived from the same window definitions the features are built from, not
+    transcribed: a hand-written monthly list names `rolling_mean_3` and
+    `lag_12`, neither of which exists on a weekly panel, and the mismatch would
+    surface as a `KeyError` deep inside a fit rather than as a clear answer.
+    """
+    return (
+        *(f"lag_{lag}" for lag in lags_for(grain)),
+        *(
+            f"rolling_{stat}_{window}"
+            for window in rolling_windows_for(grain)
+            for stat in ("mean", "std")
+        ),
+        *(f"nonzero_count_{window}" for window in nonzero_windows_for(grain)),
+        "consecutive_zero_months",
+        trend_feature_name(grain),
+        "series_age_months",
+        "horizon",
+        "calendar_month",
+        "same_month_last_year",
+    )
+
+
+#: The monthly list, under the name callers already import.
+NUMERIC_FEATURES: tuple[str, ...] = numeric_features(MONTHLY)
 
 CATEGORICAL_FEATURES: tuple[str, ...] = (
     "region", "zone", "supply_hub", "tier", "product_group",
@@ -235,6 +261,18 @@ def _evaluate_origin(
             "xgboost", int(horizon), "pooled", y_validate[mask], predictions[mask]
         )
 
+    # The same predictions, scored on the six-month total each series is
+    # planned against - the metric the champion is now ranked on (D-120). The
+    # per-series tiers read this out of their stored `origins_json`; a pooled
+    # row's `origins_json` holds only the fold's window, so the blocks are
+    # built here from the validation frame itself. One block per series rather
+    # than one per fold, which is more evidence than a per-series tier gets,
+    # not less.
+    horizon = horizon_totals(
+        _series_blocks(validate, y_validate, predictions),
+        periods_spanning_months(PLANNING_HORIZON_MONTHS, origin.grain),
+    )
+
     row = _row(
         origin=origin,
         model_id="xgboost",
@@ -258,6 +296,9 @@ def _evaluate_origin(
             "legacy_mape": legacy.get("mape"),
             "legacy_wape": legacy.get("wape"),
             "legacy_mae": legacy.get("mae"),
+            "horizon_mape": horizon.mape,
+            "horizon_wape": horizon.wape,
+            "horizon_blocks": horizon.blocks,
             "zero_actual_points": metrics.zero_actual_points,
             "negative_predictions": int((predictions < 0).sum()),
             "max_abs_prediction": float(np.abs(predictions).max()),
@@ -276,6 +317,35 @@ def _evaluate_origin(
         }
     )
     return [row]
+
+
+def _series_blocks(
+    validate: pd.DataFrame,
+    actuals: np.ndarray,
+    predictions: np.ndarray,
+) -> list[dict[str, Any]]:
+    """One origins-shaped entry per series, so each can be totalled on its own.
+
+    Summing every series together first would measure a different thing - a
+    network total, where one branch's over-forecast cancels another's
+    under-forecast. The plan is held per branch x SKU, so the blocking is too.
+    """
+    frame = pd.DataFrame(
+        {
+            "series_id": validate["series_id"].to_numpy(),
+            "horizon": validate["horizon"].to_numpy(),
+            "actual": actuals,
+            "predicted": predictions,
+        }
+    )
+    return [
+        {
+            "actuals": group["actual"].tolist(),
+            "predictions": group["predicted"].tolist(),
+            "horizons": group["horizon"].tolist(),
+        }
+        for _, group in frame.groupby("series_id", sort=True)
+    ]
 
 
 def _labelled_frame(

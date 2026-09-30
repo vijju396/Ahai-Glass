@@ -72,17 +72,12 @@ import {
 } from '@/components/ui/Dashboard';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
 import { Explain } from '@/components/ui/Explain';
+import { shortPeriod } from '../../../app/period';
 
 const SELECT_CLASS =
   'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs text-[var(--color-text)]';
 
 /** `2026-07` → `Jul 26`; a quarterly bucket is already short enough. */
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-function shortPeriod(period: string): string {
-  if (period.includes('Q')) return period.replace('-Q', ' Q');
-  const [year, month] = period.split('-');
-  return `${MONTHS[Number(month) - 1] ?? month} ${year?.slice(2) ?? ''}`;
-}
 
 export function DemandAnalyticsPage() {
   const [branch, setBranch] = useState('');

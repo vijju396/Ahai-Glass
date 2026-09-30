@@ -31,20 +31,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from app.ml.features.panel import index_to_period, month_index
+from app.ml.features.grain import HORIZON, MONTHLY, ORIGIN_TRAIN_ENDS
+from app.ml.features.grain import MIN_TRAIN_PERIODS as GRAIN_MIN_TRAIN
+from app.ml.features.panel import index_to_period, period_index
 
-#: The mandated horizon. Six months, no retraining between them.
-DEFAULT_HORIZON = 6
+#: The mandated horizon at monthly grain, kept as the default so a caller that
+#: names no grain gets the behaviour it always had. Six months of demand is the
+#: contract at either grain - 26 periods weekly - and `horizon_for` resolves it.
+DEFAULT_HORIZON = HORIZON[MONTHLY]
 
-#: Mandated origins, by the last period included in training.
-PRIMARY_TRAIN_END = "2025-09"
-SECOND_TRAIN_END = "2026-01"
+#: Mandated origins at monthly grain, by the last period included in training.
+#: The weekly pair is derived from these in `app.ml.features.grain`, as the last
+#: ISO week reporting under the same month, so neither grain is handed a day of
+#: real time the other never saw.
+PRIMARY_TRAIN_END, SECOND_TRAIN_END = ORIGIN_TRAIN_ENDS[MONTHLY]
 
 #: The training floor at monthly grain. Twelve months is one complete annual
 #: cycle - below it a seasonal period of 12 cannot even be estimated, so a fold
 #: that trains on less is not evidence about a seasonal model. This replaces
 #: Sodexo's `30`, which is a count of half-day slots and means nothing here.
-MIN_TRAIN_PERIODS = 12
+#: The weekly floor is 52, the same idea counted in weeks.
+MIN_TRAIN_PERIODS = GRAIN_MIN_TRAIN[MONTHLY]
 
 
 @dataclass(frozen=True)
@@ -52,7 +59,7 @@ class Origin:
     """One chronological origin: train through `train_end_index`, forecast the
     `horizon` periods after it.
 
-    Indices are absolute month counters (`app.ml.features.panel.month_index`),
+    Indices are absolute month counters (`app.ml.features.panel.period_index`),
     not row positions, so an origin is meaningful independently of how many rows
     a particular series happens to have.
     """
@@ -64,6 +71,10 @@ class Origin:
     validation_start_index: int
     validation_end_index: int
     mandated: bool = False
+    #: Which calendar the indices count. An `Origin` that does not know this
+    #: cannot turn its own indices back into labels, and a fold labelled in the
+    #: wrong calendar is indistinguishable from a correct one on inspection.
+    grain: str = MONTHLY
 
     @property
     def horizon(self) -> int:
@@ -75,32 +86,33 @@ class Origin:
 
     @property
     def train_end_period(self) -> str:
-        return index_to_period(self.train_end_index)
+        return index_to_period(self.train_end_index, self.grain)
 
     @property
     def validation_periods(self) -> tuple[str, ...]:
         return tuple(
-            index_to_period(i)
+            index_to_period(i, self.grain)
             for i in range(self.validation_start_index, self.validation_end_index + 1)
         )
 
-    def horizon_of(self, period_index: int) -> int | None:
+    def horizon_of(self, index: int) -> int | None:
         """1-based steps ahead of the origin, or None if outside the window."""
-        if not self.validation_start_index <= period_index <= self.validation_end_index:
+        if not self.validation_start_index <= index <= self.validation_end_index:
             return None
-        return period_index - self.train_end_index
+        return index - self.train_end_index
 
     def as_dict(self) -> dict[str, object]:
         return {
             "name": self.name,
             "fold_index": self.fold_index,
-            "train_start_period": index_to_period(self.train_start_index),
+            "train_start_period": index_to_period(self.train_start_index, self.grain),
             "train_end_period": self.train_end_period,
             "train_periods": self.train_periods,
-            "validation_start_period": index_to_period(self.validation_start_index),
-            "validation_end_period": index_to_period(self.validation_end_index),
+            "validation_start_period": index_to_period(self.validation_start_index, self.grain),
+            "validation_end_period": index_to_period(self.validation_end_index, self.grain),
             "horizon": self.horizon,
             "mandated": self.mandated,
+            "grain": self.grain,
         }
 
 
@@ -108,7 +120,8 @@ def mandated_origins(
     panel_start_index: int,
     panel_end_index: int,
     *,
-    horizon: int = DEFAULT_HORIZON,
+    horizon: int | None = None,
+    grain: str = MONTHLY,
 ) -> list[Origin]:
     """The two origins `docs/ARCHITECTURE.md` §7 requires, where they fit.
 
@@ -117,15 +130,18 @@ def mandated_origins(
     mandate that the data cannot satisfy is dropped with the caller able to see
     it is missing, rather than silently truncated to a shorter horizon.
     """
+    horizon = HORIZON[grain] if horizon is None else horizon
+    min_train = GRAIN_MIN_TRAIN[grain]
+    primary_end, second_end = ORIGIN_TRAIN_ENDS[grain]
     origins: list[Origin] = []
     for fold_index, (name, train_end) in enumerate(
-        (("primary", PRIMARY_TRAIN_END), ("second", SECOND_TRAIN_END))
+        (("primary", primary_end), ("second", second_end))
     ):
-        train_end_index = month_index(train_end)
+        train_end_index = period_index(train_end, grain)
         validation_end = train_end_index + horizon
         if train_end_index < panel_start_index or validation_end > panel_end_index:
             continue
-        if train_end_index - panel_start_index + 1 < MIN_TRAIN_PERIODS:
+        if train_end_index - panel_start_index + 1 < min_train:
             continue
         origins.append(
             Origin(
@@ -136,6 +152,7 @@ def mandated_origins(
                 validation_start_index=train_end_index + 1,
                 validation_end_index=validation_end,
                 mandated=True,
+                grain=grain,
             )
         )
     return origins
@@ -145,10 +162,11 @@ def build_origins(
     panel_start_index: int,
     panel_end_index: int,
     *,
-    horizon: int = DEFAULT_HORIZON,
-    min_train_periods: int = MIN_TRAIN_PERIODS,
+    horizon: int | None = None,
+    min_train_periods: int | None = None,
     max_origins: int = 2,
     include_mandated: bool = True,
+    grain: str = MONTHLY,
 ) -> list[Origin]:
     """Expanding-window origins, oldest first.
 
@@ -170,9 +188,13 @@ def build_origins(
     real answer - the caller reports "not evaluated" rather than inventing a
     fold.
     """
+    horizon = HORIZON[grain] if horizon is None else horizon
+    min_train_periods = GRAIN_MIN_TRAIN[grain] if min_train_periods is None else min_train_periods
     origins: list[Origin] = []
     if include_mandated:
-        origins.extend(mandated_origins(panel_start_index, panel_end_index, horizon=horizon))
+        origins.extend(
+            mandated_origins(panel_start_index, panel_end_index, horizon=horizon, grain=grain)
+        )
 
     taken = {(o.validation_start_index, o.validation_end_index) for o in origins}
     validation_end = panel_end_index
@@ -192,6 +214,7 @@ def build_origins(
                     train_end_index=train_end_index,
                     validation_start_index=validation_start,
                     validation_end_index=validation_end,
+                    grain=grain,
                 )
             )
         validation_end -= horizon
@@ -206,6 +229,7 @@ def build_origins(
             validation_start_index=o.validation_start_index,
             validation_end_index=o.validation_end_index,
             mandated=o.mandated,
+            grain=o.grain,
         )
         for index, o in enumerate(origins)
     ]

@@ -32,12 +32,22 @@ from typing import Any
 import pandas as pd
 
 from app.ml.adapters.base import ForecastModelAdapter, ModelContext
+from app.ml.features.grain import MONTHLY, WEEKLY
 from app.ml.adapters.sarimax_adapter import SarimaxExogAdapter
 from app.ml.legacy_models.exog import build_exog_pair
 
 #: Sodexo's `AUTO_ARIMA_MAX_SEASONAL_PERIOD` guard: a very long seasonal period
-#: makes the stepwise search explode. 12 is fine at monthly grain.
+#: makes the stepwise search explode. 24 is fine at monthly grain, where the
+#: only candidate is 12.
 MAX_SEASONAL_PERIOD = 24
+
+#: The weekly ceiling. 53 rather than 52 so a leap-week year is not silently
+#: excluded. A stepwise search at m=52 is genuinely expensive, and this raises
+#: the ceiling rather than pretending it is cheap: a fit that overruns is
+#: reported as **Timed out** by the per-model budget, which is a visible answer.
+#: Silently refusing to go seasonal would look like a model choice instead
+#: (D-109).
+MAX_SEASONAL_PERIOD_WEEKLY = 53
 
 
 class _AutoArimaBase(ForecastModelAdapter):
@@ -69,9 +79,12 @@ class _AutoArimaBase(ForecastModelAdapter):
             self.diagnostics.exogenous_columns_used = list(self._exog_used)
 
         period = context.seasonal_period
-        self._seasonal = bool(
-            period and period <= MAX_SEASONAL_PERIOD and len(target) >= period * 2
+        ceiling = (
+            MAX_SEASONAL_PERIOD_WEEKLY
+            if getattr(context, "grain", MONTHLY) == WEEKLY
+            else MAX_SEASONAL_PERIOD
         )
+        self._seasonal = bool(period and period <= ceiling and len(target) >= period * 2)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self._model = pm.auto_arima(

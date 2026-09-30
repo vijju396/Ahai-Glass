@@ -22,6 +22,9 @@ from datetime import datetime, timezone
 
 import pytest
 
+from types import SimpleNamespace
+from app.services import forecast_service
+from app.core.config import get_settings
 from app.db.session import session_scope
 from app.models.champions import ChampionSelection
 from app.models.datasets import Dataset, DatasetVersion, IngestionStatus
@@ -279,7 +282,15 @@ class TestGeneration:
         body = response.json()
         assert body["status"] == "queued"
         assert body["training_run_id"] == training_id
-        assert body["horizons"] == "1,2,3,4,5,6"
+        # The default is the full mandated horizon at the configured grain -
+        # six periods monthly, twenty-six weekly, the same six months of demand
+        # either way. Asserted against the setting rather than against "6", so
+        # this says "the default is the whole horizon" rather than pinning the
+        # grain the suite happened to run at.
+        expected = ",".join(
+            str(h) for h in range(1, get_settings().forecast_horizon + 1)
+        )
+        assert body["horizons"] == expected
         assert no_job_submission == [body["id"]]
 
     def test_it_refuses_to_start_without_an_active_champion(
@@ -727,3 +738,69 @@ class TestPiiExclusion:
         forbidden = {name.lower().replace(" ", "_") for name in ALL_PII_COLUMNS}
         fields = set(ForecastRowOut.model_fields) | set(ForecastRunOut.model_fields)
         assert not (fields & forbidden)
+
+
+class TestMonthlyRollup:
+    """A weekly forecast is produced per week and read per month. The roll-up
+    is where the two meet, so it has to lose nothing and invent nothing."""
+
+    def _rows(self, periods, values):
+        return [
+            SimpleNamespace(period=p, point_forecast=v, q80=v, q90=v, q95=v)
+            for p, v in zip(periods, values)
+        ]
+
+    def test_weeks_add_into_the_month_holding_their_thursday(self) -> None:
+        # 2025-W40 runs 29 Sep - 5 Oct; its Thursday is 2 October, so it is an
+        # October week even though it starts in September.
+        rows = self._rows(["2025-W39", "2025-W40"], [10.0, 20.0])
+        out = forecast_service._rollup_rows(rows, "weekly")
+        by_month = {row["month"]: row["point_forecast"] for row in out}
+        assert by_month == {"2025-09": 10.0, "2025-10": 20.0}
+
+    def test_the_months_add_back_to_the_horizon_total_exactly(self) -> None:
+        """The property the six-month number depends on: no week is split, so
+        nothing is lost or double-counted in the roll-up."""
+        periods = [f"2026-W{w:02d}" for w in range(32, 53)]
+        values = [float(i + 1) for i in range(len(periods))]
+        out = forecast_service._rollup_rows(self._rows(periods, values), "weekly")
+        assert sum(row["point_forecast"] for row in out) == pytest.approx(sum(values))
+        assert sum(row["periods"] for row in out) == len(periods)
+
+    def test_a_partial_month_is_labelled_incomplete(self) -> None:
+        """A month the horizon only half covers must not be read as a forecast
+        of a short month - that would look like a fall in demand."""
+        out = forecast_service._rollup_rows(self._rows(["2026-W33"], [5.0]), "weekly")
+        assert len(out) == 1
+        assert out[0]["month"] == "2026-08"
+        assert out[0]["periods"] == 1
+        assert out[0]["complete"] is False
+
+    def test_a_fully_covered_month_is_labelled_complete(self) -> None:
+        weeks = ["2026-W32", "2026-W33", "2026-W34", "2026-W35"]
+        out = forecast_service._rollup_rows(self._rows(weeks, [1.0] * 4), "weekly")
+        assert [(r["month"], r["periods"], r["complete"]) for r in out] == [
+            ("2026-08", 4, True)
+        ]
+
+    def test_a_monthly_panel_passes_straight_through(self) -> None:
+        rows = self._rows(["2026-01", "2026-02"], [7.0, 8.0])
+        out = forecast_service._rollup_rows(rows, "monthly")
+        assert [(r["month"], r["point_forecast"], r["complete"]) for r in out] == [
+            ("2026-01", 7.0, True),
+            ("2026-02", 8.0, True),
+        ]
+
+    def test_a_missing_point_forecast_is_skipped_not_counted_as_zero(self) -> None:
+        rows = self._rows(["2026-W32", "2026-W33"], [5.0, None])
+        out = forecast_service._rollup_rows(rows, "weekly")
+        assert out[0]["point_forecast"] == 5.0
+
+    def test_summed_quantiles_are_summed_not_averaged(self) -> None:
+        """Documented pessimism: adding four weekly q95 values is the case
+        where every week is at its own 95th percentile at once. The number is
+        the sum; the caveat lives in the docstring and the UI, not in a quiet
+        rescaling here."""
+        weeks = ["2026-W32", "2026-W33", "2026-W34", "2026-W35"]
+        out = forecast_service._rollup_rows(self._rows(weeks, [10.0] * 4), "weekly")
+        assert out[0]["q95"] == 40.0

@@ -31,12 +31,26 @@ from typing import Any, Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
+from app.ml.evaluation.horizon_totals import (
+    PLANNING_HORIZON_MONTHS,
+    block_errors,
+    origin_blocks,
+)
+from app.ml.features.grain import MONTHLY, periods_spanning_months
 from app.models.champions import ChampionSelection
 from app.models.training import ModelRun
 
-#: Windows reported, as a count of consecutive forecast months summed together.
-#: 1 is the leaderboard's own question, kept first so it cannot be lost.
-WINDOWS: tuple[int, ...] = (1, 3, 6)
+#: Windows reported, **in months** - the unit a plant plans in, and the unit
+#: these windows have always been named in. How many forecast *periods* that is
+#: depends on the panel: 1/3/6 on a monthly panel, 4/13/26 on a weekly one.
+#: Keeping the window in months and deriving the period count is what makes a
+#: weekly run's "6-month total" the same question as a monthly run's, rather
+#: than six weeks wearing the same label.
+#: The widest window is the planning horizon itself, taken from the same
+#: constant the champion is ranked on, so the board's order and this panel's
+#: headline can never describe different windows.
+WINDOWS: tuple[int, ...] = (1, 3, PLANNING_HORIZON_MONTHS)
 
 #: The accuracy a plan is usually held to. Reported as a count of windows that
 #: reach it, never as an average dressed up to clear it.
@@ -60,6 +74,12 @@ class WindowScore:
     label: str
     months: int
     level: str
+    #: How many consecutive forecast periods make up this window. Equal to
+    #: `months` on a monthly panel; 4, 13 or 26 on a weekly one.
+    periods: int = 0
+    #: The panel grain these periods are in, so a reader can see that a
+    #: "6-month total" was summed from 26 weeks rather than 6 rows.
+    grain: str = MONTHLY
     blocks: list[float] = field(default_factory=list)
     by_series: dict[str, list[float]] = field(default_factory=dict)
     #: Running totals for a volume-weighted (WAPE) reading: the summed absolute
@@ -102,6 +122,8 @@ class WindowScore:
             return {
                 "label": self.label,
                 "months": self.months,
+                "periods": self.periods,
+                "grain": self.grain,
                 "level": self.level,
                 "blocks": 0,
                 "median_error_pct": None,
@@ -118,6 +140,8 @@ class WindowScore:
         return {
             "label": self.label,
             "months": self.months,
+            "periods": self.periods,
+            "grain": self.grain,
             "level": self.level,
             "blocks": len(self.blocks),
             "median_error_pct": round(median, 2),
@@ -134,26 +158,14 @@ class WindowScore:
 
 
 def _origin_blocks(run: ModelRun) -> list[tuple[list[float], list[float]]]:
-    """Each origin's (actuals, predictions), ordered by horizon.
+    """This run's stored backtest, split into origins.
 
-    An origin missing either side, or scoring fewer months than it forecast, is
-    dropped rather than padded: a window summed over a hole is not that window.
+    Thin wrapper over `app.ml.evaluation.horizon_totals.origin_blocks`, which
+    is the single definition. The panel and the leaderboard ranking have to
+    block the same predictions the same way or the screen argues with itself,
+    so there is one implementation and this reads the JSON off the row.
     """
-    blocks: list[tuple[list[float], list[float]]] = []
-    for origin in run.origins_json or []:
-        actuals = origin.get("actuals") or []
-        predictions = origin.get("predictions") or []
-        horizons = origin.get("horizons") or []
-        triples = [
-            (int(h), float(a), float(p))
-            for h, a, p in zip(horizons, actuals, predictions)
-            if a is not None and p is not None and h is not None
-        ]
-        if not triples:
-            continue
-        triples.sort()
-        blocks.append(([t[1] for t in triples], [t[2] for t in triples]))
-    return blocks
+    return origin_blocks(run.origins_json)
 
 
 def _add_window(
@@ -162,21 +174,16 @@ def _add_window(
     actuals: Sequence[float],
     predicted: Sequence[float],
 ) -> None:
-    """Score every complete `score.months` block inside one origin."""
-    step = score.months
-    for start in range(0, len(actuals) - step + 1, step):
-        total_actual = sum(actuals[start : start + step])
-        total_predicted = sum(predicted[start : start + step])
-        if not total_actual:
-            # No denominator. Reported nowhere rather than counted as perfect
-            # or as a total miss; both would be inventions.
-            continue
-        score.add(
-            scope_key,
-            abs(total_predicted - total_actual) / abs(total_actual) * 100,
-            abs_error=abs(total_predicted - total_actual),
-            actual=abs(total_actual),
-        )
+    """Score every complete block of `score.periods` inside one origin.
+
+    The blocking itself is `horizon_totals.block_errors` - the same arithmetic
+    the champion is ranked on. A block whose actual total is zero has no
+    denominator and is skipped there, reported nowhere rather than counted as
+    perfect or as a total miss.
+    """
+    step = score.periods or score.months
+    for error_pct, abs_error, actual in block_errors(actuals, predicted, step):
+        score.add(scope_key, error_pct, abs_error=abs_error, actual=actual)
 
 
 def accuracy_by_window(
@@ -203,6 +210,7 @@ def accuracy_by_window(
         )
     }
 
+    grain = get_settings().panel_grain
     scores = [
         WindowScore(
             label={
@@ -211,6 +219,8 @@ def accuracy_by_window(
                 6: "A 6-month total",
             }[months],
             months=months,
+            periods=periods_spanning_months(months, grain),
+            grain=grain,
             level="series",
         )
         for months in WINDOWS
@@ -221,7 +231,13 @@ def accuracy_by_window(
     # view is narrowed to a single line - there it would restate the first row
     # under a name that implies more evidence - so it is only built for the
     # unfiltered view.
-    together = WindowScore(label="Every SKU added together, one month", months=1, level="all_series")
+    together = WindowScore(
+        label="Every SKU added together, one month",
+        months=1,
+        periods=periods_spanning_months(1, grain),
+        grain=grain,
+        level="all_series",
+    )
     pooled: dict[tuple[int, int], list[float]] = {}
 
     covered = 0
@@ -255,12 +271,15 @@ def accuracy_by_window(
                 cell[1] += actual
 
     if not scope_key:
-        for prediction_total, actual_total in pooled.values():
-            if actual_total:
-                together.add(
-                    "all_series",
-                    abs(prediction_total - actual_total) / abs(actual_total) * 100,
-                )
+        # Pooled per (origin, horizon), so each entry is one *period* of the
+        # whole workspace. On a weekly panel that is one week, and this row
+        # claims to be a month - so the periods are blocked into months first,
+        # by the same step every other window uses.
+        for origin_index in sorted({key[0] for key in pooled}):
+            horizons = sorted(k[1] for k in pooled if k[0] == origin_index)
+            actuals = [pooled[(origin_index, h)][1] for h in horizons]
+            predicted = [pooled[(origin_index, h)][0] for h in horizons]
+            _add_window(together, "all_series", actuals, predicted)
 
     def _combine(keys: list[str]) -> dict[str, Any]:
         """Median across the given lines of each line's own champion metric.
@@ -328,10 +347,21 @@ def accuracy_by_window(
         }
         for key in sorted(champions)
     ]
+    horizon_months = max(WINDOWS)
     for row in per_series:
         best_window = row["accuracy_pct"].get(str(best["months"])) if best else None
         row["meets_target"] = bool(
             best_window is not None and best_window >= TARGET_ACCURACY
+        )
+        # This line's own accuracy over the six-month total, and whether it
+        # clears the target there. Separate from `meets_target`, which is
+        # measured at the *recommended* window and is therefore False for every
+        # line on a run where no window reaches 85% - a run whose six-month
+        # figures are still perfectly real and are what the screens now show.
+        row["horizon_accuracy_pct"] = row["accuracy_pct"].get(str(horizon_months))
+        row["horizon_meets_target"] = bool(
+            row["horizon_accuracy_pct"] is not None
+            and row["horizon_accuracy_pct"] >= TARGET_ACCURACY
         )
         # Whether the number a viewer will actually see for this line clears
         # the target. The filters mark lines on this, not on `meets_target`:
@@ -372,6 +402,55 @@ def accuracy_by_window(
     else:
         combined_metrics_best = None
 
+    # The six-month total, computed **whether or not it clears the target**.
+    # `combined_metrics_best` is the shortest window that reaches 85% and is
+    # therefore absent on a run that reaches it nowhere - which is exactly the
+    # run whose headline still has to say something true. This one is always
+    # present when there is anything to measure, so the dashboard never falls
+    # back to a per-period figure while captioned as a six-month one.
+    horizon_score = next((s for s in scores if s.months == max(WINDOWS)), None)
+    combined_metrics_horizon: dict[str, Any] | None = None
+    if horizon_score is not None and horizon_score.blocks:
+        horizon_dict = horizon_score.as_dict()
+        horizon_wape = horizon_score.pooled_wape()
+        combined_metrics_horizon = {
+            "accuracy_pct": horizon_dict["accuracy_pct"],
+            "mape_pct": horizon_dict["median_error_pct"],
+            "wape_pct": round(horizon_wape, 2) if horizon_wape is not None else None,
+            "weighted_accuracy_pct": (
+                round(max(0.0, 100.0 - horizon_wape), 2)
+                if horizon_wape is not None
+                else None
+            ),
+            "lines": horizon_dict["series_scored"],
+            "window_label": horizon_dict["label"],
+            "window_months": horizon_dict["months"],
+            "window_periods": horizon_dict["periods"],
+            "grain": horizon_dict["grain"],
+            "blocks": horizon_dict["blocks"],
+            "meets_target": horizon_dict["meets_target"],
+            "series_at_target": horizon_dict["series_at_target"],
+            "series_scored": horizon_dict["series_scored"],
+        }
+        # Summing a window only helps where the misses alternate. A model that
+        # is biased one way compounds instead, and on this run five lines are
+        # *worse* over six months than on a single period - one of them at 0%
+        # against 60%. Counted rather than described, because "errors cancel"
+        # is a claim about most lines and stating it unqualified would be
+        # wrong about these.
+        better = worse = 0
+        for row in per_series:
+            six = row.get("horizon_accuracy_pct")
+            one = row.get("champion_accuracy_pct")
+            if six is None or one is None:
+                continue
+            if six > one:
+                better += 1
+            elif six < one:
+                worse += 1
+        combined_metrics_horizon["lines_better_over_horizon"] = better
+        combined_metrics_horizon["lines_worse_over_horizon"] = worse
+
     return {
         "training_run_id": run_id,
         "scope_key": scope_key,
@@ -380,6 +459,8 @@ def accuracy_by_window(
         "series_with_champion": len(selections),
         "combined_metrics": combined_metrics,
         "combined_metrics_best": combined_metrics_best,
+        "combined_metrics_horizon": combined_metrics_horizon,
+        "panel_grain": grain,
         "windows": rows,
         "meets_target_at": best["label"] if best else None,
         "recommended_months": best["months"] if best else None,

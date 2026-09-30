@@ -35,6 +35,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.ml.features.grain import MONTHLY, periods_spanning_months
 from app.core.errors import ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.db.session import session_scope
@@ -64,6 +65,10 @@ from app.ml.evaluation.backtest import (
     backtest_baselines,
 )
 from app.ml.evaluation.folds import Origin
+from app.ml.evaluation.horizon_totals import (
+    PLANNING_HORIZON_MONTHS,
+    horizon_totals,
+)
 from app.ml.evaluation.quantiles import ResidualStore
 from app.ml.evaluation.segmentation import profile_series
 from app.ml.registry.canonical_models import (
@@ -436,7 +441,7 @@ def _run_training_job(run_id: str, *, token: CancellationToken) -> None:
         else:
             restriction = {}
 
-        origins = resolve_origins(panel)
+        origins = resolve_origins(panel, grain=get_settings().panel_grain)
         if not origins:
             raise ConflictError(
                 "The panel supports no origin with enough training history.",
@@ -682,6 +687,7 @@ def _evaluate_scope(
         exog_columns=exog_columns,
         min_history_profile=str(config["min_history_profile"]),
         xgboost_training_profile=str(config["xgboost_training_profile"]),
+        grain=str(config.get("panel_grain", MONTHLY)),
         # An aggregate scope has no usable `despatched_qty` - it is null on
         # every sales-proxy member, so strict aggregation makes it null - and
         # would leave VAR with one endogenous series. `active_cells` is the
@@ -784,6 +790,16 @@ def _model_run_fields(
     completed = evaluation.completed_origins
     latest = max(completed, key=lambda o: o.fold_index) if completed else None
 
+    # The same predictions scored on the six-month total - the quantity the
+    # plan is held to, and since D-120 the one the champion is ranked on. It is
+    # computed here, from the origins about to be stored, so the stored metric
+    # and the stored predictions can never describe different runs.
+    origins_payload = [o.as_dict() for o in evaluation.origins]
+    horizon = horizon_totals(
+        origins_payload,
+        periods_spanning_months(PLANNING_HORIZON_MONTHS, get_settings().panel_grain),
+    )
+
     return {
         "tier": tier,
         "scope_level": scope.scope_level,
@@ -822,6 +838,9 @@ def _model_run_fields(
         "legacy_valid": bool(
             is_valid_metric({**legacy, "status": evaluation.status.value})
         ),
+        "horizon_mape": horizon.mape,
+        "horizon_wape": horizon.wape,
+        "horizon_blocks": horizon.blocks,
         "zero_actual_points": pooled.zero_actual_points if pooled else 0,
         "censored_points": pooled.censored_points if pooled else 0,
         "negative_predictions": sum(o.negative_predictions for o in evaluation.origins),
@@ -831,7 +850,7 @@ def _model_run_fields(
         ),
         "fit_seconds": sum(o.fit_seconds or 0.0 for o in completed) or None,
         "predict_seconds": sum(o.predict_seconds or 0.0 for o in completed) or None,
-        "origins_json": [o.as_dict() for o in evaluation.origins],
+        "origins_json": origins_payload,
     }
 
 

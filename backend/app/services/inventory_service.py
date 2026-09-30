@@ -14,6 +14,7 @@ result, and never given a zero.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
 import pandas as pd
@@ -29,6 +30,14 @@ from app.domain.ais.inventory import (
     InventoryInputs,
     days_of_cover,
     recommend,
+)
+from app.ml.features.grain import (
+    MONTHLY,
+    first_period_of_month,
+    is_period,
+    last_period_of_month,
+    period_index,
+    period_month,
 )
 from app.models.forecasts import ForecastRow, ForecastRun
 from app.models.mappings import PreprocessingRun
@@ -99,6 +108,101 @@ def _load_products(artifacts: dict[str, str]) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+@dataclass
+class _MonthForecast:
+    """One month of forecast, added up from the periods reporting under it.
+
+    The replenishment arithmetic in `app.domain.ais.inventory` takes a
+    **monthly** quantity and scales it to a protection period of roughly one
+    month. A forecast row is one panel period, and on a weekly panel that is a
+    week - so handing it a row straight from the table sized a month's order
+    from seven days of demand, about a quarter of what the branch needs. This
+    stands in for a row and carries the month instead.
+
+    It quacks like a `ForecastRow` for every attribute the caller reads, so the
+    monthly path and the weekly path go through the same code below.
+
+    Quantiles are summed, with the same caveat recorded in
+    `forecast_service._rollup_rows`: adding four weekly q95 values describes
+    every week peaking together, which is more pessimistic than a 95% month.
+    Here that errs toward holding more stock, and the alternative - scaling one
+    week's quantile by 4.35 - is the same approximation with the model's own
+    week-to-week shape thrown away.
+    """
+
+    scope_key: str
+    period: str
+    canonical_branch: str | None
+    canonical_sku: str | None
+    point_forecast: float | None
+    q80: float | None
+    q90: float | None
+    q95: float | None
+    model_id: str | None
+    target_source: str | None
+    is_censored: bool | None
+    demand_segment: str | None
+    unavailable_reason: str | None
+    #: How many panel periods went into it, and whether that is all of them.
+    periods: int = 0
+    complete: bool = True
+
+
+def _periods_in_month(month: str, grain: str) -> int:
+    """How many panel periods report under `month` at this grain."""
+    if grain == MONTHLY:
+        return 1
+    first = period_index(first_period_of_month(month, grain), grain)
+    last = period_index(last_period_of_month(month, grain), grain)
+    return last - first + 1
+
+
+def _to_month(rows: Sequence[ForecastRow], month: str, grain: str) -> list[_MonthForecast]:
+    """Add each scope's periods up into the one month they all report under."""
+    expected = _periods_in_month(month, grain)
+    buckets: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        bucket = buckets.setdefault(
+            row.scope_key,
+            {"first": row, "periods": 0, "point_forecast": None,
+             "q80": None, "q90": None, "q95": None, "reason": None},
+        )
+        bucket["periods"] += 1
+        for key in ("point_forecast", "q80", "q90", "q95"):
+            value = getattr(row, key, None)
+            if value is None:
+                continue
+            bucket[key] = float(value) + (bucket[key] or 0.0)
+        # One unavailable week makes the month's total an undercount, so the
+        # reason travels with it rather than being averaged away.
+        if row.unavailable_reason and not bucket["reason"]:
+            bucket["reason"] = row.unavailable_reason
+
+    out: list[_MonthForecast] = []
+    for scope_key, bucket in buckets.items():
+        first: ForecastRow = bucket["first"]
+        out.append(
+            _MonthForecast(
+                scope_key=scope_key,
+                period=month,
+                canonical_branch=first.canonical_branch,
+                canonical_sku=first.canonical_sku,
+                point_forecast=bucket["point_forecast"],
+                q80=bucket["q80"],
+                q90=bucket["q90"],
+                q95=bucket["q95"],
+                model_id=first.model_id,
+                target_source=first.target_source,
+                is_censored=first.is_censored,
+                demand_segment=first.demand_segment,
+                unavailable_reason=bucket["reason"],
+                periods=bucket["periods"],
+                complete=bucket["periods"] == expected,
+            )
+        )
+    return out
+
+
 def _forecast_rows(
     db: Session,
     *,
@@ -107,15 +211,30 @@ def _forecast_rows(
     scope_level: str,
     branch: str | None,
     sku: str | None,
-) -> list[ForecastRow]:
+    grain: str = MONTHLY,
+) -> list[ForecastRow] | list[_MonthForecast]:
     conditions = [
         ForecastRow.forecast_run_id == forecast_run_id,
-        ForecastRow.period == period,
         ForecastRow.scope_level == scope_level,
     ]
+    # At a sub-monthly grain the month is the unit, so the filter widens from
+    # one period to every period reporting under the same month.
+    month = period if grain == MONTHLY else (
+        period_month(period, grain) if is_period(period, grain) else period
+    )
+    if grain == MONTHLY:
+        conditions.append(ForecastRow.period == period)
     if branch:
         conditions.append(ForecastRow.scope_key.like(f"{branch}%"))
     rows = list(db.scalars(select(ForecastRow).where(*conditions)))
+    if grain != MONTHLY:
+        rows = [
+            row
+            for row in rows
+            if row.period
+            and is_period(str(row.period), grain)
+            and period_month(str(row.period), grain) == month
+        ]
     if sku:
         rows = [row for row in rows if sku in row.scope_key]
 
@@ -129,7 +248,9 @@ def _forecast_rows(
             for row in rows
             if (_split_series_key(row.scope_key)[0] or row.scope_key).upper() in wanted
         ]
-    return rows
+    if grain == MONTHLY:
+        return rows
+    return _to_month(rows, month, grain)
 
 
 def _split_series_key(scope_key: str) -> tuple[str | None, str | None]:
@@ -188,6 +309,15 @@ def recommendations(
     if resolved_period is None:
         raise NotFoundError(f"Forecast run {run.id!r} has no rows.")
 
+    # The order is placed for a month, so that is what the page reports even
+    # when the panel counts in weeks.
+    grain = settings.panel_grain
+    reported_period = (
+        period_month(resolved_period, grain)
+        if grain != MONTHLY and is_period(resolved_period, grain)
+        else resolved_period
+    )
+
     artifacts = _prepared_dir(db, run)
     stock = _load_stock(artifacts)
     branches = _load_branches(artifacts)
@@ -203,11 +333,12 @@ def recommendations(
         scope_level=scope_level,
         branch=branch,
         sku=sku,
+        grain=grain,
     )
     if not rows:
         return {
             "forecast_run_id": run.id,
-            "period": resolved_period,
+            "period": reported_period,
             "service_level": service_level,
             "scope_level": scope_level,
             "items": [],
@@ -216,7 +347,7 @@ def recommendations(
             "limit": limit,
             "unavailable_reason": (
                 f"This forecast run produced no {scope_level}-level rows for "
-                f"{resolved_period}. A replenishment order is placed per branch "
+                f"{reported_period}. A replenishment order is placed per branch "
                 "x SKU, so it needs series-level forecasts; run training with "
                 "the `local` or `pooled` tier and regenerate forecasts."
             ),
@@ -279,6 +410,14 @@ def recommendations(
             "snapshot. Where either exists in reality, the recommendation is an "
             "over-order by that amount."
         )
+        if getattr(row, "complete", True) is False:
+            recommendation.warnings.append(
+                f"This month was built from {row.periods} forecast "
+                f"{'period' if row.periods == 1 else 'periods'} of the "
+                f"{_periods_in_month(reported_period, grain)} that report under "
+                "it, because the horizon ends inside the month. The monthly "
+                "figure is an undercount by the periods it is missing."
+            )
         payload = recommendation.as_dict()
         if not include_unavailable and payload["unavailable_reason"]:
             continue
@@ -296,7 +435,7 @@ def recommendations(
     return {
         "workspace_scope": scope.as_dict(),
         "forecast_run_id": run.id,
-        "period": resolved_period,
+        "period": reported_period,
         "service_level": service_level,
         "scope_level": scope_level,
         "items": window,
@@ -311,6 +450,17 @@ def recommendations(
             "producing negative lead times.",
             "Replenishment A/B/C are zero for all 57 branches and are never "
             "used as an MOQ.",
+            *(
+                []
+                if grain == MONTHLY
+                else [
+                    f"The panel is {grain}, so the monthly forecast on each row "
+                    "is the sum of the forecast periods reporting under that "
+                    "month. The point forecast adds up exactly; the quantile is "
+                    "a sum of quantiles, which describes every period peaking "
+                    "together and so sits above a true monthly quantile."
+                ]
+            ),
         ],
     }
 

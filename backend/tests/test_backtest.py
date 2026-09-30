@@ -31,11 +31,11 @@ from app.ml.evaluation.backtest import (
 )
 from app.ml.evaluation.folds import build_origins, mandated_origins
 from app.ml.evaluation.quantiles import ResidualStore
-from app.ml.features.panel import month_index
+from app.ml.features.panel import period_index
 from app.schemas.common import EvaluationMode, ModelRunStatus
 
-PANEL_START = month_index("2024-04")
-PANEL_END = month_index("2026-07")
+PANEL_START = period_index("2024-04")
+PANEL_END = period_index("2026-07")
 
 
 def _series(
@@ -46,7 +46,7 @@ def _series(
     censored: list[bool] | None = None,
 ) -> pd.DataFrame:
     """A gapless single-series frame shaped like the real panel."""
-    start_index = month_index(start)
+    start_index = period_index(start)
     if values is None:
         rng = np.random.default_rng(5)
         values = list(10 + 4 * np.sin(np.arange(months) * 0.5) + rng.normal(0, 1, months))

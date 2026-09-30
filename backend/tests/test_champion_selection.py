@@ -29,11 +29,12 @@ from app.ml.selection.champion import (
 def _c(model_id: str, **kwargs) -> Candidate:
     """A completed candidate with ten validation points unless overridden.
 
-    `mape` mirrors `wape` unless a test sets it explicitly. Most tests here
-    exercise ranking *mechanics* — the bias tie-break, comparability gates,
-    baseline handling — which are the same whichever metric ranks. Giving both
-    metrics the same value keeps those tests independent of that choice, so
-    only the tests that are genuinely about the metric have to name one.
+    `mape` and `horizon_mape` mirror `wape` unless a test sets one explicitly.
+    Most tests here exercise ranking *mechanics* — the bias tie-break,
+    comparability gates, baseline handling — which are the same whichever
+    metric ranks. Giving every metric the same value keeps those tests
+    independent of that choice, so only the tests genuinely about the metric
+    have to name one.
     """
     base = {
         "display_name": model_id.upper(),
@@ -46,6 +47,7 @@ def _c(model_id: str, **kwargs) -> Candidate:
     }
     base.update(kwargs)
     base.setdefault("mape", base.get("wape"))
+    base.setdefault("horizon_mape", base.get("wape"))
     return Candidate(model_id=model_id, **base)
 
 
@@ -350,18 +352,56 @@ class TestSkillScore:
 
 
 class TestPrimaryMetricChoice:
-    """Which metric ranks is configurable, and MAPE is the default.
+    """Which metric ranks is configurable, and the six-month total is default.
 
-    The reported accuracy is `100 - MAPE`, so ranking by MAPE keeps the
-    leaderboard order and the headline number consistent. Ranking by one while
-    reporting the other can put the model with the better accuracy second
-    (docs/DECISIONS.md D-043).
+    Every screen reports the error on the six-month total, because that is the
+    quantity an order is placed for. Ranking on a different metric than the one
+    being reported puts the model with the better headline second, which is how
+    this default was arrived at twice: first MAPE over WAPE so the order agreed
+    with `100 - MAPE` (D-043), then `horizon_mape` over MAPE when the headline
+    moved to the six-month total (D-116, D-120).
     """
 
-    def test_mape_is_the_default(self) -> None:
+    def test_the_six_month_total_is_the_default(self) -> None:
         from app.ml.selection.champion import DEFAULT_PRIMARY_METRIC
 
-        assert DEFAULT_PRIMARY_METRIC == "mape"
+        assert DEFAULT_PRIMARY_METRIC == "horizon_mape"
+
+    def test_the_default_agrees_with_the_setting(self) -> None:
+        """The two must not drift: a deployment that never sets the variable
+        must rank on the same metric the ranker defaults to."""
+        from app.core.config import Settings
+        from app.ml.selection.champion import DEFAULT_PRIMARY_METRIC
+
+        assert Settings().champion_primary_metric == DEFAULT_PRIMARY_METRIC
+
+    def test_the_six_month_total_and_the_per_period_metric_can_disagree(self) -> None:
+        """They do, sharply. Over- and under-forecasts inside a window cancel,
+        so a model can be the better single-period forecaster and still be the
+        worse one to place a six-month order on."""
+        rows = [
+            _c("sarimax", wape=10.0, mape=15.0, horizon_mape=30.0, bias=-1.0, mae=5.0),
+            _c("xgboost", wape=12.0, mape=20.0, horizon_mape=10.0, bias=-1.0, mae=6.0),
+        ]
+        assert rank_candidates(rows).champion_model_id == "xgboost"
+        assert (
+            rank_candidates(rows, primary_metric="mape").champion_model_id == "sarimax"
+        )
+
+    def test_a_missing_six_month_figure_is_not_filled_in_from_mape(self) -> None:
+        """Substituting a different measurement would rank two models on two
+        different questions and call the result one ranking."""
+        board = rank_candidates(
+            [_c("sarimax", wape=4.0, mape=4.0, horizon_mape=None, bias=0.0, mae=1.0)]
+        )
+        assert board.champion_model_id is None
+        assert board.excluded_count == 1
+
+    def test_the_board_says_which_metric_produced_its_order(self) -> None:
+        board = rank_candidates([_c("sarimax", wape=1.0)])
+        assert board.primary_metric == "horizon_mape"
+        assert board.primary_metric_label == "error on the six-month total"
+        assert board.as_dict()["primary_metric_label"] == "error on the six-month total"
 
     def test_the_two_metrics_can_pick_different_champions(self) -> None:
         # Measured on the real run: the champion differs in 40 of 166 scopes.
@@ -398,7 +438,9 @@ class TestPrimaryMetricChoice:
         # The baseline has the better MAPE, so it beats the champion on the
         # metric in use - and that must be said, not hidden.
         assert board.beaten_by_baseline is True
-        assert any("MAPE" in note for note in board.notes)
+        # The note names the metric in the same words the screens use, not as
+        # a column name: "MAPE" tells a reader less than what it measures.
+        assert any("error on one period at a time" in note for note in board.notes)
 
     def test_bias_still_breaks_a_tie_on_the_primary_metric(self) -> None:
         # The tie-break matters more under MAPE, which is one-sided: between
@@ -415,6 +457,10 @@ class TestPrimaryMetricChoice:
     def test_the_setting_drives_the_service(self) -> None:
         from app.core.config import Settings
 
-        assert Settings().champion_primary_metric == "mape"
+        assert Settings().champion_primary_metric == "horizon_mape"
+        # The older choices remain settable, so a deployment can go back to
+        # the per-period ranking without a code change.
+        assert Settings(champion_primary_metric="mape").champion_primary_metric == "mape"
+        assert Settings(champion_primary_metric="wape").champion_primary_metric == "wape"
         with pytest.raises(ValueError):
             Settings(champion_primary_metric="rmse")

@@ -40,6 +40,16 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.ml.features.feature_builder import horizons_for
+from app.ml.features.grain import (
+    WEEKLY,
+    first_period_of_month,
+    index_to_period,
+    is_period,
+    last_period_of_month,
+    period_index,
+    period_month,
+)
 from app.core.errors import ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.db.session import session_scope
@@ -103,7 +113,7 @@ def start_run(
     *,
     training_run_id: str | None = None,
     reconciliation: str = DEFAULT_RECONCILIATION,
-    horizons: Sequence[int] = (1, 2, 3, 4, 5, 6),
+    horizons: Sequence[int] | None = None,
 ) -> ForecastRun:
     """Create the run row and hand generation to the job runner."""
     training = _require_training_run(db, training_run_id)
@@ -133,6 +143,7 @@ def start_run(
             f"The panel build behind training run {training.id!r} is missing."
         )
 
+    horizons = horizons_for(get_settings().panel_grain) if horizons is None else horizons
     ordered = tuple(sorted({int(h) for h in horizons if int(h) >= 1}))
     run = ForecastRun(
         training_run_id=training.id,
@@ -242,7 +253,12 @@ def _run_forecast_job(run_id: str, *, token: CancellationToken) -> None:
             build_id = run.panel_build_id
             requested = run.requested_reconciliation or DEFAULT_RECONCILIATION
             horizons = tuple(
-                int(part) for part in (run.horizons or "1,2,3,4,5,6").split(",") if part
+                int(part)
+                for part in (
+                    run.horizons
+                    or ",".join(str(h) for h in horizons_for(settings.panel_grain))
+                ).split(",")
+                if part
             )
 
         progress("Loading the panel", 2.0)
@@ -425,6 +441,7 @@ def _run_config(db: Session, training_run_id: str) -> dict[str, Any]:
             run.xgboost_training_profile if run else settings.xgboost_training_profile
         ),
         "random_seed": settings.random_seed,
+        "panel_grain": settings.panel_grain,
     }
 
 
@@ -1043,16 +1060,92 @@ def _provenance_summary(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
 # ----------------------------------------------------------------------
 
 
-def _future_periods(origin_period: str, horizons: Sequence[int]) -> list[str]:
-    """The calendar months the horizons land on, from a `YYYY-MM` origin."""
-    if not origin_period or "-" not in origin_period:
+def _future_periods(
+    origin_period: str, horizons: Sequence[int], grain: str | None = None
+) -> list[str]:
+    """The periods the horizons land on, counting forward from the origin.
+
+    Grain-aware: six horizons off a `2026-07` origin are calendar months, and
+    twenty-six off a `2026-W31` origin are ISO weeks. The arithmetic is the same
+    either way because a period index is just a counter.
+    """
+    grain = grain or get_settings().panel_grain
+    if not origin_period or not is_period(origin_period, grain):
         return [f"h{h}" for h in horizons]
-    year, month = (int(part) for part in origin_period.split("-")[:2])
-    output: list[str] = []
-    for horizon in horizons:
-        total = (year * 12 + (month - 1)) + int(horizon)
-        output.append(f"{total // 12:04d}-{total % 12 + 1:02d}")
-    return output
+    start = period_index(origin_period, grain)
+    return [index_to_period(start + int(h), grain) for h in horizons]
+
+
+def rollup_to_months(
+    periods: Sequence[str], values: Sequence[float], grain: str | None = None
+) -> dict[str, float]:
+    """Add a run of period forecasts up into the calendar months they report under.
+
+    A weekly forecast is produced per week and read per month, so this is the
+    one place the two meet. Monthly input passes through unchanged. The week's
+    Thursday decides its month (`app.ml.features.grain.period_month`), so no
+    week is split across two months and no unit is invented or lost: the month
+    totals add back to the horizon total exactly.
+    """
+    grain = grain or get_settings().panel_grain
+    months: dict[str, float] = {}
+    for period, value in zip(periods, values):
+        if value is None:
+            continue
+        month = period_month(period, grain) if is_period(period, grain) else period
+        months[month] = months.get(month, 0.0) + float(value)
+    return months
+
+
+def _rollup_rows(rows: Sequence[Any], grain: str) -> list[dict[str, Any]]:
+    """Forecast rows added into the calendar months they report under.
+
+    `rollup_to_months` does the arithmetic for one quantity; this carries the
+    point forecast and the three quantiles through it together, and reports how
+    many periods each month was built from.
+
+    **Quantiles are summed, and a summed quantile is not the quantile of the
+    sum.** Adding five weekly q95 values gives the case where every week is
+    simultaneously at its own 95th percentile, which is more pessimistic than a
+    95% month. It is reported because a planner asked for a band, and it is
+    named here because the alternative - quietly presenting it as a monthly q95
+    - would overstate the cover a month actually needs.
+    """
+    months: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row.period is None or not is_period(str(row.period), grain):
+            continue
+        month = period_month(str(row.period), grain)
+        bucket = months.setdefault(
+            month,
+            {"month": month, "point_forecast": 0.0, "q80": 0.0, "q90": 0.0,
+             "q95": 0.0, "periods": 0},
+        )
+        bucket["periods"] += 1
+        for key in ("point_forecast", "q80", "q90", "q95"):
+            value = getattr(row, key, None)
+            if value is not None:
+                bucket[key] += float(value)
+
+    # A month is complete when the horizon covered every period reporting under
+    # it, not when it holds "enough" of them: the first and last month of a
+    # 26-week horizon are usually partial, and a planner comparing a part-month
+    # against a whole one would read a fall in demand that is not there.
+    out: list[dict[str, Any]] = []
+    for month in sorted(months):
+        bucket = months[month]
+        bucket["complete"] = bucket["periods"] == _periods_in_month(month, grain)
+        out.append(bucket)
+    return out
+
+
+def _periods_in_month(month: str, grain: str) -> int:
+    """How many periods report under `month` at this grain."""
+    if grain != WEEKLY:
+        return 1
+    first = period_index(first_period_of_month(month, grain), grain)
+    last = period_index(last_period_of_month(month, grain), grain)
+    return last - first + 1
 
 
 def _resolve_base_level(
@@ -1695,6 +1788,17 @@ def series_payload(
                 "evaluation_mode": model_run.evaluation_mode,
             }
 
+    # The plant plans in months, so a weekly horizon is read as months and as
+    # one six-month number. Summed here rather than in the browser: the
+    # frontend carries no forecasting arithmetic, and the Thursday rule that
+    # decides a week's month lives on this side of the wire.
+    grain = get_settings().panel_grain
+    periods = [row.period for row in rows]
+    rollup = _rollup_rows(rows, grain)
+    horizon_total = sum(
+        float(row.point_forecast) for row in rows if row.point_forecast is not None
+    )
+
     return {
         "forecast_run_id": forecast_run_id,
         "training_run_id": run.training_run_id,
@@ -1708,6 +1812,9 @@ def series_payload(
         "drivers": champion.drivers_json,
         "reconciliation_method": run.reconciliation_method,
         "coherent": run.coherent,
+        "panel_grain": grain,
+        "monthly_rollup": rollup,
+        "horizon_total": horizon_total,
         "snapshot_caveat": (
             "Forecasts are generated from the panel's own history and carry the "
             "target-source mix of the window they were fitted on; a "

@@ -17,12 +17,10 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchLeaderboard, leaderboardKeys } from '@/api/leaderboard';
 import { AMBER, GREEN, RED } from '@/components/ui/Dashboard';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
-import { Explain } from '@/components/ui/Explain';
 
-const pct = (v: number | null, digits = 1) => (v == null ? '—' : `${v.toFixed(digits)}%`);
+const pct = (v: number | null | undefined, digits = 1) =>
+  v == null ? '—' : `${v.toFixed(digits)}%`;
 
-/** 100 - MAPE, floored at zero. Restating one number, not a second measure. */
-const accuracy = (mape: number | null) => (mape == null ? null : Math.max(0, 100 - mape));
 
 export function ScopeLeaderboard({
   trainingRunId,
@@ -58,16 +56,13 @@ export function ScopeLeaderboard({
      had the best score on the board, and the reader is owed the reason the
      crown went past it. */
   const refused = ranked.filter((r) => r.exclusion === 'not_deployable');
-
   return (
     <div>
       <p className="mb-2 text-[11px] text-[var(--color-text-muted)]">
         {winner ? (
           <>
-            For this line the forecast comes from <strong>{winner.display_name}</strong>, which was
-            wrong by <strong>{pct(winner.mape)}</strong> on the months it was tested against —{' '}
-            <strong>{pct(accuracy(winner.mape))} accurate</strong> over{' '}
-            {winner.distinct_test_points || winner.validation_points} test month(s).
+            For this line the forecast comes from <strong>{winner.display_name}</strong> —{' '}
+            <strong>{pct(winner.horizon_accuracy)} accurate</strong>.
           </>
         ) : (
           <>No model produced a rankable result for this line.</>
@@ -105,9 +100,6 @@ export function ScopeLeaderboard({
               <th>Model</th>
               <th className="num">Accuracy</th>
               <th className="num">MAPE</th>
-              <th className="num">WAPE</th>
-              <th className="num">Bias</th>
-              <th className="num">Months</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -119,14 +111,9 @@ export function ScopeLeaderboard({
                 </td>
                 <td style={{ fontWeight: r.is_champion ? 600 : 400 }}>{r.display_name}</td>
                 <td className="num" style={{ fontWeight: 600 }}>
-                  {pct(accuracy(r.mape))}
+                  {pct(r.horizon_accuracy)}
                 </td>
-                <td className="num">{pct(r.mape)}</td>
-                <td className="num">{pct(r.wape)}</td>
-                <td className="num" style={{ color: (r.bias ?? 0) < 0 ? AMBER : undefined }}>
-                  {pct(r.bias)}
-                </td>
-                <td className="num">{r.distinct_test_points || r.validation_points || '—'}</td>
+                <td className="num">{pct(r.horizon_mape)}</td>
                 <td
                   className="text-[10px]"
                   style={{
@@ -145,17 +132,6 @@ export function ScopeLeaderboard({
         </table>
       </div>
 
-      <div className="mt-2">
-        <Explain variant="note">
-          Every registered model is listed, including the ones that did not run — a model that
-          disappears when it fails makes the field look stronger than it is. Hover a row that is
-          not ranked to read the requirement it missed. Accuracy is 100 minus MAPE, floored at
-          zero, which is the same number restated rather than a second measurement. WAPE is the
-          total units missed over the total units ordered, so it answers the same question in
-          units instead of in percent-per-month. A negative bias means the model forecasts below
-          real demand, which is the direction that causes a stockout.
-        </Explain>
-      </div>
     </div>
   );
 }

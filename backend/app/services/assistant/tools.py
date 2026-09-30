@@ -27,6 +27,7 @@ knowing it is a reconciled national forecast for 2026-08 from run `992947a1`.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Callable
 
@@ -34,6 +35,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 #: Chart types the frontend can render. Anything else is refused rather than
 #: passed through to a renderer that would silently drop it.
@@ -144,7 +147,50 @@ def resolve_scope(db: Session, question: str, current: dict | None, history: lis
     return scope
 
 
-def scope_note(scope: dict | None) -> str:
+def workspace_note(db: Session | None = None) -> str:
+    """What "everything" actually means in this deployment.
+
+    Returns "" when nothing is restricted, so an unrestricted install still
+    reads "the whole network" and nothing here invents a limit that is not
+    there.
+    """
+    if db is None:
+        return ""
+    try:
+        from app.domain.ais.workspace import resolve_workspace  # noqa: PLC0415
+
+        resolved = resolve_workspace(db)
+        if not resolved.is_restricted:
+            return ""
+        branches = ", ".join(resolved.branches) if resolved.branches else None
+        bits = []
+        if branches:
+            bits.append(f"{len(resolved.branches)} branch(es) ({branches})")
+        if resolved.skus:
+            bits.append(f"{len(resolved.skus)} SKU(s)")
+        return " and ".join(bits)
+    except Exception:  # noqa: BLE001 - a label must never break a tool
+        logger.warning("workspace_note_unavailable", exc_info=True)
+        return ""
+
+
+def _workspace_phrase(db: Session | None = None) -> str:
+    """"the whole network" or "this workspace only — ...", for a label."""
+    workspace = workspace_note(db)
+    return f"this workspace only — {workspace}" if workspace else "the whole network"
+
+
+def scope_note(scope: dict | None, db: Session | None = None) -> str:
+    """The slice a tool's figures describe, written for the model to quote.
+
+    **Never "the whole network" while a workspace restriction is in force.**
+    This string is handed to the model as a fact, and it used to read "the
+    whole network" on a deployment cut to two branches and 136 SKUs — so the
+    model was told, on every single call, that a two-branch figure was a
+    national one. The scope note in `caveats` said otherwise, and a model given
+    two contradictory facts will use either. Now the restriction is stated
+    here, in the field the tool output puts next to the numbers (D-131).
+    """
     parts = []
     resolved = scope or {}
     if resolved.get("branch"):
@@ -153,14 +199,57 @@ def scope_note(scope: dict | None) -> str:
         parts.append(f"SKU {resolved['sku']}")
     if resolved.get("period"):
         parts.append(f"period {resolved['period']}")
-    return ", ".join(parts) if parts else "the whole network"
+    if parts:
+        return ", ".join(parts)
+    return _workspace_phrase(db)
 
 
-def _analytics_scope(scope: dict | None):
-    from app.domain.ais.analytics import AnalyticsScope
+def _analytics_scope(scope: dict | None, panel=None):
+    """The caller's scope, clamped to the weeks that hold real orders.
+
+    Without the clamp the assistant answered from the full panel while the
+    Overall Analysis page answered from the orders window, so the same question
+    returned two different totals - the page's own numbers on screen and a
+    larger figure in the chat (D-124).
+    """
+    from app.domain.ais.analytics import AnalyticsScope, orders_start_month
 
     resolved = scope or {}
-    return AnalyticsScope(branch=resolved.get("branch") or None)
+    return AnalyticsScope(
+        branch=resolved.get("branch") or None,
+        start_period=orders_start_month(panel) if panel is not None else None,
+    )
+
+
+def _whole(value: Any) -> Any:
+    """A unit quantity rounded to a whole number, or the value untouched."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(round(value))
+    return value
+
+
+def _rupees(value: Any) -> str | None:
+    """A rupee amount already written in Indian numbering - "₹60.24Cr".
+
+    The facts used to carry the raw rupee figure only, while the system prompt
+    asks for "₹8.9Cr or ₹12.4L". That leaves the conversion to the model, and
+    it got it wrong the same way every time: ₹60.24Cr came back as ₹6.02Cr, a
+    crore being 10^7 and the model dividing by 10^8. Every rupee figure in
+    every answer was a tenth of the truth, in the same confident voice - which
+    is the failure this module's docstring exists to prevent.
+
+    One crore = 10^7, one lakh = 10^5.
+    """
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    amount = float(value)
+    sign = "-" if amount < 0 else ""
+    amount = abs(amount)
+    if amount >= 10_000_000:
+        return f"{sign}₹{amount / 10_000_000:.2f}Cr"
+    if amount >= 100_000:
+        return f"{sign}₹{amount / 100_000:.2f}L"
+    return f"{sign}₹{amount:,.0f}"
 
 
 def _chart(kind: str, title: str, data: list[dict], series: list[dict], x_key: str) -> dict[str, Any] | None:
@@ -190,16 +279,17 @@ def demand_trend(db: Session, scope: dict | None, *, visual: bool = False, chart
     from app.domain.ais import analytics as A
 
     panel, build, path, _scope = _panel_and_path(db)
-    payload = A.cached_summary(panel, path, _analytics_scope(scope))
+    payload = A.cached_summary(panel, path, _analytics_scope(scope, panel))
     if payload.get("empty"):
         return {"status": payload.get("reason", "No data for this scope.")}
 
     trend = payload["trend"]
     facts: dict[str, Any] = {
-        "scope": scope_note(scope),
+        "scope": scope_note(scope, db),
         "unit": "units of ordered demand per month",
         "window": payload["window"],
         "months": len(trend),
+        "first_month": trend[0]["period"],
         "latest_month": trend[-1]["period"],
         "latest_demand_units": trend[-1]["demand_units"],
         "first_demand_units": trend[0]["demand_units"],
@@ -207,6 +297,7 @@ def demand_trend(db: Session, scope: dict | None, *, visual: bool = False, chart
         "peak": max(trend, key=lambda r: r["demand_units"])["period"],
         "trough": min(trend, key=lambda r: r["demand_units"])["period"],
         "demand_value_rupees": payload["kpis"]["demand_value"],
+        "demand_value_display": _rupees(payload["kpis"]["demand_value"]),
         "fill_rate_pct": payload["kpis"]["fill_rate_pct"],
         "caveats": payload["notes"],
         "panel_build_id": build.id,
@@ -219,7 +310,7 @@ def demand_trend(db: Session, scope: dict | None, *, visual: bool = False, chart
     if visual:
         facts["chart"] = _chart(
             chart_type if chart_type in ("line", "bar") else "line",
-            f"Ordered demand — {scope_note(scope)}",
+            f"Ordered demand — {scope_note(scope, db)}",
             [{"period": r["period"], "demand": r["demand_units"]} for r in trend],
             [{"key": "demand", "label": "Ordered units"}],
             "period",
@@ -232,16 +323,45 @@ def branch_demand(db: Session, scope: dict | None, *, visual: bool = False, char
     from app.domain.ais import analytics as A
 
     panel, build, path, _scope = _panel_and_path(db)
-    payload = A.cached_summary(panel, path, A.AnalyticsScope())
+    payload = A.cached_summary(panel, path, _analytics_scope(None, panel))
     if payload.get("empty"):
         return {"status": payload.get("reason", "No data.")}
     rows = payload["by_branch"][:MAX_TABLE_ROWS]
     facts = {
-        "unit": "units of ordered demand over the whole window",
+        "unit": "units of ordered demand over the window below",
         "window": payload["window"],
         "branches_total": payload["kpis"]["branch_count"],
+        # The workspace SKU total, because the per-branch counts below cannot
+        # be added to reach it: a SKU sold in both branches is one SKU and two
+        # rows. Asked how many SKUs this workspace covers, the assistant summed
+        # 136 and 135 and answered "271" - which is the series count, not the
+        # SKU count. It only became visible once the branches stopped carrying
+        # identical SKU lists.
+        "skus_total": payload["kpis"]["sku_count"],
+        "skus_total_note": (
+            "The distinct SKUs in this workspace. The per-branch `skus` counts "
+            "below overlap and must never be added together."
+        ),
+        "total_demand_value_display": _rupees(payload["kpis"]["demand_value"]),
+        "total_demand_units": _whole(payload["kpis"]["demand_units"]),
+        # Fill rate per branch, so "compare these two branches on fill rate"
+        # can be answered. Without it the assistant gave one branch's rate from
+        # the network trend and said the other was not in the facts (D-125).
         "branches_ranked_by_demand": [
-            {"branch": r["name"], "units": r["demand_units"], "value_rupees": r["demand_value"], "skus": r["sku_count"]}
+            {
+                "branch": r["name"],
+                "units": r["demand_units"],
+                "value_rupees": r["demand_value"],
+                "value_display": _rupees(r["demand_value"]),
+                "skus": r["sku_count"],
+                "despatched_units": r["despatched_units"],
+                "shortfall_units": r["shortfall_units"],
+                "fill_rate_pct": (
+                    round(100.0 * r["despatched_units"] / r["demand_units"], 2)
+                    if r["demand_units"]
+                    else None
+                ),
+            }
             for r in rows
         ],
         "panel_build_id": build.id,
@@ -263,14 +383,33 @@ def model_leaderboard(db: Session, scope: dict | None, *, visual: bool = False, 
     Includes the models that did not run and why, because "which model is
     best" cannot be answered honestly while six of them are invisible.
     """
+    from app.models.champions import ChampionSelection
     from app.models.training import ModelRun, TrainingRun
 
-    run = db.scalars(
-        select(TrainingRun).where(TrainingRun.status.in_(("completed", "completed_with_warnings")))
+    # The newest completed run that actually holds national-scope rows, which
+    # is not always the newest completed run: a local-tier run produces series
+    # rows only. Reading the newest blindly made the assistant answer "no model
+    # has been ranked" while a ranked national leaderboard sat one run back
+    # (D-124).
+    completed = (
+        select(TrainingRun)
+        .where(TrainingRun.status.in_(("completed", "completed_with_warnings")))
         .order_by(TrainingRun.created_at.desc())
-        .limit(1)
+    )
+    run = db.scalars(
+        completed.where(
+            TrainingRun.id.in_(
+                select(ModelRun.training_run_id).where(ModelRun.scope_level == "national")
+            )
+        ).limit(1)
     ).first()
     if run is None:
+        if db.scalars(completed.limit(1)).first() is not None:
+            return {
+                "status": "Training has run, but only at series level, so no model "
+                "has a national-scope error to rank. Run the aggregate tier to "
+                "produce a national leaderboard."
+            }
         return {"status": "No completed training run exists yet, so no model has a measured error."}
 
     rows = list(
@@ -286,11 +425,41 @@ def model_leaderboard(db: Session, scope: dict | None, *, visual: bool = False, 
 
     facts: dict[str, Any] = {
         "training_run_id": run.id,
-        "scope": "national aggregate (the whole network summed per month)",
+        # "national aggregate" is the *tier* name, not a claim about coverage:
+        # the aggregate is the sum over whatever is in the workspace, which is
+        # two branches here, not 53. Saying "the whole network" told the model
+        # the opposite of the truth on every call (D-131).
+        "scope": (
+            f"aggregate tier — every series in scope summed per period ({_workspace_phrase(db)})"
+        ),
         "unit": "WAPE, per cent — lower is better",
+        "how_to_read_this_ranking": (
+            "Sorted by WAPE, which is NOT the same as sorted by trustworthiness. "
+            "Rows differ in evaluation_mode and validation_points, and a lower "
+            "error measured on fewer points does not beat a higher one measured "
+            "on more. The `champion` field below is the application's decision "
+            "and is the only model that should be described as champion or "
+            "recommended. Never suggest replacing it with a higher-ranked row."
+        ),
         "official_model_count": 13,
+        # The metric the champion was actually chosen on, alongside the WAPE
+        # the table is sorted by. Without it the assistant was asked "why is
+        # this model champion", saw a lower WAPE on another row, and invented
+        # a reason - "it was evaluated on fewer validation points or different
+        # evaluation" - when the real answer is that Exponential Smoothing
+        # Additive wins on horizon error, 1.96% against XGBoost's 8.30%.
+        "ranking_metric": get_settings().champion_primary_metric,
+        "ranking_metric_note": (
+            "The champion is chosen on this metric, measured over the whole "
+            "planning window rather than one period at a time, NOT on the WAPE "
+            "the table is sorted by. To say why a model is champion, compare "
+            "`ranking_metric_pct`. If a row has none, say the figure is not in "
+            "the facts - never explain the choice by a difference you can see "
+            "in some other column."
+        ),
         "models_ranked_by_wape": [
             {"model": r.display_name, "wape_pct": round(r.wape, 3), "mae": r.mae, "mase": r.mase,
+             "ranking_metric_pct": round(r.horizon_mape, 3) if r.horizon_mape is not None else None,
              "validation_points": r.validation_points, "evaluation_mode": r.evaluation_mode}
             for r in ranked[:MAX_TABLE_ROWS]
         ],
@@ -299,26 +468,86 @@ def model_leaderboard(db: Session, scope: dict | None, *, visual: bool = False, 
             for r in models
             if r.wape is None
         ],
+        # Baselines carry the ranking metric too. With WAPE alone, asked
+        # whether a baseline beats the champion, the model compared the two
+        # WAPE columns and answered "no, ma6 is lower" - while on the metric
+        # that decides it the champion wins 1.96% to 10.57%. Whether a
+        # baseline actually won is recorded, not inferred: `beaten_by_baseline`
+        # on the champion is the application's own answer.
         "baselines": [
-            {"method": r.display_name, "wape_pct": round(r.wape, 3) if r.wape is not None else None}
+            {
+                "method": r.display_name,
+                "wape_pct": round(r.wape, 3) if r.wape is not None else None,
+                "ranking_metric_pct": (
+                    round(r.horizon_mape, 3) if r.horizon_mape is not None else None
+                ),
+            }
             for r in baselines
         ],
         "caveats": [
             "A baseline is never a registered model and can never be champion.",
+            "Whether a baseline beat the champion is the `beaten_by_baseline` "
+            "field on the champion - the application's own recorded answer. "
+            "Report that field. Never decide it by comparing WAPE columns: "
+            "the champion is chosen on `ranking_metric_pct`, and the two "
+            "metrics disagree often.",
             "Rows evaluated by holdout_fast have fewer validation points than "
             "rolling_origin rows; the counts are given so they are not compared blindly.",
             "This is the national aggregate. Aggregate series are far easier to "
             "forecast than a single branch x SKU cell, so this error does not transfer down.",
         ],
     }
-    if ranked:
+    # The champion is the stored decision, not the top of this table. Ranking
+    # by WAPE alone crowned a model measured by holdout_fast on 26 points over
+    # one measured by rolling_origin on 44, so the assistant named a different
+    # champion than every other surface in the application (D-124).
+    selection = db.scalars(
+        select(ChampionSelection)
+        .where(
+            ChampionSelection.training_run_id == run.id,
+            ChampionSelection.scope_kind == "overall",
+            ChampionSelection.is_active.is_(True),
+        )
+        .limit(1)
+    ).first()
+    if selection is not None:
+        champion_row = next(
+            (r for r in ranked if r.display_name == selection.champion_display_name), None
+        )
+        facts["champion"] = {
+            "model": selection.champion_display_name,
+            "wape_pct": round(selection.champion_wape, 3) if selection.champion_wape is not None else None,
+            "ranking_metric_pct": (
+                round(champion_row.horizon_mape, 3)
+                if champion_row is not None and champion_row.horizon_mape is not None
+                else None
+            ),
+            "bias_pct": selection.champion_bias,
+            "validation_points": selection.champion_validation_points,
+            "evaluation_mode": selection.champion_evaluation_mode,
+            "selected_by": selection.selection_source,
+            "beaten_by_baseline": selection.beaten_by_baseline,
+        }
+        facts["caveats"].append(
+            "The champion is the application's stored selection. It is chosen "
+            "on `ranking_metric_pct`, so it is often NOT the lowest WAPE in "
+            "the table - that is the expected case, not an anomaly, and the "
+            "two metrics measure different things."
+        )
+    elif ranked:
         best = ranked[0]
         facts["champion"] = {"model": best.display_name, "wape_pct": round(best.wape, 3),
                              "bias_pct": best.bias, "validation_points": best.validation_points}
-        best_baseline = min((r for r in baselines if r.wape is not None), key=lambda r: r.wape, default=None)
-        if best_baseline is not None:
-            facts["best_baseline"] = {"method": best_baseline.display_name, "wape_pct": round(best_baseline.wape, 3)}
-            facts["champion_beats_best_baseline"] = bool(best.wape < best_baseline.wape)
+        facts["caveats"].append(
+            "No champion has been selected for this run, so the lowest WAPE is "
+            "shown instead of a stored decision."
+        )
+    best_baseline = min((r for r in baselines if r.wape is not None), key=lambda r: r.wape, default=None)
+    champion_wape = (facts.get("champion") or {}).get("wape_pct")
+    if best_baseline is not None:
+        facts["best_baseline"] = {"method": best_baseline.display_name, "wape_pct": round(best_baseline.wape, 3)}
+        if champion_wape is not None:
+            facts["champion_beats_best_baseline"] = bool(champion_wape < best_baseline.wape)
     if visual and ranked:
         facts["chart"] = _chart(
             chart_type if chart_type in ("bar",) else "bar",
@@ -348,7 +577,11 @@ def forecast_outlook(db: Session, scope: dict | None, *, visual: bool = False, c
     facts: dict[str, Any] = {
         "forecast_run_id": run.id,
         "origin_period": getattr(run, "origin_period", None),
-        "scope": "national",
+        # `scope_level == "national"` is the row's tier in the hierarchy, not a
+        # statement that it covers the country. It is the total over the
+        # workspace, and calling it "national" invited exactly the reading the
+        # whole scope mechanism exists to prevent (D-131).
+        "scope": f"top of the forecast hierarchy — the total over {_workspace_phrase(db)}",
         "unit": "units of ordered demand per month, reconciled",
         "horizons": [
             {
@@ -395,11 +628,11 @@ def stock_exceptions(db: Session, scope: dict | None, *, visual: bool = False, c
     from app.domain.ais import analytics as A
 
     panel, build, path, _scope = _panel_and_path(db)
-    payload = A.cached_exceptions(panel, path, _analytics_scope(scope))
+    payload = A.cached_exceptions(panel, path, _analytics_scope(scope, panel))
     if payload.get("empty"):
         return {"status": payload.get("reason", "No exception condition in this scope.")}
     facts = {
-        "scope": scope_note(scope),
+        "scope": scope_note(scope, db),
         "unit": "affected branch x SKU lines",
         "totals": payload["kpis"],
         "by_type": [
@@ -418,7 +651,7 @@ def stock_exceptions(db: Session, scope: dict | None, *, visual: bool = False, c
     if visual:
         facts["chart"] = _chart(
             chart_type if chart_type in ("bar", "pie") else "bar",
-            f"Exception lines by type — {scope_note(scope)}",
+            f"Exception lines by type — {scope_note(scope, db)}",
             [{"name": r["name"], "lines": r["lines"]} for r in payload["by_type"]],
             [{"key": "lines", "label": "Lines"}],
             "name",
@@ -439,7 +672,7 @@ def inventory_recommendations(db: Session, scope: dict | None, *, visual: bool =
 
     items = payload.get("items") or []
     return {
-        "scope": scope_note(scope),
+        "scope": scope_note(scope, db),
         "unit": "units to order; stock and cover in units and days",
         "period": payload.get("period"),
         "service_level": payload.get("service_level"),
@@ -450,8 +683,11 @@ def inventory_recommendations(db: Session, scope: dict | None, *, visual: bool =
             {
                 "branch": item.get("canonical_branch"),
                 "sku": item.get("canonical_sku"),
-                "recommended_order": item.get("raw_recommended_order"),
-                "order_up_to_level": item.get("order_up_to_level"),
+                # Whole units. The raw figure carries three decimals, and the
+                # assistant read it out as "order 5070.994 units", which is not
+                # a quantity anyone can place (D-125).
+                "recommended_order": _whole(item.get("raw_recommended_order")),
+                "order_up_to_level": _whole(item.get("order_up_to_level")),
                 "quantile_forecast_per_month": item.get("monthly_quantile_forecast"),
                 "point_forecast_per_month": item.get("monthly_point_forecast"),
                 "stock_on_hand": item.get("closing_stock_on_hand"),

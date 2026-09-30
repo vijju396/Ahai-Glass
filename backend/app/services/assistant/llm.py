@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -32,8 +34,10 @@ MAX_HISTORY_CHARS = 500
 MAX_ANSWER_CHARS = 1400
 
 SYSTEM_PROMPT = """You are the demand and inventory assistant for AIS Glass Forecast &
-Inventory Intelligence — Asahi India Glass's Consumer Glass Solutions network: 53 branches,
-about 2,300 SKUs, forecast at branch x SKU x month. Each turn you are given structured facts
+Inventory Intelligence — Asahi India Glass's Consumer Glass Solutions network. This
+deployment reports on a restricted slice of that network, not all of it; the facts you are
+given state which branches, SKUs and period grain, and you must take the scope from them
+rather than assuming a network-wide figure. Each turn you are given structured facts
 the application already computed from its own data: ordered-demand history, model error,
 stored forecasts with service-level quantiles, supply exceptions, replenishment
 recommendations, and data-quality signals.
@@ -44,8 +48,11 @@ GROUNDING
    arithmetic, stop: the facts already contain the computed answer.
 2. If the facts do not contain what was asked, say so in one line and name what is missing.
    Never fill the hole with a plausible number.
-3. Carry the unit every time. Demand is units, value is rupees (write ₹8.9Cr or ₹12.4L in
-   Indian numbering), error is a percentage, cover is days, lead time is days.
+3. Carry the unit every time. Demand is units, error is a percentage, cover is days, lead
+   time is days. For money, quote a `*_display` field EXACTLY as it is written (₹60.24Cr,
+   ₹12.4L) — it is already in Indian numbering. Never convert a `*_rupees` figure into
+   crores or lakhs yourself: that is arithmetic, and rule 1 forbids it. If a rupee amount
+   has no `_display` beside it, give the plain figure with "rupees".
 4. Ordered quantity is the demand target. A `sales_proxy` row is a labelled substitute for
    it, never the same measurement — if a fact says a window mixes the two, say so.
 5. A censored row means despatch fell short of the order, so the ordered figure is a LOWER
@@ -106,7 +113,7 @@ demand, forecast and inventory data.
 **I can help with**
 - Ordered-demand history and where demand is heading
 - The 13 registered models, their measured error, and which is champion
-- Stored forecasts for horizons 1-6, with q80/q90/q95 service levels
+- Stored forecasts over the six-month horizon, with q80/q90/q95 service levels
 - Stock cover, replenishment recommendations and their inputs
 - Supply and data exceptions — short despatch, zero stock against live demand
 - Data freshness, input drift and whether error deterioration is computable yet
@@ -115,22 +122,55 @@ demand, forecast and inventory data.
 - "Show the monthly demand trend"
 - "Which branches hold dead or slow stock?\""""
 
-GREETING_MESSAGE = """Hello. I am the demand and inventory assistant for this AIS Glass
-build, and every number I give you is read from this application's own data — 53 branches,
-about 2,300 SKUs, forecast at branch x SKU x month.
+GREETING_TEMPLATE = """Hello. I am the demand and inventory assistant for this AIS Glass
+build, and every number I give you is read from this application's own data — {scope},
+forecast at branch x SKU x {period}.
 
 **What I can tell you about**
-- **Demand** - ordered-demand history by branch, SKU and month, and where it is heading
+- **Demand** - ordered-demand history by branch, SKU and {period}, and where it is heading
 - **Models** - all 13 registered models, their measured error, and why one is champion
-- **Forecasts** - horizons 1-6 with q80/q90/q95 service levels and their provenance
+- **Forecasts** - horizons 1-{horizons} with q80/q90/q95 service levels and their provenance
 - **Stock** - cover, replenishment recommendations, dead and slow stock
 - **Exceptions** - short despatch, zero stock against live demand, data defects
 - **Trust** - freshness, drift, and what is not yet computable
 
 **A good place to start**
-- "Show the monthly demand trend"
+- "Show the {period}ly demand trend"
 - "Explain why this model is champion"
 - "Which SKUs have zero stock and live demand?\""""
+
+
+def greeting_message(db: Session | None = None) -> str:
+    """The greeting, describing the slice this deployment actually reports on.
+
+    It used to be a constant saying "53 branches, about 2,300 SKUs, forecast at
+    branch x SKU x month". This build is scoped to two branches and twenty SKUs
+    and forecasts weeks, so the assistant opened every conversation with three
+    wrong numbers before answering the first question correctly (D-125).
+    """
+    settings = get_settings()
+    period = "week" if settings.panel_grain == "weekly" else "month"
+    # The horizon count follows the grain too: six months is 6 periods monthly
+    # and 26 weekly, and the greeting said "1-6" at either.
+    horizons = settings.forecast_horizon
+    scope = "this workspace"
+    if db is not None:
+        try:
+            from app.domain.ais.workspace import resolve_workspace
+
+            workspace = resolve_workspace(db)
+            branches = len(workspace.branches or ())
+            skus = len(workspace.skus or ())
+            if branches or skus:
+                parts = []
+                if branches:
+                    parts.append(f"{branches} branch{'es' if branches != 1 else ''}")
+                if skus:
+                    parts.append(f"{skus} SKU{'s' if skus != 1 else ''}")
+                scope = " and ".join(parts)
+        except Exception:  # noqa: BLE001 - a greeting must never fail to greet
+            pass
+    return GREETING_TEMPLATE.format(scope=scope, period=period, horizons=horizons)
 
 
 def is_configured() -> bool:
@@ -228,9 +268,14 @@ def compose_answer(question: str, facts: dict[str, dict[str, Any]]) -> str:
                 f"Ordered demand for {payload.get('scope')} is {payload.get('direction')}: "
                 f"{payload.get('latest_demand_units'):,.0f} units in {payload.get('latest_month')}."
             )
+            # The count and the endpoints both come from the trend, which is
+            # monthly whatever the panel is made of. `window.periods` counts
+            # panel periods - 122 of them on a weekly panel - and reading that
+            # out as "122 months" put a count of weeks next to a mean per
+            # month in the same sentence.
             lines.append(
-                f"- **Window** - {payload['window']['periods']} months, "
-                f"{payload['window']['start']} to {payload['window']['end']}, "
+                f"- **Window** - {payload['months']} months, "
+                f"{payload.get('first_month')} to {payload.get('latest_month')}, "
                 f"mean {payload.get('mean_monthly_units'):,.0f} units/month."
             )
             if payload.get("change_pct") is not None:

@@ -225,8 +225,8 @@ export function SupplyIntelligencePage() {
             <Card id="exposure" title="Inventory exposure" subtitle="Snapshot positions · counts are separate measures, not additive"><ComparisonBars unit="Positions" labels={['With stock', 'Dead / slow', 'Zero stock / live demand']} series={[{ name: 'Branch × SKU positions', values: [totals.positions_with_stock, totals.dead_or_slow_positions, totals.zero_stock_live_demand_positions] }]} /></Card>
             <Card title="Replenishment priorities" subtitle="Five largest available order recommendations in the returned page"><ComparisonBars labels={[...rows].filter(r => r.recommended_order !== null).sort((a,b) => b.recommended_order! - a.recommended_order!).slice(0,5).map(r => r.canonical_sku ?? r.scope_key)} series={[{ name: 'Recommended units', values: [...rows].filter(r => r.recommended_order !== null).sort((a,b) => b.recommended_order! - a.recommended_order!).slice(0,5).map(r => r.recommended_order) }]} /><Explain variant="note">Filtered to the loaded recommendation page. The table below retains branch identity, unavailable rows and calculation inputs.</Explain></Card>
           </div>
-          {overview.data.caveats.map((caveat) => (
-            <Explain variant="callout">
+          {overview.data.caveats.map((caveat, i) => (
+            <Explain key={`${i}-${caveat}`} variant="callout">
               <p>{caveat}</p>
             </Explain>
           ))}
@@ -323,8 +323,8 @@ export function SupplyIntelligencePage() {
               <code>raw_recommended_order</code> so any MOQ or case-pack
               rounding is visible.
             </Explain>
-            {(recommendations.data?.notes ?? []).map((note) => (
-              <Explain variant="hint">
+            {(recommendations.data?.notes ?? []).map((note, i) => (
+              <Explain key={`${i}-${note}`} variant="hint">
                 {note}
               </Explain>
             ))}

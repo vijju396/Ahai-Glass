@@ -218,6 +218,14 @@ class ModelRunOut(ApiModel):
     legacy_mae: float | None
     legacy_valid: bool
 
+    #: This model's error on the six-month total - the same backtest, added up
+    #: before it is scored. `horizon_blocks` is how many six-month stretches
+    #: were available to score; it is small by construction and is reported
+    #: rather than smoothed over.
+    horizon_mape: float | None = None
+    horizon_wape: float | None = None
+    horizon_blocks: int = 0
+
     zero_actual_points: int
     censored_points: int
     negative_predictions: int

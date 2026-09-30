@@ -27,6 +27,14 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.ml.adapters.base import ModelContext
 from app.ml.evaluation import folds as F
+from app.ml.features.grain import (
+    HORIZON,
+    MIN_TRAIN_PERIODS as GRAIN_MIN_TRAIN,
+    ORIGIN_TRAIN_ENDS,
+    first_period_of_month,
+    index_to_period,
+    last_period_of_month,
+)
 from app.ml.registry.canonical_models import CANONICAL_MODEL_IDS
 from app.ml.registry.model_registry import get_adapter_class
 from app.ml.selection.champion import (
@@ -34,13 +42,16 @@ from app.ml.selection.champion import (
     MIN_TEST_POINT_SHARE,
     MIN_VALIDATION_POINTS,
     PRIMARY_METRIC_CHOICES,
+    PRIMARY_METRIC_LABELS,
 )
 from app.models.training import ModelRun, TrainingRun
 
-#: The real panel window. Kept here rather than imported because `folds` takes
-#: absolute month indices and does not carry the labels.
-PANEL_START = "2024-04"
-PANEL_END = "2026-07"
+#: The real panel window, stated as calendar months because that is how the
+#: source was received. It is converted to the configured grain where it is
+#: read, so a weekly panel reports the weeks that span the same window rather
+#: than months it does not contain.
+PANEL_START_MONTH = "2024-04"
+PANEL_END_MONTH = "2026-07"
 
 #: The non-registry baselines. Named here so the tab can show them as the
 #: comparison they are, never as a fourteenth model.
@@ -54,6 +65,34 @@ BASELINES: tuple[tuple[str, str], ...] = (
 #: Every metric the evaluator computes, what it means in plain words, and
 #: whether lower is better. `primary` is decided by configuration, not here.
 METRICS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "horizon_mape",
+        "label": "Error on the six-month total",
+        "unit": "%",
+        "lower_is_better": True,
+        "definition": (
+            "The same forecasts, added up across the six-month planning window and "
+            "compared against the actual total for that window. One number per "
+            "window, not an average of the periods inside it."
+        ),
+        "caveat": (
+            "Higher than the per-period figure because misses inside the window "
+            "cancel - not always: a model biased the same way throughout compounds "
+            "instead. Each row rests on one or two windows, against dozens of "
+            "per-period points."
+        ),
+    },
+    {
+        "key": "horizon_accuracy",
+        "label": "Six-month accuracy",
+        "unit": "%",
+        "lower_is_better": False,
+        "definition": (
+            "100 minus the error on the six-month total, clamped at zero. A "
+            "restatement of the metric above, not a separate measurement."
+        ),
+        "caveat": "The figure the dashboard and the leaderboard headline.",
+    },
     {
         "key": "mape",
         "label": "MAPE",
@@ -134,9 +173,14 @@ def _validation_design() -> dict[str, Any]:
     The origins are the mandated ones for the real panel window, converted
     from absolute month indices back to labels so the tab can print them.
     """
-    from app.ml.features.panel import index_to_period, month_index
+    from app.ml.features.panel import period_index
 
-    origins = F.mandated_origins(month_index(PANEL_START), month_index(PANEL_END))
+    grain = get_settings().panel_grain
+    origins = F.mandated_origins(
+        period_index(first_period_of_month(PANEL_START_MONTH, grain), grain),
+        period_index(last_period_of_month(PANEL_END_MONTH, grain), grain),
+        grain=grain,
+    )
     return {
         "method": "rolling origin (expanding window)",
         "why": (
@@ -144,18 +188,30 @@ def _validation_design() -> dict[str, Any]:
             "strictly after it. A random split would let a model see the future of the "
             "series it is being scored on, which makes the error meaningless."
         ),
-        "horizon_months": F.DEFAULT_HORIZON,
-        "min_train_periods": F.MIN_TRAIN_PERIODS,
-        "panel_window": {"start": PANEL_START, "end": PANEL_END},
-        "mandated_train_ends": [F.PRIMARY_TRAIN_END, F.SECOND_TRAIN_END],
+        # These three are counts of periods, not of months. At monthly grain the
+        # two are the same number and the names read naturally; at weekly they
+        # are 26 and 52, and `grain` below is what tells the reader which noun
+        # to put after them.
+        "grain": grain,
+        "horizon_months": HORIZON[grain],
+        "min_train_periods": GRAIN_MIN_TRAIN[grain],
+        "panel_window": {
+            "start": first_period_of_month(PANEL_START_MONTH, grain),
+            "end": last_period_of_month(PANEL_END_MONTH, grain),
+        },
+        "mandated_train_ends": list(ORIGIN_TRAIN_ENDS[grain]),
         "origins": [
             {
                 "name": origin.name,
                 "fold_index": origin.fold_index,
-                "train_start": index_to_period(origin.train_start_index),
-                "train_end": index_to_period(origin.train_end_index),
-                "validation_start": index_to_period(origin.validation_start_index),
-                "validation_end": index_to_period(origin.validation_end_index),
+                "train_start": index_to_period(origin.train_start_index, origin.grain),
+                "train_end": index_to_period(origin.train_end_index, origin.grain),
+                "validation_start": index_to_period(
+                    origin.validation_start_index, origin.grain
+                ),
+                "validation_end": index_to_period(
+                    origin.validation_end_index, origin.grain
+                ),
                 "train_months": origin.train_end_index - origin.train_start_index + 1,
             }
             for origin in origins
@@ -208,7 +264,12 @@ def _selection() -> dict[str, Any]:
     metric = settings.champion_primary_metric
     return {
         "primary_metric": metric,
+        # The key is a column name; a screen needs words. "HORIZON_MAPE" on a
+        # tile tells a reader nothing, and the thing it names - the error on
+        # the six-month total - is the whole point of the change.
+        "primary_metric_label": PRIMARY_METRIC_LABELS.get(metric, metric),
         "primary_metric_choices": list(PRIMARY_METRIC_CHOICES),
+        "primary_metric_labels": dict(PRIMARY_METRIC_LABELS),
         "default_primary_metric": DEFAULT_PRIMARY_METRIC,
         "tie_breaks": ["absolute bias", "MAE", "model id"],
         "why_bias_second": (
@@ -262,7 +323,11 @@ def _tuning(context: ModelContext) -> dict[str, Any]:
         "not_tuned": [
             "No cross-model architecture search.",
             "No automatic feature selection outside the fold.",
-            "No objective function was changed to MAPE - MAPE decides selection, not fitting.",
+            (
+                "No objective function was changed to match the ranking metric. Every "
+                "model fits on its own native loss; the error on the six-month total "
+                "decides which fitted model is used, not how any of them is fitted."
+            ),
         ],
     }
 
@@ -308,8 +373,18 @@ def explain(db: Session) -> dict[str, Any]:
     )
     from app.domain.ais.workspace import resolve_workspace
 
+    # With the denominators. `as_dict()` on its own gives the banner "2 branches
+    # - 136 SKUs", which states the restriction without saying how much of the
+    # network it hides; the analytics pages all read "2 of 53 - 136 of 2,063"
+    # and this one should say the same thing the same way (D-131).
+    from app.api.routes.analytics import _demand_universe
+
+    total_branches, total_skus = _demand_universe(db)
+
     return {
-        "workspace_scope": resolve_workspace(db).as_dict(),
+        "workspace_scope": (
+            resolve_workspace(db).with_total(total_branches, total_skus).as_dict()
+        ),
         "validation": _validation_design(),
         "models": [_model_row(model_id, context) for model_id in CANONICAL_MODEL_IDS],
         "model_count": len(CANONICAL_MODEL_IDS),

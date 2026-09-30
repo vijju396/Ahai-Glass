@@ -41,7 +41,8 @@ from app.ml.evaluation.backtest import (
 from app.ml.evaluation.folds import Origin, aggregate_test_points, build_origins
 from app.ml.evaluation.quantiles import ResidualStore
 from app.ml.evaluation.segmentation import DemandSegment, profile_series
-from app.ml.features.panel import month_index
+from app.ml.features.grain import MONTHLY
+from app.ml.features.panel import period_index
 
 #: The panel's own column names. The only place they appear in the evaluation
 #: path, per the boundary rule in CLAUDE.md.
@@ -98,6 +99,7 @@ def resolve_origins(
     *,
     period_col: str = PERIOD_COL,
     max_origins: int = 2,
+    grain: str = MONTHLY,
 ) -> list[Origin]:
     """Origins from the panel's own period range.
 
@@ -111,6 +113,7 @@ def resolve_origins(
         int(panel[period_col].min()),
         int(panel[period_col].max()),
         max_origins=max_origins,
+        grain=grain,
     )
 
 
@@ -125,6 +128,7 @@ def backtest_one_series(
     budget: EvaluationBudget | None = None,
     include_baselines: bool = True,
     allow_actuals_in_recursion: bool = False,
+    grain: str = MONTHLY,
 ) -> SeriesBacktestReport:
     """Backtest all 13 models plus the baselines on one series.
 
@@ -138,7 +142,7 @@ def backtest_one_series(
         raise KeyError(f"{series_id!r} is not in this panel")
 
     resolved_origins = list(
-        origins if origins is not None else resolve_origins(panel)
+        origins if origins is not None else resolve_origins(panel, grain=grain)
     )
     prepared, exog_columns = prepare_local_series_frame(series, period_col=PERIOD_COL)
     sparsity = profile_series(series[TARGET_COL])
@@ -161,6 +165,7 @@ def backtest_one_series(
         exog_columns=exog_columns,
         min_history_profile=profile,
         allow_actuals_in_recursion=allow_actuals_in_recursion,
+        grain=grain,
     )
     report.models = backtest_all_models(
         prepared,
@@ -280,6 +285,6 @@ def segment_of(series_target: Iterable[Any]) -> DemandSegment:
     return profile_series(list(series_target)).segment
 
 
-def period_index_of(period: str) -> int:
-    """`YYYY-MM` to the panel's absolute month counter."""
-    return month_index(period)
+def period_index_of(period: str, grain: str = MONTHLY) -> int:
+    """A period label to the panel's absolute period counter."""
+    return period_index(period, grain)

@@ -146,6 +146,8 @@ def model_progress(db: Session, run_id: str) -> list[dict[str, Any]]:
                 ModelRun.validation_points,
                 ModelRun.failure_reason,
                 ModelRun.fit_seconds,
+                ModelRun.horizon_mape,
+                ModelRun.horizon_blocks,
             ).where(ModelRun.training_run_id == run_id)
         )
     )
@@ -177,6 +179,8 @@ def model_progress(db: Session, run_id: str) -> list[dict[str, Any]]:
         points,
         reason,
         fit,
+        horizon_mape,
+        horizon_blocks,
     ) in rows:
         cell = agg.setdefault(
             model_id,
@@ -196,6 +200,8 @@ def model_progress(db: Session, run_id: str) -> list[dict[str, Any]]:
                 "_smape": [],
                 "_mase": [],
                 "_bias": [],
+                "_horizon_mape": [],
+                "horizon_blocks": 0,
                 "validation_points": 0,
                 "reason": None,
                 **{s: 0 for s in STATUSES},
@@ -250,6 +256,15 @@ def model_progress(db: Session, run_id: str) -> list[dict[str, Any]]:
                 volume = 100.0 * float(mae) * int(points) / float(wape)
                 if volume > 0:
                     cell["_mape_weighted"].append((float(mape), volume))
+        # The consolidated figure: this model's error on the six-month total,
+        # which is the quantity a purchase is held to and, since D-120, the
+        # metric the champion is picked on. Kept beside the per-period MAPE
+        # rather than replacing it - the two disagree sharply and a reader
+        # comparing the leaderboard to this table needs both to be visible.
+        if horizon_mape is not None:
+            cell["_horizon_mape"].append(float(horizon_mape))
+        if horizon_blocks:
+            cell["horizon_blocks"] += int(horizon_blocks)
         if points:
             cell["validation_points"] = max(cell["validation_points"], int(points))
         # The first eligibility reason seen, so the leaderboard can say *why* a
@@ -270,6 +285,23 @@ def model_progress(db: Session, run_id: str) -> list[dict[str, Any]]:
         cell["accuracy"] = (
             round(max(0.0, 100.0 - statistics.median(mapes)), 2) if mapes else None
         )
+        # Median across scopes of each scope's six-month error, and the
+        # accuracy that is 100 minus it. A median, not a mean, for the same
+        # reason every other figure here is: one line whose six-month total is
+        # off by 300% would otherwise decide the row.
+        horizons = cell.pop("_horizon_mape")
+        cell["horizon_mape"] = (
+            round(statistics.median(horizons), 2) if horizons else None
+        )
+        cell["horizon_accuracy"] = (
+            round(max(0.0, 100.0 - statistics.median(horizons)), 2)
+            if horizons
+            else None
+        )
+        #: How many scopes contributed a six-month figure. Smaller than
+        #: `scored` wherever a scope stored no usable block, and shown so a row
+        #: resting on two scopes is not read as resting on forty.
+        cell["horizon_scored"] = len(horizons)
         weighted = cell.pop("_mape_weighted")
         cell["accuracy_weighted"] = None
         # The MAPE the weighted accuracy is literally 100 minus.

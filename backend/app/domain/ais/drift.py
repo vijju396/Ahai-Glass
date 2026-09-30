@@ -58,6 +58,12 @@ MAX_PROJECTION_MONTHS = 12
 #: Fewer post-change drift points than this and a trend line is noise.
 MIN_POINTS_FOR_TREND = 5
 
+#: Below this the trend is flat. A dead-level series does not give an OLS
+#: slope of exactly 0.0 - it gives something like 1e-18 - so testing against
+#: zero lets a flat trend through as "rising" and projects a crossing tens of
+#: quadrillions of months away.
+FLAT_SLOPE_PP_PER_MONTH = 1e-3
+
 
 @dataclass(frozen=True)
 class DriftPoint:
@@ -164,7 +170,13 @@ def project_next_crossing(
                 "aid. There is nothing to project to - it has happened."
             ),
         }
-    if slope <= 0:
+    # Not `slope <= 0`: a perfectly flat series gives an OLS slope of about
+    # 1e-18 rather than exactly zero, which passes that test and projects the
+    # crossing 31,118,141,019,627,308 months out - a number the page then
+    # printed. Anything below a thousandth of a percentage point per month is
+    # flat, and `slope_pct_per_month` above is rounded to three places anyway,
+    # so a slope this small is already displayed as 0.0.
+    if slope <= FLAT_SLOPE_PP_PER_MONTH:
         return base | {
             "projectable": False,
             "reason": (

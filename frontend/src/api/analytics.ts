@@ -15,7 +15,15 @@ export interface AnalyticsFilters {
   regions: FilterOption[];
   period_range: { min: string; max: string } | null;
   periods: string[];
+  /** First month (YYYY-MM) holding real orders; earlier rows are sales proxy
+   *  only. Null when the panel has no order rows. */
+  orders_start_month?: string | null;
+  /** `orders_start_month` as a panel period label, and the number of panel
+   *  periods from it to the end of the data. */
+  orders_start_period?: string | null;
+  orders_periods?: number;
   available_grains: string[];
+  panel_grain?: string;
   grain_note: string;
   series_count: number;
   panel_build_id: string;
@@ -27,6 +35,13 @@ export interface TrendPoint {
   demand_units: number;
   demand_value: number;
   despatched_units: number | null;
+  /** Despatched quantity valued on the same mean MRP as `demand_value`. Null
+   *  in a bucket where no row carries a despatch figure. */
+  despatch_value: number | null;
+  ordered_value_known: number | null;
+  ordered_units_known: number | null;
+  gap_value: number | null;
+  gap_units: number | null;
   shortfall_units: number;
   fill_rate_pct: number | null;
   order_share_pct: number | null;
@@ -58,12 +73,33 @@ export interface AnalyticsSummary {
   scope: Record<string, string | null>;
   window: { start: string; end: string; periods: number };
   available_grains: string[];
+  panel_grain?: string;
   grain_note: string;
   kpis: {
     demand_value: number;
     demand_units: number;
+    /** What was despatched, over the rows that record a despatch at all.
+     *  Null when the selection has none — sales-proxy rows are excluded,
+     *  not counted as zero. */
+    despatch_value: number | null;
+    despatched_units: number | null;
+    /** Ordered value over those same rows — the only denominator
+     *  `despatch_value` can honestly be divided by. */
+    ordered_value_known: number | null;
+    /** Ordered units over those same rows. */
+    ordered_units_known: number | null;
+    /** `ordered_value_known` − `despatch_value`. Both sides are the same rows,
+     *  so this subtraction is a real quantity rather than a data gap. */
+    gap_value: number | null;
+    gap_units: number | null;
+    /** The stretch those comparable rows span — shorter than `window`, which
+     *  covers the whole selection including the sales-proxy rows. */
+    comparable_window: { start: string; end: string; periods: number } | null;
     shortfall_units: number;
     fill_rate_pct: number | null;
+    /** Coverage on a value basis: despatched value ÷ `ordered_value_known`.
+     *  `fill_rate_pct` is the same ratio in units. */
+    fill_rate_value_pct: number | null;
     order_share_pct: number | null;
     censored_rows: number;
     series_count: number;
@@ -269,6 +305,10 @@ export interface AssistantStatus {
   steps: string[];
   notes: string[];
   suggested_questions: string[];
+  /** The branch and SKU restriction every answer is drawn from — the same field
+   *  the analytics payloads carry. On the status call rather than the answer so
+   *  the page can say what is in scope before the first question is asked. */
+  workspace_scope?: WorkspaceScope | null;
 }
 
 export interface AssistantChart {
@@ -338,8 +378,66 @@ export interface Recommendation {
   verify_on: string | null;
 }
 
+/** One branch x SKU line: its own measured figures and its own sentence.
+ *
+ *  The numeric fields are computed and ranked by the backend before any model
+ *  sees them, so `urgency` is reproducible and auditable; `written_by_model`
+ *  says whether the prose beside them came from the model or a template. */
+export interface LineRecommendation {
+  scope_key: string;
+  branch: string;
+  sku: string;
+  /** critical | high | medium | cannot_recommend. Computed, never model-chosen. */
+  urgency: string;
+  urgency_reason: string;
+  headline: string;
+  explanation: string | null;
+  next_step: string | null;
+  evidence: string[];
+  written_by_model: boolean;
+
+  forecast_period: string | null;
+  service_level: number | null;
+  point_forecast: number | null;
+  quantile_forecast: number | null;
+  usable_stock: number | null;
+  on_order: number | null;
+  backorders: number | null;
+  days_of_cover: number | null;
+  lead_time_days: number | null;
+  protection_period_days: number | null;
+  order_up_to_level: number | null;
+  recommended_order: number | null;
+  model: string | null;
+  demand_segment: string | null;
+  /** Despatch fell short here, so ordered quantity is a lower bound on demand. */
+  is_censored: boolean;
+  target_source: string | null;
+  /** Set when no recommendation could be produced. Never the same as zero. */
+  unavailable_reason: string | null;
+  exceptions: Array<{ type?: string | null; units?: number | null }>;
+}
+
 export interface RecommendationsPayload {
   items: Recommendation[];
+  /** Per branch x SKU, already ranked by the backend. */
+  lines: LineRecommendation[];
+  /** Fails independently of `answered_by` — the two passes are separate calls. */
+  lines_answered_by: string | null;
+  /** Band totals across the whole workspace, so a trimmed list says what it hides. */
+  line_counts: Record<string, number>;
+  lines_total: number;
+  lines_shown: number;
+  /** How many of the shown lines a model wrote a sentence for. Every ranked line
+   *  is listed; only the most urgent handful gets prose, and the card says
+   *  which it is rather than leaving the reader to guess. */
+  lines_written?: number;
+  /** Per exception kind across the lines on this page. What lets a count be
+   *  opened into the lines behind it instead of only read. */
+  line_exception_counts?: Array<{ label: string; lines: number; units: number }>;
+  /** Served from the completed-pass cache, and how old it is. */
+  cached?: boolean;
+  cache_age_seconds?: number;
   /** openai | deterministic_no_key | deterministic_after_provider_error */
   answered_by: string;
   sources: string[];
@@ -348,12 +446,27 @@ export interface RecommendationsPayload {
   temperature: number;
   model: string | null;
   provider_error: string | null;
+  /** The branch and SKU restriction every figure on the page was computed
+   *  under — the same field the analytics payloads carry, so this page shows
+   *  the same banner as the other six. */
+  workspace_scope?: WorkspaceScope | null;
 }
 
-export const recommendationKeys = { all: ['assistant', 'recommendations'] as const };
+export const recommendationKeys = {
+  all: ['assistant', 'recommendations'] as const,
+  /** Keyed by `prose` so the fast computed pass and the written pass are two
+   *  cache entries, not one overwriting the other. */
+  pass: (prose: boolean) => ['assistant', 'recommendations', prose] as const,
+};
 
-export function fetchRecommendations(): Promise<RecommendationsPayload> {
-  return getJson<RecommendationsPayload>('/assistant/recommendations');
+/**
+ * `prose: false` skips both model calls and returns in about six seconds
+ * instead of thirty-five. The ranking and every figure are identical — they
+ * were never the model's work — so the fast pass is not a degraded one, it is
+ * the same facts with templated wording (D-104).
+ */
+export function fetchRecommendations(prose = true): Promise<RecommendationsPayload> {
+  return getJson<RecommendationsPayload>('/assistant/recommendations', { prose });
 }
 
 // ----------------------------------------------------------------------
@@ -420,6 +533,8 @@ export interface TrainingExplain {
   validation: {
     method: string;
     why: string;
+    /** Counts of periods at `grain`, not necessarily of months. */
+    grain: string;
     horizon_months: number;
     min_train_periods: number;
     panel_window: { start: string; end: string };
@@ -433,7 +548,10 @@ export interface TrainingExplain {
   metrics: TrainingMetric[];
   selection: {
     primary_metric: string;
+    /** The same metric in plain words — "error on the six-month total". */
+    primary_metric_label?: string;
     primary_metric_choices: string[];
+    primary_metric_labels?: Record<string, string>;
     default_primary_metric: string;
     tie_breaks: string[];
     why_bias_second: string;
@@ -665,3 +783,107 @@ export const sampleMixKeys = {
 export function fetchSampleMix(): Promise<SampleMixPayload> {
   return getJson<SampleMixPayload>('/analytics/sample-mix');
 }
+
+// ----------------------------------------------------------------------
+// Lead time: stated (Location Master) against observed (Orders & Receipts)
+// ----------------------------------------------------------------------
+
+export interface LeadTimeObservedBranch {
+  branch: string;
+  /** Order lines this branch's observed figures were computed from. */
+  lines: number | null;
+  /** Location Master `Avg Lead Time`, as supplied. */
+  stated_avg: number | null;
+  stated_std: number | null;
+  transit: number | null;
+  service_factor: number | null;
+  truck_moq: number | null;
+  /** Mean of Despatch Date minus Order Date. A derived view of two existing
+   *  columns; neither source column is altered. */
+  observed_mean: number | null;
+  observed_median: number | null;
+  observed_std: number | null;
+  observed_p95: number | null;
+  observed_max: number | null;
+  /** observed_mean minus stated_avg. Positive means longer than stated. */
+  gap_mean: number | null;
+  gap_p95: number | null;
+  /** Why this branch is worth a look, or null. Not an assertion of error. */
+  review: string | null;
+  /** False when the supplied service factor is outside 0-5 and so cannot be one. */
+  service_factor_usable: boolean;
+}
+
+export interface LeadTimeSku {
+  sku: string;
+  lines: number;
+  mean: number;
+  median: number;
+  p95: number;
+  max: number;
+}
+
+/** One order month. Branch names appear as extra keys alongside the overall
+ *  mean, so a two-branch workspace charts both without a fixed schema. */
+export interface LeadTimeMonth {
+  period: string;
+  lines: number;
+  mean: number;
+  [branch: string]: string | number | null;
+}
+
+export interface LeadTimeBucket {
+  days: number;
+  label: string;
+  lines: number;
+  share_pct: number;
+}
+
+/** First third of the observed months against the last third, weighted by
+ *  line count. A measured change between two windows, not a fitted slope. */
+export interface LeadTimeTrend {
+  early_periods: [string, string];
+  late_periods: [string, string];
+  early_mean: number;
+  late_mean: number;
+  change_days: number;
+  change_pct: number;
+}
+
+export interface LeadTimeObservedPayload {
+  empty: boolean;
+  reason: string | null;
+  cached: boolean;
+  branches: LeadTimeObservedBranch[];
+  flagged_count: number;
+  scope: { branches?: string[]; skus?: number; restricted?: boolean };
+  scoped_lines: number;
+  by_sku: LeadTimeSku[];
+  by_month: LeadTimeMonth[];
+  distribution: LeadTimeBucket[];
+  trend: LeadTimeTrend | null;
+  workspace_scope?: WorkspaceScope | null;
+  notes: {
+    lines_total: number;
+    lines_usable: number;
+    lines_missing_a_date: number;
+    lines_out_of_range: number;
+    worst_excluded_days: number | null;
+    invoice_rows: number;
+    invoice_before_despatch: number;
+    invoice_same_day: number;
+    invoice_after_despatch: number;
+  };
+  definitions: Record<string, string>;
+  caveats: string[];
+}
+
+export const leadTimeObservedKeys = { all: ['analytics', 'lead-time-observed'] as const };
+
+export function fetchLeadTimeObserved(
+  refresh = false,
+  all = false,
+): Promise<LeadTimeObservedPayload> {
+  return getJson<LeadTimeObservedPayload>('/analytics/lead-time-observed', { refresh, all });
+}
+

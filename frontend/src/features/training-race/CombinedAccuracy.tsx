@@ -21,6 +21,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { accuracyKeys, fetchAccuracyWindows, fetchCurrentRun, trainingKeys } from '@/api/training';
 import { GREEN, Panel } from '@/components/ui/Dashboard';
+import { periodNoun, periodNounOne } from '@/app/period';
 
 function Metric({
   value,
@@ -66,24 +67,46 @@ export function CombinedAccuracy() {
 
   const d = windows.data;
   if (!runId || !d) return null;
-  // The headline is the recommended-window ("86%") reading; fall back to the
-  // all-lines median only if no window cleared the target.
-  const m = d.combined_metrics_best ?? d.combined_metrics;
-  const window = d.combined_metrics_best?.window_label ?? null;
+
+  // The headline is the six-month total, because that is the window the plant
+  // actually plans and buys on — a schedule is judged on the half-year it
+  // covers, not on whether any one week landed. `combined_metrics_horizon` is
+  // computed whether or not it clears the target, so this never silently falls
+  // back to a per-period figure while the caption says six months.
+  const horizon = d.combined_metrics_horizon;
+  const perPeriod = d.combined_metrics;
+  // Falls back to the per-period median only when there is no six-month block
+  // to score at all — a run too short to contain one. The caption below
+  // follows the same branch, so the words always match the number.
+  const m = horizon ?? perPeriod;
+  const unit = periodNoun(d.panel_grain);
+  const unitOne = periodNounOne(d.panel_grain);
+  const blockNote = horizon
+    ? `${horizon.window_periods} ${unit} added together, ${horizon.blocks} such stretches across ${horizon.lines} branch × SKU lines`
+    : `${m.lines} branch × SKU lines`;
 
   return (
     <Panel
       title="Forecast accuracy across every SKU and location"
       accent={GREEN}
       note={
-        window
-          ? `Measured over ${window.toLowerCase()}, across ${m.lines} branch × SKU lines, on months the models were tested against and never fitted on.`
-          : `The median across ${m.lines} lines of each line's own metric, on months the models were tested against and never fitted on.`
+        horizon
+          ? `Measured on the six-month total — ${blockNote} — over ${unit} the models were tested against and never fitted on.`
+          : `No six-month stretch was scored on this run, so this is the median across ${m.lines} lines of each line's own single-${unitOne} metric.`
       }
     >
       <div className="flex flex-wrap items-stretch gap-3">
-        <Metric value={m.accuracy_pct} label="Accuracy" hint="100 − average miss, higher is better" strong />
-        <Metric value={m.mape_pct} label="Average miss" hint="typical gap to actual, lower is better" />
+        <Metric
+          value={m.accuracy_pct}
+          label="Accuracy"
+          hint={horizon ? 'over six months, higher is better' : `per ${unitOne}, higher is better`}
+          strong
+        />
+        <Metric
+          value={m.mape_pct}
+          label="Average miss"
+          hint={horizon ? 'over six months, lower is better' : `per ${unitOne}, lower is better`}
+        />
         <Metric
           value={m.weighted_accuracy_pct}
           label="Volume-weighted accuracy"
@@ -91,6 +114,40 @@ export function CombinedAccuracy() {
         />
         <Metric value={m.wape_pct} label="Volume-weighted miss" hint="miss as a share of volume, lower is better" />
       </div>
+
+      {/* The single-period figure is kept in view rather than replaced. Six
+          months is the number a plan is held to, but it is a larger total with
+          the misses cancelling inside it; a reader who takes 82.8% to mean
+          "any given week lands within 17%" has misread it, and the only
+          reliable guard against that is showing both. */}
+      {horizon && perPeriod && perPeriod.accuracy_pct != null && (
+        <p className="mt-3 border-t border-[var(--color-border)] pt-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+          <strong>One {unitOne} on its own is {perPeriod.accuracy_pct.toFixed(1)}% accurate</strong>
+          {perPeriod.weighted_accuracy_pct != null &&
+            ` (${perPeriod.weighted_accuracy_pct.toFixed(1)}% volume-weighted)`}
+          . It is the same forecasts either way — six months is higher because
+          over- and under-forecasts inside the window cancel, not because the
+          model is better. Plan a half-year against the figure above; do not
+          read it as what a single {unitOne} will do.{' '}
+          {horizon.series_at_target} of {horizon.series_scored} lines clear{' '}
+          {d.target_accuracy_pct}% on their own over six months
+          {horizon.meets_target === false &&
+            `, though no window's middle line reaches ${d.target_accuracy_pct}%`}
+          .{' '}
+          {horizon.lines_worse_over_horizon > 0 && (
+            <>
+              Cancelling is not guaranteed:{' '}
+              <strong>
+                {horizon.lines_worse_over_horizon} of{' '}
+                {horizon.lines_better_over_horizon + horizon.lines_worse_over_horizon} lines
+                are <em>less</em> accurate over six months
+              </strong>
+              , because a model that misses the same way every {unitOne} compounds
+              rather than cancels. Open a line to see which figure it is.
+            </>
+          )}
+        </p>
+      )}
     </Panel>
   );
 }

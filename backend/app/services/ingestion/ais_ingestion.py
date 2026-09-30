@@ -340,7 +340,7 @@ class AisIngestion:
         oracle_index = position["Oracle No"]
         branch_index = position["Branch"]
         inv_date_index = position.get("Inv Date")
-        month_index = position.get("Month")
+        period_index = position.get("Month")
 
         total_rows = 0
         bad_dates = 0
@@ -374,8 +374,8 @@ class AisIngestion:
                     converted = readers.excel_serial_to_date(projected[inv_date_index])
                     if converted is None and projected[inv_date_index] is not None:
                         bad_dates += 1
-                    elif converted is not None and month_index is not None:
-                        if not _month_matches(converted, projected[month_index]):
+                    elif converted is not None and period_index is not None:
+                        if not _month_matches(converted, projected[period_index]):
                             month_mismatches += 1
 
                 stats.observe(projected)

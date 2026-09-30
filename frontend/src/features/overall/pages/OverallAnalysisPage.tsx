@@ -37,6 +37,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
   LabelList,
   Legend,
   Line,
@@ -56,9 +57,7 @@ import {
   analyticsKeys,
   fetchAnalyticsFilters,
   fetchAnalyticsSummary,
-  fetchBranchScorecard,
   type AnalyticsQuery,
-  type ScorecardBranch,
 } from '@/api/analytics';
 import {
   AMBER,
@@ -67,7 +66,6 @@ import {
   ClearChip,
   GREEN,
   LABEL,
-  MiniTable,
   NAVY,
   Panel,
   RED,
@@ -84,17 +82,12 @@ import {
 } from '@/components/ui/Dashboard';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
 import { Explain } from '@/components/ui/Explain';
+import { grainOptionLabel, periodNoun, shortPeriod } from '../../../app/period';
 
 const SELECT_CLASS =
   'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs text-[var(--color-text)]';
 
 /** `2026-07` → `Jul 26`; a quarterly bucket is already short enough. */
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-function shortPeriod(period: string): string {
-  if (period.includes('Q')) return period.replace('-Q', ' Q');
-  const [year, month] = period.split('-');
-  return `${MONTHS[Number(month) - 1] ?? month} ${year?.slice(2) ?? ''}`;
-}
 
 export function OverallAnalysisPage() {
   const [branch, setBranch] = useState('');
@@ -106,30 +99,30 @@ export function OverallAnalysisPage() {
   const filtersQuery = useQuery({ queryKey: analyticsKeys.filters, queryFn: fetchAnalyticsFilters });
   const filters = filtersQuery.data;
 
+  /* With no FROM chosen, the page starts at the first month holding real
+     orders. Before it the panel is sales proxy only - no order and no
+     despatch - so including it made every total on the page disagree with
+     the ordered-vs-despatched tiles (docs/DECISIONS.md D-122). Picking an
+     earlier month in FROM still reaches that history. */
+  const ordersStart = filters?.orders_start_month ?? '';
+  // Never earlier than the orders window: before it there are no orders, and
+  // including those weeks made every panel total more than the tiles.
+  const effectiveStart = startPeriod && startPeriod > ordersStart ? startPeriod : ordersStart;
+
   const query: AnalyticsQuery = useMemo(
     () => ({
       branch: branch || undefined,
       value_class: valueClass || undefined,
-      start_period: startPeriod || undefined,
+      start_period: effectiveStart || undefined,
       end_period: endPeriod || undefined,
       grain,
     }),
-    [branch, valueClass, startPeriod, endPeriod, grain],
+    [branch, valueClass, effectiveStart, endPeriod, grain],
   );
 
   const summaryQuery = useQuery({
     queryKey: analyticsKeys.summary(query),
     queryFn: () => fetchAnalyticsSummary(query),
-    enabled: !!filters,
-  });
-  const scorecardQuery = useQuery({
-    queryKey: analyticsKeys.scorecard({ value_class: query.value_class, start_period: query.start_period, end_period: query.end_period }),
-    queryFn: () =>
-      fetchBranchScorecard({
-        value_class: query.value_class,
-        start_period: query.start_period,
-        end_period: query.end_period,
-      }),
     enabled: !!filters,
   });
 
@@ -190,6 +183,46 @@ export function OverallAnalysisPage() {
             ? Math.round((1000 * (r.shortfall_units || 0)) / (r.demand_units || 0)) / 10
             : 0,
       }));
+  }, [summary]);
+
+  /** Every SKU ranked by ordered units, with the running share of the total.
+   *  `core` marks the SKUs up to and including the one that crosses 80%. Uses
+   *  `by_sku` whole — not the top-12 cut above — because a running share of a
+   *  truncated list would never reach 100%. */
+  const pareto = useMemo(() => {
+    const ranked = [...(summary?.by_sku ?? [])]
+      .filter((r) => (r.demand_units || 0) > 0)
+      .sort((a, b) => (b.demand_units || 0) - (a.demand_units || 0));
+    const total = ranked.reduce((sum, r) => sum + (r.demand_units || 0), 0);
+    // Ordered value, so the tooltip can say what a SKU is worth as well as how
+    // many of it were ordered. The two rankings are not the same: a cheap
+    // high-volume SKU and an expensive low-volume one swap places.
+    const valueTotal = ranked.reduce((sum, r) => sum + (r.demand_value || 0), 0);
+    let running = 0;
+    let eighty = 0;
+    const rows = ranked.map((r, index) => {
+      const before = running;
+      running += r.demand_units || 0;
+      const core = total > 0 && before / total < 0.8;
+      if (core) eighty = index + 1;
+      return {
+        name: r.name,
+        short: r.name.replace(/^FG\./, '').slice(0, 22),
+        demand_units: r.demand_units,
+        cumulative_pct: total > 0 ? Math.round((1000 * running) / total) / 10 : 0,
+        // One decimal, not a whole number: at 136 SKUs most shares are under
+        // 1%, and rounding them to "0%" printed a row of zeroes along the
+        // baseline that said nothing and hid the labels that mattered.
+        share_pct: total > 0 ? Math.round((1000 * (r.demand_units || 0)) / total) / 10 : 0,
+        demand_value: r.demand_value || 0,
+        value_pct: valueTotal > 0 ? Math.round((1000 * (r.demand_value || 0)) / valueTotal) / 10 : 0,
+        core,
+      };
+    });
+    // The top group's real share: it includes the SKU that crosses 80%, so it
+    // is usually a little above 80.
+    const coreShare = eighty > 0 ? Math.round(rows[eighty - 1]?.cumulative_pct ?? 0) : 0;
+    return { rows, eighty, coreShare };
   }, [summary]);
 
   /** The product axes this workspace was actually selected on. The sample
@@ -308,7 +341,7 @@ export function OverallAnalysisPage() {
   );
 
   const anyFilter = branch || valueClass || startPeriod || endPeriod;
-  const rangeInvalid = !!(startPeriod && endPeriod && startPeriod > endPeriod);
+  const rangeInvalid = !!(effectiveStart && endPeriod && effectiveStart > endPeriod);
 
   return (
     <div className="flex flex-col gap-5">
@@ -347,13 +380,16 @@ export function OverallAnalysisPage() {
               offer a month the data does not cover. Month grain, not day:
               the panel has no day-level values to return. */}
           <MonthRange
-            from={startPeriod}
+            from={effectiveStart}
             to={endPeriod}
             onFromChange={setStartPeriod}
             onToChange={setEndPeriod}
-            first={filters?.period_range?.min}
+            first={filters?.orders_start_period ?? filters?.period_range?.min}
             last={filters?.period_range?.max}
-            months={filters?.periods.length}
+            months={filters?.orders_periods ?? filters?.periods.length}
+            minMonth={ordersStart || undefined}
+            resetLabel="Reset dates"
+            periodNoun={periodNoun(filters?.panel_grain)}
           />
           <select
             value={branch}
@@ -389,7 +425,7 @@ export function OverallAnalysisPage() {
           >
             {(filters?.available_grains ?? ['monthly']).map((option) => (
               <option key={option} value={option}>
-                {option === 'monthly' ? 'By month' : 'By quarter'}
+                {grainOptionLabel(option)}
               </option>
             ))}
           </select>
@@ -413,7 +449,8 @@ export function OverallAnalysisPage() {
 
           {summary && !summary.empty && (
             <span className="ml-auto text-[11px] text-[var(--color-text-muted)]">
-              {summary.window.start} → {summary.window.end} · {summary.window.periods} months
+              {summary.window.start} → {summary.window.end} · {summary.window.periods}{' '}
+              {periodNoun(filters?.panel_grain)}
             </span>
           )}
         </div>
@@ -437,54 +474,60 @@ export function OverallAnalysisPage() {
 
       {summary && !summary.empty && (
         <>
-          {/* KPI tiles */}
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <SectionLinks />
+
+          {/* KPI tiles — orders in, sales out, and the difference between
+                them, all three on ONE set of rows so they reconcile exactly:
+                tile 1 − tile 2 = tile 3. Total ordered value is larger than
+                tile 1 and is deliberately not shown here; it covers rows that
+                carry no despatch figure at all, and subtracting sales from it
+                would report a gap in the data as an undelivered order
+                (docs/DECISIONS.md D-121). */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <StatTile
-              label="Ordered demand value"
-              value={inr(summary.kpis.demand_value)}
-              sublabel={`${num(summary.kpis.demand_units)} units ordered`}
+              label="Orders received"
+              value={inr(summary.kpis.ordered_value_known)}
+              sublabel={`${num(summary.kpis.ordered_units_known)} units ordered`}
               spark={trend}
-              sparkKey="demand_value"
+              sparkKey="ordered_value_known"
               tint="blue"
               accent
             />
             <StatTile
-              label="Unfilled demand"
-              value={`${num(summary.kpis.shortfall_units)} units`}
-              sublabel={`${summary.kpis.censored_rows.toLocaleString()} short-despatched rows`}
+              label="Sales despatched"
+              value={inr(summary.kpis.despatch_value)}
+              sublabel={`${num(summary.kpis.despatched_units)} units despatched`}
               spark={trend}
-              sparkKey="shortfall_units"
-              tint="amber"
-            />
-            <StatTile
-              label="Fill rate"
-              value={pct(summary.kpis.fill_rate_pct)}
-              sublabel="despatched ÷ ordered, where despatch is recorded"
-              spark={trend}
-              sparkKey="fill_rate_pct"
-              tint="green"
-            />
-            <StatTile
-              label="Ordered-demand share"
-              value={pct(summary.kpis.order_share_pct)}
-              sublabel="rest is labelled sales proxy"
-              spark={trend}
-              sparkKey="order_share_pct"
+              sparkKey="despatch_value"
               tint="teal"
             />
+            <StatTile
+              label="Orders not despatched"
+              value={inr(summary.kpis.gap_value)}
+              sublabel={`${num(summary.kpis.gap_units)} units · ${pct(summary.kpis.fill_rate_value_pct)} of orders covered`}
+              spark={trend}
+              sparkKey="gap_value"
+              tint="amber"
+            />
           </div>
+          {/* The page never reaches before the orders window, so the tiles and
+                every panel below are the same rows and their totals agree. The
+                one figure that legitimately differs is the unfilled count. */}
+          <p className="-mt-1 text-[10px] text-[var(--color-text-muted)]">
+            Every figure on this page covers {summary.window.start} → {summary.window.end}. Order data
+            starts in {summary.window.start}; the weeks before it hold sales figures only, so they are
+            not shown. Unfilled panels below count only lines that were short ({num(summary.kpis.shortfall_units)} units);
+            lines that were over-despatched bring the net figure on the tile down to{' '}
+            {num(summary.kpis.gap_units)}.
+          </p>
 
-          {/* Breakdown row */}
-          {/* The 2-span panel goes FIRST so the row tiles exactly: 2+1+1 then
-                1+1+1+1. Placed fourth it could not fit the single remaining
-                column and wrapped, leaving one cell empty on the first row and
-                three on the last (docs/DECISIONS.md D-071). */}
+          <section id="sec-demand" className="flex scroll-mt-4 flex-col gap-3">
+            <SectionHeader title="Where the demand comes from" question="Which branches, products and vehicles drive orders?" />
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-4">
-            <Panel
+            <Panel className="lg:col-span-2 xl:col-span-2"
               title="Demand by Branch × Value Class"
               accent={VIOLET}
-              className="lg:col-span-2 xl:col-span-2"
-              note={`Each column is a branch, split by value class — the top ${summary.branch_by_group.limit} of ${summary.branch_by_group.total_branches} by value. Click a column to filter.`}
+              note="Each column is a branch, split by value class. Click a column to filter."
             >
               <ResponsiveContainer width="100%" height={236}>
                 <BarChart data={summary.branch_by_group.data} margin={{ top: 8, right: 6, left: -6, bottom: 0 }} barCategoryGap="26%">
@@ -516,6 +559,7 @@ export function OverallAnalysisPage() {
                 </BarChart>
               </ResponsiveContainer>
             </Panel>
+
             <Panel
               title="Demand by Branch"
               accent={BLUE}
@@ -536,7 +580,6 @@ export function OverallAnalysisPage() {
                       paddingAngle={2}
                       stroke="none"
                       isAnimationActive={false}
-                      className="cursor-pointer"
                       onClick={(entry: { name?: string }) => entry?.name && toggleBranch(entry.name)}
                     >
                       {summary.by_branch.slice(0, 10).map((row, index) => (
@@ -559,7 +602,9 @@ export function OverallAnalysisPage() {
                     {inr(branchTotal)}
                   </span>
                   <span className="text-[9px] uppercase tracking-wide text-[var(--color-text-muted)]">
-                    top 10 of {summary.kpis.branch_count}
+                    {summary.kpis.branch_count > 10
+                      ? `top 10 of ${summary.kpis.branch_count}`
+                      : `${summary.kpis.branch_count} branches`}
                   </span>
                 </div>
               </div>
@@ -595,7 +640,6 @@ export function OverallAnalysisPage() {
                     dataKey="demand_units"
                     radius={[5, 5, 0, 0]}
                     isAnimationActive={false}
-                    className="cursor-pointer"
                     onClick={(entry: { name?: string }) => entry?.name && toggleValueClass(entry.name)}
                   >
                     {summary.by_value_class.map((row, index) => (
@@ -612,51 +656,10 @@ export function OverallAnalysisPage() {
             <SampleMixCaveat axis="value_class" />
               </Panel>
 
-            <Panel title="Unfilled Demand by Value Class" accent={AMBER} note="Positive shortfall only. Click a column to filter.">
-              <ResponsiveContainer width="100%" height={196}>
-                <BarChart
-                  data={summary.by_value_class}
-                  margin={{ top: 18, right: 6, left: -12, bottom: 0 }}
-                  barCategoryGap="28%"
-                >
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis
-                    dataKey="name"
-                    tick={{ ...TICK, fontSize: 8 }}
-                    tickLine={false}
-                    interval={0}
-                    angle={-30}
-                    textAnchor="end"
-                    height={52}
-                  />
-                  <YAxis tick={TICK} tickFormatter={(value: number) => num(value)} />
-                  <Tooltip
-                    formatter={(value: number) => `${num(value)} units short`}
-                    contentStyle={TOOLTIP}
-                    cursor={{ fill: 'rgba(161,92,7,0.06)' }}
-                  />
-                  <Bar
-                    dataKey="shortfall_units"
-                    radius={[5, 5, 0, 0]}
-                    isAnimationActive={false}
-                    className="cursor-pointer"
-                    onClick={(entry: { name?: string }) => entry?.name && toggleValueClass(entry.name)}
-                  >
-                    {summary.by_value_class.map((row) => (
-                      <Cell key={row.name} fill={AMBER} opacity={dimClass(row.name)} />
-                    ))}
-                    <LabelList dataKey="shortfall_units" position="top" formatter={(v: number) => num(v)} style={LABEL} />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </Panel>
-
-            
-
             <Panel
               title="Demand by Glass Type"
               accent={TEAL}
-              note="Laminated windscreens, sidelites and backlites. This is the axis the twenty SKUs were chosen to span, and the split is very uneven — one type carries most of the volume."
+              note="Laminated windscreens, sidelites and backlites."
             >
               <ResponsiveContainer width="100%" height={215}>
                 <BarChart data={glassRows} margin={{ top: 16, right: 6, left: -14, bottom: 0 }} barCategoryGap="26%">
@@ -692,7 +695,7 @@ export function OverallAnalysisPage() {
             <Panel
               title="Demand by Vehicle Category"
               accent={NAVY}
-              note="Where the glass ends up. Car & MUV dominates by volume, but a commercial or high-end SKU can still matter disproportionately on value and on service."
+              note="Ordered units by vehicle category."
             >
               <ResponsiveContainer width="100%" height={215}>
                 <BarChart
@@ -730,7 +733,7 @@ export function OverallAnalysisPage() {
             <Panel
               title="Demand by Vehicle Age"
               accent={AMBER}
-              note="Which parc the demand comes from. Replacement glass skews to older vehicles, so a profile weighted to the oldest band is expected — a shift toward the newest band would be the surprise."
+              note="Ordered units by vehicle age band."
             >
               <ResponsiveContainer width="100%" height={215}>
                 <BarChart
@@ -767,9 +770,447 @@ export function OverallAnalysisPage() {
               </Panel>
 
             <Panel
+              title="Value per Unit by Vehicle Category"
+              accent={VIOLET}
+              note="Ordered value ÷ ordered units, per segment."
+            >
+              <ResponsiveContainer width="100%" height={215}>
+                <BarChart
+                  data={vehicleValue}
+                  margin={{ top: 16, right: 6, left: -6, bottom: 0 }}
+                  barCategoryGap="26%"
+                >
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis dataKey="short" tick={{ ...TICK, fontSize: 9 }} tickLine={false} interval={0} />
+                  <YAxis tick={TICK} width={54} tickFormatter={(v: number) => inr(v)} />
+                  <Tooltip
+                    contentStyle={TOOLTIP}
+                    labelFormatter={(l) => vehicleValue.find((r) => r.short === l)?.name ?? String(l)}
+                    formatter={(v: number, _n, item) => {
+                      const row = item?.payload as { demand_units?: number; demand_value?: number };
+                      return [
+                        `${inr(v)} per unit · ${inr(row?.demand_value)} over ${num(row?.demand_units)} units`,
+                        'Realised value',
+                      ];
+                    }}
+                  />
+                  <Bar dataKey="per_unit" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                    <LabelList
+                      dataKey="per_unit"
+                      position="top"
+                      formatter={(v: number) => inr(v)}
+                      style={{ fill: 'var(--color-text-muted)', fontSize: 9 }}
+                    />
+                    {vehicleValue.map((row, i) => (
+                      <Cell key={row.name} fill={[VIOLET, NAVY, BLUE, TEAL][i % 4]} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </Panel>
+
+            <Panel
+              className="xl:col-span-2"
+              title="Volume vs Value by SKU"
+              accent={BLUE}
+              note="One mark per SKU: ordered units against ordered value."
+            >
+              <ResponsiveContainer width="100%" height={215}>
+                <ScatterChart margin={{ top: 10, right: 12, left: -4, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis
+                    type="number"
+                    dataKey="demand_units"
+                    name="Ordered units"
+                    tick={TICK}
+                    tickFormatter={(v: number) => num(v)}
+                  />
+                  <YAxis
+                    type="number"
+                    dataKey="demand_value"
+                    name="Demand value"
+                    tick={TICK}
+                    width={54}
+                    tickFormatter={(v: number) => inr(v)}
+                  />
+                  <ZAxis type="number" dataKey="series_count" range={[45, 190]} name="Series" />
+                  <Tooltip
+                    cursor={{ strokeDasharray: '3 3', stroke: 'var(--color-border)' }}
+                    content={({ active, payload }) => {
+                      if (!active || !payload?.length) return null;
+                      const row = payload[0]?.payload as {
+                        name?: string;
+                        demand_units?: number;
+                        demand_value?: number;
+                        per_unit?: number;
+                        series_count?: number;
+                      };
+                      return (
+                        <div style={TOOLTIP}>
+                          <div className="text-[11px] font-semibold">{row?.name}</div>
+                          <div className="text-[10.5px]">{num(row?.demand_units)} units ordered</div>
+                          <div className="text-[10.5px]">{inr(row?.demand_value)} demand value</div>
+                          <div className="text-[10.5px]">{inr(row?.per_unit)} per unit</div>
+                          <div className="text-[10.5px] opacity-70">
+                            {row?.series_count} branch × SKU series
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Scatter data={skuScatter} isAnimationActive={false}>
+                    {skuScatter.map((row, i) => (
+                      <Cell
+                        key={row.name}
+                        fill={SERIES_COLORS[i % SERIES_COLORS.length]}
+                        fillOpacity={0.72}
+                      />
+                    ))}
+                  </Scatter>
+                </ScatterChart>
+              </ResponsiveContainer>
+            </Panel>
+
+            {/* Last in the section and full width: 136 SKUs cannot be read in a
+                half-width panel, and every chart above it is a summary this one
+                breaks down. */}
+            <Panel
+              className="lg:col-span-2 xl:col-span-4"
+              title="The SKUs That Carry the Demand"
+              accent={NAVY}
+              note={
+                pareto.rows.length
+                  ? `All ${pareto.rows.length} SKUs, tallest first. Navy bars are the ones that make up the first ${pareto.coreShare}% of ordered units. Labels show each SKU's share of units; shares under 1% are left off and read off the tooltip, which also gives ordered value and its share of the money.`
+                  : 'SKUs ranked by ordered units.'
+              }
+            >
+              {/* A floor width, then scroll. Below about 1,200px the 136 SKU
+                  labels start to touch each other, and an unreadable axis is
+                  worse than a scrollbar. */}
+              <div className="overflow-x-auto">
+                <div className="min-w-[1200px]">
+              <ResponsiveContainer width="100%" height={560}>
+                <ComposedChart data={pareto.rows} margin={{ top: 46, right: 8, left: 4, bottom: 0 }}>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis
+                    dataKey="short"
+                    tick={{ ...TICK, fontSize: 9 }}
+                    tickLine={false}
+                    interval={0}
+                    angle={-90}
+                    textAnchor="end"
+                    height={176}
+                  />
+                  <YAxis yAxisId="units" tick={TICK} tickFormatter={(value: number) => num(value)} width={56} />
+                  {/* Written out rather than left to Recharts' "name : value"
+                      line, which put the money in the label slot and read
+                      backwards. Units and value each get their own line. */}
+                  <Tooltip
+                    cursor={{ fill: 'var(--color-surface-2)' }}
+                    content={({ active, payload }) => {
+                      const row = active ? payload?.[0]?.payload : null;
+                      if (!row) return null;
+                      return (
+                        <div style={{ ...TOOLTIP, padding: '8px 10px', lineHeight: 1.55 }}>
+                          <div style={{ fontWeight: 600, marginBottom: 4 }}>{row.name}</div>
+                          <div>
+                            {num(row.demand_units)} units · <strong>{row.share_pct}%</strong> of all ordered units
+                          </div>
+                          <div>
+                            {inr(row.demand_value)} · <strong>{row.value_pct}%</strong> of all ordered value
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Bar yAxisId="units" dataKey="demand_units" name="Ordered units" radius={[2, 2, 0, 0]} isAnimationActive={false}>
+                    {pareto.rows.map((r) => (
+                      <Cell key={r.name} fill={r.core ? NAVY : '#cbd5e1'} />
+                    ))}
+                    {/* Rotated like the axis. Bars sit about 8px apart, so a
+                        horizontal "5.6%" overlapped its neighbours. */}
+                    <LabelList
+                      dataKey="share_pct"
+                      position="top"
+                      angle={-90}
+                      offset={18}
+                      formatter={(v: number) => (v >= 1 ? `${v}%` : '')}
+                      style={{ ...LABEL, fontSize: 9 }}
+                    />
+                  </Bar>
+                </ComposedChart>
+              </ResponsiveContainer>
+                </div>
+              </div>
+            </Panel>
+          </div>
+          </section>
+
+          <section id="sec-time" className="flex scroll-mt-4 flex-col gap-3">
+            <SectionHeader title="How demand moves over time" question="Is it growing, and when does it peak?" />
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-4">
+            <Panel className="xl:col-span-2" title="Ordered Demand Trend" accent={BLUE}>
+              <ResponsiveContainer width="100%" height={200}>
+                <AreaChart data={trend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="demandFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={BLUE} stopOpacity={0.32} />
+                      <stop offset="100%" stopColor={BLUE} stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis dataKey="label" tick={TICK} minTickGap={18} tickLine={false} />
+                  <YAxis tick={TICK} tickFormatter={(value: number) => num(value)} />
+                  <Tooltip formatter={(value: number) => `${num(value)} units`} contentStyle={TOOLTIP} />
+                  <Area
+                    type="monotone"
+                    dataKey="demand_units"
+                    name="Ordered units"
+                    stroke={BLUE}
+                    fill="url(#demandFill)"
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </Panel>
+
+            <Panel className="xl:col-span-2"
+              title="Demand by Branch over Time"
+              accent={BLUE}
+              note="One line per branch. Click a legend entry to filter."
+            >
+              <ResponsiveContainer width="100%" height={186}>
+                <LineChart data={branchOverTime} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis dataKey="label" tick={TICK} minTickGap={22} tickLine={false} />
+                  <YAxis tick={TICK} tickFormatter={(value: number) => inr(value)} />
+                  <Tooltip formatter={(value: number) => inr(value)} contentStyle={TOOLTIP} />
+                  <Legend
+                    wrapperStyle={{ fontSize: 10, cursor: 'pointer' }}
+                    onClick={(entry: { value?: string }) => entry?.value && toggleBranch(entry.value)}
+                  />
+                  {summary.branch_over_time.names.map((name, index) => (
+                    <Line
+                      key={name}
+                      type="monotone"
+                      dataKey={name}
+                      stroke={SERIES_COLORS[index % SERIES_COLORS.length]}
+                      strokeWidth={branch === name ? 2.6 : 1.7}
+                      strokeOpacity={branch && branch !== name ? 0.3 : 1}
+                      dot={false}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </Panel>
+
+            <Panel className="xl:col-span-2" title="Seasonality" accent={GREEN} note="Mean ordered units per calendar month.">
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={summary.seasonality} margin={{ top: 16, right: 6, left: -12, bottom: 0 }} barCategoryGap="22%">
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  {/* Single-initial ticks, upright. Twelve months in a
+                      third-width panel leaves ~13px per tick, and a rotated
+                      three-letter label needs ~17px to stay clear of its
+                      neighbour - so rotation cannot solve this one and the
+                      label has to get shorter. The sequence runs Jan to Dec, and
+                      the tooltip carries the full month name. */}
+                  <XAxis
+                    dataKey="name"
+                    tick={{ ...TICK, fontSize: 9 }}
+                    tickLine={false}
+                    interval={0}
+                    tickFormatter={(value: string) => String(value).slice(0, 1)}
+                  />
+                  <YAxis tick={TICK} tickFormatter={(value: number) => num(value)} />
+                  <Tooltip
+                    formatter={(value: number, _name, item) =>
+                      [`${num(value)} units`, `${(item?.payload as { observations?: number })?.observations ?? 0} observation(s)`] as [string, string]
+                    }
+                    contentStyle={TOOLTIP}
+                  />
+                  <Bar dataKey="mean_demand_units" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+                    {summary.seasonality.map((row) => (
+                      <Cell key={row.month} fill={GREEN} opacity={row.observations >= 2 ? 1 : 0.45} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+              <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
+                Faded columns rest on a single observation.
+              </p>
+            </Panel>
+
+            <Panel className="xl:col-span-2" title="Realised Price per Unit" accent={NAVY} note="Ordered value ÷ units. Dashed line is the average.">
+              <ResponsiveContainer width="100%" height={186}>
+                <LineChart data={trend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis dataKey="label" tick={TICK} minTickGap={22} tickLine={false} />
+                  <YAxis tick={TICK} tickFormatter={(value: number) => `₹${Math.round(value)}`} />
+                  <Tooltip formatter={(value: number) => `₹${Number(value).toFixed(2)}`} contentStyle={TOOLTIP} />
+                  {averagePrice != null && (
+                    <ReferenceLine
+                      y={averagePrice}
+                      stroke={SLATE}
+                      strokeDasharray="5 4"
+                      label={{ value: `avg ₹${averagePrice.toFixed(0)}`, position: 'insideTopRight', fill: SLATE, fontSize: 9 }}
+                    />
+                  )}
+                  <Line type="monotone" dataKey="price_per_unit" name="₹ per unit" stroke={NAVY} strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </Panel>
+          </div>
+          </section>
+
+          <section id="sec-deliver" className="flex scroll-mt-4 flex-col gap-3">
+            <SectionHeader title="How well we deliver" question="Where are we letting customers down?" />
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-4">
+            <Panel
+              className="xl:col-span-2"
+              title="Ordered vs Despatched"
+              accent={TEAL}
+              note="The gap between the lines is what was not despatched. Fill rate reads on the right."
+            >
+              {/* One chart for what used to be three - ordered vs despatched,
+                  unfilled over time, and fill rate - because all three were the
+                  same two series drawn three ways (docs/DECISIONS.md D-123). */}
+              <ResponsiveContainer width="100%" height={240}>
+                <ComposedChart data={trend} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis dataKey="label" tick={TICK} minTickGap={22} tickLine={false} />
+                  <YAxis yAxisId="units" tick={TICK} tickFormatter={(value: number) => num(value)} />
+                  <YAxis yAxisId="pct" orientation="right" tick={TICK} unit="%" domain={[0, 120]} />
+                  <Tooltip
+                    formatter={(value: number, name: string) =>
+                      name === 'Fill rate' ? `${value}%` : `${num(value)} units`
+                    }
+                    contentStyle={TOOLTIP}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <ReferenceLine yAxisId="pct" y={100} stroke={SLATE} strokeDasharray="4 4" />
+                  <Area
+                    yAxisId="units"
+                    type="monotone"
+                    dataKey="demand_units"
+                    name="Ordered"
+                    stroke={BLUE}
+                    fill={BLUE}
+                    fillOpacity={0.08}
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    yAxisId="units"
+                    type="monotone"
+                    dataKey="despatched_units"
+                    name="Despatched"
+                    stroke={TEAL}
+                    strokeWidth={2}
+                    dot={false}
+                    connectNulls={false}
+                  />
+                  <Line
+                    yAxisId="pct"
+                    type="monotone"
+                    dataKey="fill_rate_pct"
+                    name="Fill rate"
+                    stroke={AMBER}
+                    strokeWidth={1.5}
+                    strokeDasharray="4 3"
+                    dot={false}
+                    connectNulls={false}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </Panel>
+
+            <Panel className="xl:col-span-2"
+              title="Top SKUs by Ordered Demand"
+              accent={BLUE}
+              note="Bar length is units ordered; amber is the part not despatched."
+            >
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart
+                  data={skuRows}
+                  layout="vertical"
+                  margin={{ top: 4, right: 20, left: 4, bottom: 0 }}
+                  barCategoryGap="22%"
+                >
+                  <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis type="number" tick={TICK} />
+                  <YAxis
+                    type="category"
+                    dataKey="short"
+                    tick={{ ...TICK, fontSize: 8 }}
+                    width={112}
+                    tickLine={false}
+                  />
+                  <Tooltip
+                    contentStyle={TOOLTIP}
+                    formatter={(v: number, name: string) => [`${num(v)} units`, name]}
+                    labelFormatter={(label) =>
+                      skuRows.find((r) => r.short === label)?.name ?? String(label)
+                    }
+                  />
+                  <Legend wrapperStyle={{ fontSize: 9 }} />
+                  <Bar dataKey="filled_units" name="Filled" stackId="s" fill={BLUE} isAnimationActive={false} />
+                  <Bar
+                    dataKey="shortfall_units"
+                    name="Unfilled"
+                    stackId="s"
+                    fill={AMBER}
+                    radius={[0, 3, 3, 0]}
+                    isAnimationActive={false}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </Panel>
+
+            <Panel title="Unfilled Demand by Value Class" accent={AMBER} note="Positive shortfall only. Click a column to filter.">
+              <ResponsiveContainer width="100%" height={196}>
+                <BarChart
+                  data={summary.by_value_class}
+                  margin={{ top: 18, right: 6, left: -12, bottom: 0 }}
+                  barCategoryGap="28%"
+                >
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                  <XAxis
+                    dataKey="name"
+                    tick={{ ...TICK, fontSize: 8 }}
+                    tickLine={false}
+                    interval={0}
+                    angle={-30}
+                    textAnchor="end"
+                    height={52}
+                  />
+                  <YAxis tick={TICK} tickFormatter={(value: number) => num(value)} />
+                  <Tooltip
+                    formatter={(value: number) => `${num(value)} units short`}
+                    contentStyle={TOOLTIP}
+                    cursor={{ fill: 'rgba(161,92,7,0.06)' }}
+                  />
+                  <Bar
+                    dataKey="shortfall_units"
+                    radius={[5, 5, 0, 0]}
+                    isAnimationActive={false}
+                    onClick={(entry: { name?: string }) => entry?.name && toggleValueClass(entry.name)}
+                  >
+                    {summary.by_value_class.map((row) => (
+                      <Cell key={row.name} fill={AMBER} opacity={dimClass(row.name)} />
+                    ))}
+                    <LabelList dataKey="shortfall_units" position="top" formatter={(v: number) => num(v)} style={LABEL} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </Panel>
+
+            <Panel
               title="Fill Rate by Glass Type"
               accent={GREEN}
-              note="Despatched units as a share of ordered units. The dashed line is a fully filled type; a bar short of it is demand that was ordered and not met."
+              note="Despatched ÷ ordered units. Dashed line is fully filled."
             >
               <ResponsiveContainer width="100%" height={215}>
                 <BarChart
@@ -833,110 +1274,9 @@ export function OverallAnalysisPage() {
             </Panel>
 
             <Panel
-              title="Value per Unit by Vehicle Category"
-              accent={VIOLET}
-              note="Demand value ÷ ordered units — what a unit is actually worth in each segment. Realised from orders, not MRP, which is historical and never used as a forward driver."
-            >
-              <ResponsiveContainer width="100%" height={215}>
-                <BarChart
-                  data={vehicleValue}
-                  margin={{ top: 16, right: 6, left: -6, bottom: 0 }}
-                  barCategoryGap="26%"
-                >
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="short" tick={{ ...TICK, fontSize: 9 }} tickLine={false} interval={0} />
-                  <YAxis tick={TICK} width={54} tickFormatter={(v: number) => inr(v)} />
-                  <Tooltip
-                    contentStyle={TOOLTIP}
-                    labelFormatter={(l) => vehicleValue.find((r) => r.short === l)?.name ?? String(l)}
-                    formatter={(v: number, _n, item) => {
-                      const row = item?.payload as { demand_units?: number; demand_value?: number };
-                      return [
-                        `${inr(v)} per unit · ${inr(row?.demand_value)} over ${num(row?.demand_units)} units`,
-                        'Realised value',
-                      ];
-                    }}
-                  />
-                  <Bar dataKey="per_unit" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-                    <LabelList
-                      dataKey="per_unit"
-                      position="top"
-                      formatter={(v: number) => inr(v)}
-                      style={{ fill: 'var(--color-text-muted)', fontSize: 9 }}
-                    />
-                    {vehicleValue.map((row, i) => (
-                      <Cell key={row.name} fill={[VIOLET, NAVY, BLUE, TEAL][i % 4]} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </Panel>
-
-            <Panel
-              title="Volume vs Value by SKU"
-              accent={BLUE}
-              note="One mark per SKU, sized by how many branch × SKU series it runs in. High and left is a low-volume, high-value product; low and right is the opposite. The bar charts rank on one axis at a time and cannot show this."
-            >
-              <ResponsiveContainer width="100%" height={215}>
-                <ScatterChart margin={{ top: 10, right: 12, left: -4, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis
-                    type="number"
-                    dataKey="demand_units"
-                    name="Ordered units"
-                    tick={TICK}
-                    tickFormatter={(v: number) => num(v)}
-                  />
-                  <YAxis
-                    type="number"
-                    dataKey="demand_value"
-                    name="Demand value"
-                    tick={TICK}
-                    width={54}
-                    tickFormatter={(v: number) => inr(v)}
-                  />
-                  <ZAxis type="number" dataKey="series_count" range={[45, 190]} name="Series" />
-                  <Tooltip
-                    cursor={{ strokeDasharray: '3 3', stroke: 'var(--color-border)' }}
-                    content={({ active, payload }) => {
-                      if (!active || !payload?.length) return null;
-                      const row = payload[0]?.payload as {
-                        name?: string;
-                        demand_units?: number;
-                        demand_value?: number;
-                        per_unit?: number;
-                        series_count?: number;
-                      };
-                      return (
-                        <div style={TOOLTIP}>
-                          <div className="text-[11px] font-semibold">{row?.name}</div>
-                          <div className="text-[10.5px]">{num(row?.demand_units)} units ordered</div>
-                          <div className="text-[10.5px]">{inr(row?.demand_value)} demand value</div>
-                          <div className="text-[10.5px]">{inr(row?.per_unit)} per unit</div>
-                          <div className="text-[10.5px] opacity-70">
-                            {row?.series_count} branch × SKU series
-                          </div>
-                        </div>
-                      );
-                    }}
-                  />
-                  <Scatter data={skuScatter} isAnimationActive={false}>
-                    {skuScatter.map((row, i) => (
-                      <Cell
-                        key={row.name}
-                        fill={SERIES_COLORS[i % SERIES_COLORS.length]}
-                        fillOpacity={0.72}
-                      />
-                    ))}
-                  </Scatter>
-                </ScatterChart>
-              </ResponsiveContainer>
-            </Panel>
-
-            <Panel
               title="Unfilled Share by Vehicle Age"
               accent={RED}
-              note="Gross positive shortfall as a share of ordered units. Over-despatched lines are excluded from the numerator, so this is not the net figure — the two are reported separately throughout."
+              note="Units short ÷ units ordered, by vehicle age band."
             >
               <ResponsiveContainer width="100%" height={215}>
                 <BarChart
@@ -991,158 +1331,6 @@ export function OverallAnalysisPage() {
                 </BarChart>
               </ResponsiveContainer>
             </Panel>
-          </div>
-
-          {/* Trend row */}
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <Panel title="Ordered Demand Trend" accent={BLUE} className="lg:col-span-2">
-              <ResponsiveContainer width="100%" height={200}>
-                <AreaChart data={trend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="demandFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={BLUE} stopOpacity={0.32} />
-                      <stop offset="100%" stopColor={BLUE} stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="label" tick={TICK} minTickGap={18} tickLine={false} />
-                  <YAxis tick={TICK} tickFormatter={(value: number) => num(value)} />
-                  <Tooltip formatter={(value: number) => `${num(value)} units`} contentStyle={TOOLTIP} />
-                  <Area
-                    type="monotone"
-                    dataKey="demand_units"
-                    name="Ordered units"
-                    stroke={BLUE}
-                    fill="url(#demandFill)"
-                    strokeWidth={2}
-                    dot={false}
-                    isAnimationActive={false}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </Panel>
-
-            <Panel title="Ordered vs Despatched" accent={TEAL} note="Where the two separate, demand was not filled. A gap in the despatch line is a month with no recorded despatch.">
-              <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={trend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="label" tick={TICK} minTickGap={22} tickLine={false} />
-                  <YAxis tick={TICK} tickFormatter={(value: number) => num(value)} />
-                  <Tooltip formatter={(value: number) => `${num(value)} units`} contentStyle={TOOLTIP} />
-                  <Legend wrapperStyle={{ fontSize: 10 }} />
-                  <Line
-                    type="monotone"
-                    dataKey="demand_units"
-                    name="Ordered"
-                    stroke={SLATE}
-                    strokeWidth={1.5}
-                    strokeDasharray="4 3"
-                    dot={false}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="despatched_units"
-                    name="Despatched"
-                    stroke={TEAL}
-                    strokeWidth={2}
-                    dot={false}
-                    connectNulls={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </Panel>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <Panel title="Unfilled Demand Trend" accent={AMBER}>
-              <ResponsiveContainer width="100%" height={180}>
-                <AreaChart data={trend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="shortfallFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={AMBER} stopOpacity={0.3} />
-                      <stop offset="100%" stopColor={AMBER} stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="label" tick={TICK} minTickGap={22} tickLine={false} />
-                  <YAxis tick={TICK} tickFormatter={(value: number) => num(value)} />
-                  <Tooltip formatter={(value: number) => `${num(value)} units`} contentStyle={TOOLTIP} />
-                  <Area
-                    type="monotone"
-                    dataKey="shortfall_units"
-                    name="Units short"
-                    stroke={AMBER}
-                    fill="url(#shortfallFill)"
-                    strokeWidth={2}
-                    dot={false}
-                    isAnimationActive={false}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </Panel>
-
-            <Panel title="Fill Rate" accent={TEAL} note="Dashed line is a fully filled month. Months with no recorded despatch are absent, not zero.">
-              <ResponsiveContainer width="100%" height={180}>
-                <LineChart data={trend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="label" tick={TICK} minTickGap={22} tickLine={false} />
-                  <YAxis tick={TICK} unit="%" />
-                  <Tooltip formatter={(value: number) => `${value}%`} contentStyle={TOOLTIP} />
-                  <Legend wrapperStyle={{ fontSize: 10 }} />
-                  <ReferenceLine y={100} stroke={SLATE} strokeDasharray="4 4" />
-                  <Line type="monotone" dataKey="fill_rate_pct" name="Fill rate" stroke={TEAL} strokeWidth={2} dot={false} connectNulls={false} />
-                  <Line type="monotone" dataKey="censored_share_pct" name="Short-despatched rows" stroke={AMBER} strokeWidth={1.6} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </Panel>
-
-            <Panel title="Demand Signal Mix" accent={GREEN} note="Ordered demand is the target; a sales-proxy row is a labelled substitute, never the same measurement.">
-              <ResponsiveContainer width="100%" height={180}>
-                <LineChart data={trend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="label" tick={TICK} minTickGap={22} tickLine={false} />
-                  <YAxis tick={TICK} unit="%" />
-                  <Tooltip formatter={(value: number) => `${value}%`} contentStyle={TOOLTIP} />
-                  <Legend wrapperStyle={{ fontSize: 10 }} />
-                  <Line type="monotone" dataKey="order_share_pct" name="Order" stroke={GREEN} strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="proxy_share_pct" name="Sales proxy" stroke={SLATE} strokeWidth={1.6} dot={false} />
-                  <Line type="monotone" dataKey="censored_share_pct" name="Censored" stroke={RED} strokeWidth={1.6} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </Panel>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-4">
-            <Panel
-              title="Demand by Branch over Time"
-              accent={BLUE}
-              className="xl:col-span-2"
-              note={`One line per branch — the top ${summary.branch_over_time.limit} of ${summary.branch_over_time.total_branches} by value. Click a legend entry to filter.`}
-            >
-              <ResponsiveContainer width="100%" height={186}>
-                <LineChart data={branchOverTime} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="label" tick={TICK} minTickGap={22} tickLine={false} />
-                  <YAxis tick={TICK} tickFormatter={(value: number) => inr(value)} />
-                  <Tooltip formatter={(value: number) => inr(value)} contentStyle={TOOLTIP} />
-                  <Legend
-                    wrapperStyle={{ fontSize: 10, cursor: 'pointer' }}
-                    onClick={(entry: { value?: string }) => entry?.value && toggleBranch(entry.value)}
-                  />
-                  {summary.branch_over_time.names.map((name, index) => (
-                    <Line
-                      key={name}
-                      type="monotone"
-                      dataKey={name}
-                      stroke={SERIES_COLORS[index % SERIES_COLORS.length]}
-                      strokeWidth={branch === name ? 2.6 : 1.7}
-                      strokeOpacity={branch && branch !== name ? 0.3 : 1}
-                      dot={false}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </Panel>
 
             <Panel title="Ordered vs Despatched by Value Class" accent={VIOLET} note="Grey = ordered, solid = despatched.">
               <ResponsiveContainer width="100%" height={186}>
@@ -1157,179 +1345,8 @@ export function OverallAnalysisPage() {
                 </BarChart>
               </ResponsiveContainer>
             </Panel>
-
-            <Panel title="Realised Price per Unit" accent={NAVY} note="Demand value ÷ units. Dashed line is the window average. MRP is historical and is never used as a forecast driver.">
-              <ResponsiveContainer width="100%" height={186}>
-                <LineChart data={trend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis dataKey="label" tick={TICK} minTickGap={22} tickLine={false} />
-                  <YAxis tick={TICK} tickFormatter={(value: number) => `₹${Math.round(value)}`} />
-                  <Tooltip formatter={(value: number) => `₹${Number(value).toFixed(2)}`} contentStyle={TOOLTIP} />
-                  {averagePrice != null && (
-                    <ReferenceLine
-                      y={averagePrice}
-                      stroke={SLATE}
-                      strokeDasharray="5 4"
-                      label={{ value: `avg ₹${averagePrice.toFixed(0)}`, position: 'insideTopRight', fill: SLATE, fontSize: 9 }}
-                    />
-                  )}
-                  <Line type="monotone" dataKey="price_per_unit" name="₹ per unit" stroke={NAVY} strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </Panel>
           </div>
-
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <Panel title="Seasonality" accent={GREEN} note="Mean ordered demand per calendar month. The observation count matters: a mean of one month is not a seasonal estimate.">
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={summary.seasonality} margin={{ top: 16, right: 6, left: -12, bottom: 0 }} barCategoryGap="22%">
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  {/* Single-initial ticks, upright. Twelve months in a
-                      third-width panel leaves ~13px per tick, and a rotated
-                      three-letter label needs ~17px to stay clear of its
-                      neighbour - so rotation cannot solve this one and the
-                      label has to get shorter. The sequence runs Jan to Dec, and
-                      the tooltip carries the full month name. */}
-                  <XAxis
-                    dataKey="name"
-                    tick={{ ...TICK, fontSize: 9 }}
-                    tickLine={false}
-                    interval={0}
-                    tickFormatter={(value: string) => String(value).slice(0, 1)}
-                  />
-                  <YAxis tick={TICK} tickFormatter={(value: number) => num(value)} />
-                  <Tooltip
-                    formatter={(value: number, _name, item) =>
-                      [`${num(value)} units`, `${(item?.payload as { observations?: number })?.observations ?? 0} observation(s)`] as [string, string]
-                    }
-                    contentStyle={TOOLTIP}
-                  />
-                  <Bar dataKey="mean_demand_units" radius={[4, 4, 0, 0]} isAnimationActive={false}>
-                    {summary.seasonality.map((row) => (
-                      <Cell key={row.month} fill={GREEN} opacity={row.observations >= 2 ? 1 : 0.45} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-              <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
-                Faded columns rest on a single observation.
-              </p>
-            </Panel>
-
-            <Panel title="Demand Concentration" accent={TEAL} note="How much of a branch's volume sits in its five largest SKUs.">
-              <MiniTable
-                rows={summary.concentration.map((row) => ({
-                  label: `${row.branch} · ${row.sku_count} SKUs`,
-                  value: `${row.top5_share_pct}% in top 5`,
-                }))}
-              />
-            </Panel>
-
-            <Panel title="Coverage" accent={VIOLET} note="Months with observed demand against months in the window. A filled month is an explicit zero, not an observation.">
-              <MiniTable
-                rows={summary.coverage.map((row) => ({
-                  label: row.branch,
-                  value: `${row.observed_months} of ${row.window_months} months (${pct(row.coverage_pct, 0)})`,
-                }))}
-              />
-            </Panel>
-          </div>
-
-          <BranchScorecardSection
-            data={scorecardQuery.data}
-            loading={scorecardQuery.isLoading}
-            error={scorecardQuery.error as Error | null}
-          />
-
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-            <Panel
-              title="Top SKUs by Ordered Demand"
-              accent={BLUE}
-              className="lg:col-span-2"
-              note="Filled against unfilled, stacked, so the bar length is total ordered demand and the amber part is what was not supplied. The widest amber band is the product costing the most service, which is not always the biggest seller."
-            >
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart
-                  data={skuRows}
-                  layout="vertical"
-                  margin={{ top: 4, right: 20, left: 4, bottom: 0 }}
-                  barCategoryGap="22%"
-                >
-                  <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis type="number" tick={TICK} />
-                  <YAxis
-                    type="category"
-                    dataKey="short"
-                    tick={{ ...TICK, fontSize: 8 }}
-                    width={112}
-                    tickLine={false}
-                  />
-                  <Tooltip
-                    contentStyle={TOOLTIP}
-                    formatter={(v: number, name: string) => [`${num(v)} units`, name]}
-                    labelFormatter={(label) =>
-                      skuRows.find((r) => r.short === label)?.name ?? String(label)
-                    }
-                  />
-                  <Legend wrapperStyle={{ fontSize: 9 }} />
-                  <Bar dataKey="filled_units" name="Filled" stackId="s" fill={BLUE} isAnimationActive={false} />
-                  <Bar
-                    dataKey="shortfall_units"
-                    name="Unfilled"
-                    stackId="s"
-                    fill={AMBER}
-                    radius={[0, 3, 3, 0]}
-                    isAnimationActive={false}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </Panel>
-
-            <Panel
-              title="Service Risk by SKU"
-              accent={RED}
-              note="Unfilled demand as a percentage of what was ordered, worst first. A high share on a small SKU is a different problem from a high share on a large one, so the tooltip carries the volume."
-            >
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart
-                  data={[...skuRows].sort((a, b) => b.unfilled_share_pct - a.unfilled_share_pct).slice(0, 8)}
-                  layout="vertical"
-                  margin={{ top: 4, right: 26, left: 4, bottom: 0 }}
-                >
-                  <CartesianGrid horizontal={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis type="number" tick={TICK} unit="%" />
-                  <YAxis
-                    type="category"
-                    dataKey="short"
-                    tick={{ ...TICK, fontSize: 8 }}
-                    width={104}
-                    tickLine={false}
-                  />
-                  <Tooltip
-                    contentStyle={TOOLTIP}
-                    formatter={(v: number, _n, item) => {
-                      const row = item?.payload as { demand_units?: number; shortfall_units?: number };
-                      return [
-                        `${v}% — ${num(row?.shortfall_units)} of ${num(row?.demand_units)} units short`,
-                        'Unfilled share',
-                      ];
-                    }}
-                    labelFormatter={(label) =>
-                      skuRows.find((r) => r.short === label)?.name ?? String(label)
-                    }
-                  />
-                  <Bar dataKey="unfilled_share_pct" radius={[0, 3, 3, 0]} isAnimationActive={false}>
-                    {[...skuRows]
-                      .sort((a, b) => b.unfilled_share_pct - a.unfilled_share_pct)
-                      .slice(0, 8)
-                      .map((r) => (
-                        <Cell key={r.name} fill={r.unfilled_share_pct >= 10 ? RED : AMBER} />
-                      ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </Panel>
-          </div>
+          </section>
 
         </>
       )}
@@ -1368,172 +1385,36 @@ function ClassTick(props: {
   );
 }
 
-const METRIC_ORDER = ['fill_rate', 'short_despatch_share', 'demand_stability', 'coverage'];
+const SECTIONS = [
+  { id: 'sec-demand', label: 'Where demand comes from' },
+  { id: 'sec-time', label: 'Over time' },
+  { id: 'sec-deliver', label: 'How well we deliver' },
+];
 
-function BranchScorecardSection({
-  data,
-  loading,
-  error,
-}: {
-  data: ReturnType<typeof Object> extends never ? never : import('@/api/analytics').BranchScorecard | undefined;
-  loading: boolean;
-  error: Error | null;
-}) {
-  if (loading) return <LoadingBlock label="Scoring branches" />;
-  if (error) return <ErrorState error={error} />;
-  if (!data || data.empty || !data.branches.length) return null;
-
+/** Jump links to the page's three sections. Buttons that scroll, rather than
+ *  `#hash` links, so the router never sees a navigation. */
+function SectionLinks() {
   return (
-    <div className="flex flex-col gap-3">
-      <Panel title="Branch Operational Scorecard" accent={VIOLET} note={data.note}>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-[11px]">
-            <thead>
-              <tr className="text-[var(--color-text-muted)]">
-                <th className="pb-1 pr-3">Measure</th>
-                <th className="pb-1 pr-3">Scores 100</th>
-                <th className="pb-1 pr-3">Scores 0</th>
-                <th className="pb-1">Target</th>
-              </tr>
-            </thead>
-            <tbody>
-              {METRIC_ORDER.map((metric) => {
-                const scale = data.scales[metric];
-                if (!scale) return null;
-                return (
-                  <tr key={metric} className="border-t border-[var(--color-border)]">
-                    <td className="py-1 pr-3 text-[var(--color-text)]">{data.labels[metric] ?? metric}</td>
-                    <td className="py-1 pr-3 text-[var(--color-text-muted)]">{scale.good}%</td>
-                    <td className="py-1 pr-3 text-[var(--color-text-muted)]">{scale.poor}%</td>
-                    <td className="py-1 text-[var(--color-text-muted)]">
-                      {scale.higher_is_better ? '≥' : '≤'}
-                      {scale.target}%
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </Panel>
-
-      {/* Column count follows the number of branches. Fixed at four, a
-          two-branch workspace left two empty cells at the end of the row. */}
-      <div
-        className={`grid grid-cols-1 gap-3 ${
-          data.branches.length <= 2
-            ? 'lg:grid-cols-2'
-            : data.branches.length === 3
-              ? 'lg:grid-cols-3'
-              : 'lg:grid-cols-2 xl:grid-cols-4'
-        }`}
-      >
-        {data.branches.map((entry) => (
-          <ScorecardCard key={entry.branch} entry={entry} scales={data.scales} labels={data.labels} />
-        ))}
-      </div>
-    </div>
+    <nav aria-label="Page sections" className="flex flex-wrap gap-2">
+      {SECTIONS.map((section) => (
+        <button
+          key={section.id}
+          type="button"
+          onClick={() => document.getElementById(section.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          className="rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1 text-[11px] font-medium text-[var(--color-text)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]"
+        >
+          {section.label}
+        </button>
+      ))}
+    </nav>
   );
 }
 
-function ScorecardCard({
-  entry,
-  scales,
-  labels,
-}: {
-  entry: ScorecardBranch;
-  scales: import('@/api/analytics').BranchScorecard['scales'];
-  labels: Record<string, string>;
-}) {
+function SectionHeader({ title, question }: { title: string; question: string }) {
   return (
-    <Card>
-      <div className="mb-2 flex items-start gap-2">
-        <div className="flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]">
-          <span className="text-sm font-bold leading-none text-[var(--color-text)]">{entry.score ?? '—'}</span>
-          <span className="text-[8px] uppercase tracking-wide text-[var(--color-text-muted)]">score</span>
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 text-[10px]">
-            <span className="font-semibold text-[var(--color-text-muted)]">#{entry.rank}</span>
-            <span className={entry.off_target.length ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-muted)]'}>
-              {entry.off_target.length
-                ? `${entry.off_target.length}/${METRIC_ORDER.length} off target`
-                : 'all on target'}
-            </span>
-          </div>
-          <div className="truncate text-[11px] font-semibold text-[var(--color-text)]">{entry.branch}</div>
-          <div className="mt-0.5 text-[9px] text-[var(--color-text-muted)]">
-            {num(entry.demand_units)} units · {inr(entry.demand_value)} · {entry.sku_count} SKUs
-          </div>
-        </div>
-      </div>
-      <div className="flex flex-col gap-2">
-        {METRIC_ORDER.map((metric) => {
-          const scale = scales[metric];
-          if (!scale) return null;
-          return (
-            <MetricBar
-              key={metric}
-              label={labels[metric] ?? metric}
-              score={entry.score_components[metric] ?? null}
-              value={entry.metric_values[metric] ?? null}
-              scale={scale}
-            />
-          );
-        })}
-      </div>
-      {entry.worst_metric && (
-        <div className="mt-2 rounded bg-[var(--color-surface-2)] px-2 py-1.5 text-[10px]">
-          <span className="font-medium text-[var(--color-text)]">Focus: </span>
-          <span className="text-[var(--color-text-muted)]">{labels[entry.worst_metric] ?? entry.worst_metric}</span>
-        </div>
-      )}
-    </Card>
-  );
-}
-
-function MetricBar({
-  label,
-  score,
-  value,
-  scale,
-}: {
-  label: string;
-  score: number | null;
-  value: number | null;
-  scale: { good: number; poor: number; target: number; higher_is_better: boolean };
-}) {
-  const targetPosition = Math.max(
-    0,
-    Math.min(100, ((scale.poor - scale.target) / (scale.poor - scale.good)) * 100),
-  );
-  const meetsTarget =
-    value == null ? null : scale.higher_is_better ? value >= scale.target : value <= scale.target;
-  return (
-    <div>
-      <div className="flex items-baseline justify-between">
-        <span className="text-[10px] text-[var(--color-text-muted)]">{label}</span>
-        <span className="text-[11px] font-semibold text-[var(--color-text)]">
-          {value == null ? '—' : `${value}%`}
-        </span>
-      </div>
-      <div className="relative mt-1 h-2 w-full overflow-hidden rounded-full bg-[var(--color-surface-2)]">
-        <div
-          className="h-full rounded-full"
-          style={{ width: `${score ?? 0}%`, background: meetsTarget === false ? SLATE : 'var(--color-primary)' }}
-        />
-        <div
-          className="absolute top-0 h-full border-l border-dashed border-[var(--color-text-muted)]"
-          style={{ left: `${targetPosition}%` }}
-        />
-      </div>
-      <div className="mt-0.5 text-[9px] text-[var(--color-text-muted)]">
-        {score != null && <span className="text-[var(--color-text)]">{score}/100</span>}
-        {' · target '}
-        {scale.higher_is_better ? '≥' : '≤'}
-        {scale.target}%
-        {meetsTarget === false && <span className="font-medium text-[var(--color-danger)]"> · off target</span>}
-      </div>
-    </div>
+    <header className="mt-3 border-b border-[var(--color-border)] pb-2">
+      <h2 className="text-base font-semibold tracking-tight text-[var(--color-text)]">{title}</h2>
+      <p className="text-[11px] text-[var(--color-text-muted)]">{question}</p>
+    </header>
   );
 }

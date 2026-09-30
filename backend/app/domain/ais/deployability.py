@@ -35,6 +35,7 @@ from app.domain.ais.exog_features import prepare_local_series_frame
 from app.domain.ais.scope_builder import AGGREGATE_VAR_PAIR_COLUMN
 from app.ml.adapters.base import ModelContext
 from app.ml.evaluation.seasonality import resolve_seasonal_period
+from app.ml.features.grain import MONTHLY
 from app.ml.registry.model_registry import MODEL_REGISTRY
 
 #: The paired column VAR reads at series level. An aggregate scope pairs against
@@ -70,8 +71,9 @@ def prepare_scope_fit(
     """
     frame, exog_columns = prepare_local_series_frame(scope_frame, period_col=PERIOD_COL)
     frame = frame.sort_values(PERIOD_COL).reset_index(drop=True)
+    grain = str(config.get("panel_grain", MONTHLY))
     seasonal = resolve_seasonal_period(
-        frame[TARGET_COL], profile=str(config["min_history_profile"])
+        frame[TARGET_COL], profile=str(config["min_history_profile"]), grain=grain
     )
     context = ModelContext(
         seasonal_period=seasonal.period,
@@ -79,6 +81,7 @@ def prepare_scope_fit(
         horizons=tuple(int(h) for h in horizons),
         random_seed=int(config["random_seed"]),
         min_history_profile=str(config["min_history_profile"]),
+        grain=grain,
         xgboost_training_profile=str(config["xgboost_training_profile"]),
         var_pair_column=(
             SERIES_VAR_PAIR_COLUMN

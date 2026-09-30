@@ -40,11 +40,21 @@ from app.services.ingestion import readers
 
 logger = get_logger(__name__)
 
+from app.core.config import get_settings
+from app.ml.features.grain import MONTHLY, period_key
+
 ProgressFn = Callable[[str, float], None]
 
 
-def month_key(value: date) -> str:
-    return f"{value.year:04d}-{value.month:02d}"
+def month_key(value: date, grain: str = MONTHLY) -> str:
+    """The modelling period a transaction date falls in.
+
+    Kept under its original name because callers and tests import it, but it no
+    longer necessarily returns a month: at weekly grain it returns `YYYY-Www`.
+    The grain logic itself lives in `app.ml.features.grain`, which is the only
+    module that knows what a period is.
+    """
+    return period_key(value, grain)
 
 
 @dataclass
@@ -92,7 +102,18 @@ class AisPreprocessing:
     """One preprocessing pass. Streams the sources again rather than caching
     the ingestion pass, so a re-run always reflects the files on disk."""
 
-    def __init__(self, source_dir: Path, *, progress: ProgressFn | None = None) -> None:
+    def __init__(
+        self,
+        source_dir: Path,
+        *,
+        progress: ProgressFn | None = None,
+        grain: str | None = None,
+    ) -> None:
+        #: The grain the fact tables' `period` column is written at. Resolved
+        #: from settings when not given: preprocessing and the panel must agree,
+        #: and a fact table written monthly cannot be read weekly at all - the
+        #: period label itself has a different shape.
+        self.grain = grain or get_settings().panel_grain
         self.source_dir = source_dir
         self._progress = progress or (lambda _stage, _pct: None)
 
@@ -244,7 +265,7 @@ class AisPreprocessing:
             if not branch or not sku:
                 continue
 
-            key = (branch, sku, month_key(ordered_on))
+            key = (branch, sku, month_key(ordered_on, self.grain))
             cell = cells.get(key)
             if cell is None:
                 cell = MonthlyFactRow(branch=branch, sku=sku, period=key[2])
@@ -369,7 +390,7 @@ class AisPreprocessing:
                 if not branch or not sku:
                     continue
 
-                key = (branch, sku, month_key(invoiced_on))
+                key = (branch, sku, month_key(invoiced_on, self.grain))
                 cell = cells.get(key)
                 if cell is None:
                     cell = MonthlyFactRow(branch=branch, sku=sku, period=key[2])

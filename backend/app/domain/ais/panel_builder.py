@@ -35,10 +35,12 @@ from app.ml.features.feature_builder import (
     build_scoring_frame,
     build_training_frame,
 )
+from app.core.config import get_settings
+from app.ml.features.feature_builder import horizons_for
 from app.ml.features.panel import (
     build_period_grid,
     index_to_period,
-    month_index,
+    period_index,
     summarise_sparsity,
 )
 
@@ -94,9 +96,27 @@ class PanelResult:
 class AisPanelBuilder:
     """Builds the panel, the origin features, and the training/scoring frames."""
 
-    def __init__(self, artifacts: dict[str, str], *, progress: ProgressFn | None = None) -> None:
+    def __init__(
+        self,
+        artifacts: dict[str, str],
+        *,
+        progress: ProgressFn | None = None,
+        grain: str | None = None,
+    ) -> None:
         self.artifacts = artifacts
         self._progress = progress or (lambda _stage, _pct: None)
+        #: The calendar the period counter counts. Resolved from settings when
+        #: not given, so a panel is always built at the deployment's grain and
+        #: never at a default that silently disagrees with the models.
+        self.grain = grain or get_settings().panel_grain
+
+    def _to_index(self, period: str) -> int:
+        """`period_index` bound to this panel's grain, for `Series.map`."""
+        return period_index(period, self.grain)
+
+    def _to_period(self, index: int) -> str:
+        """`index_to_period` bound to this panel's grain, for `Series.map`."""
+        return index_to_period(int(index), self.grain)
 
     def _report(self, stage: str, pct: float) -> None:
         logger.info("panel_progress", extra={"stage": stage, "progress_pct": pct})
@@ -124,8 +144,8 @@ class AisPanelBuilder:
         """
         order_fact = order_fact.copy()
         sales_fact = sales_fact.copy()
-        order_fact["period_index"] = order_fact["period"].map(month_index)
-        sales_fact["period_index"] = sales_fact["period"].map(month_index)
+        order_fact["period_index"] = order_fact["period"].map(self._to_index)
+        sales_fact["period_index"] = sales_fact["period"].map(self._to_index)
 
         order_window = (
             int(order_fact["period_index"].min()),
@@ -182,8 +202,8 @@ class AisPanelBuilder:
 
         dropped_overlap = int((~proxy_periods).sum())
         result.summary["target_windows"] = {
-            "order_window": [index_to_period(order_window[0]), index_to_period(order_window[1])],
-            "sales_window": [index_to_period(sales_window[0]), index_to_period(sales_window[1])],
+            "order_window": [index_to_period(order_window[0], self.grain), index_to_period(order_window[1], self.grain)],
+            "sales_window": [index_to_period(sales_window[0], self.grain), index_to_period(sales_window[1], self.grain)],
             "sales_rows_superseded_by_orders": dropped_overlap,
             "note": (
                 "Ordered quantity is the target. Inside the order window a series "
@@ -208,9 +228,10 @@ class AisPanelBuilder:
         self,
         output_dir: Path,
         *,
-        horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+        horizons: tuple[int, ...] | None = None,
         training_cut_period: str | None = None,
     ) -> PanelResult:
+        horizons = horizons_for(self.grain) if horizons is None else horizons
         result = PanelResult()
         started = time.perf_counter()
 
@@ -230,6 +251,7 @@ class AisPanelBuilder:
             observations[["series_id", "period_index"]].drop_duplicates(),
             panel_end=panel_end,
             start_policy="first_observation",
+            grain=self.grain,
         )
         panel = grid[["series_id", "period_index"]].merge(
             observations, on=["series_id", "period_index"], how="left"
@@ -250,7 +272,7 @@ class AisPanelBuilder:
 
         # A materialised row inherits the source of the window it falls in, so
         # a zero is attributable rather than anonymous.
-        order_start = month_index(result.summary["target_windows"]["order_window"][0])
+        order_start = period_index(result.summary["target_windows"]["order_window"][0], self.grain)
         panel["target_source"] = panel["target_source"].astype("string")
         panel.loc[panel["target_source"].isna(), "target_source"] = (
             panel.loc[panel["target_source"].isna(), "period_index"]
@@ -260,7 +282,7 @@ class AisPanelBuilder:
 
         panel["canonical_branch"] = panel["series_id"].str.split("|").str[0]
         panel["canonical_sku"] = panel["series_id"].str.split("|").str[1]
-        panel["period"] = panel["period_index"].map(index_to_period)
+        panel["period"] = panel["period_index"].map(self._to_period)
 
         self._report("Joining dimensions and stock context", 45.0)
         panel = panel.merge(
@@ -315,13 +337,13 @@ class AisPanelBuilder:
         )
 
         self._report("Building leakage-safe origin features", 62.0)
-        origin_features = build_origin_features(panel)
+        origin_features = build_origin_features(panel, grain=self.grain)
 
         manifest = build_feature_manifest(
-            static_columns=STATIC_FEATURE_COLUMNS, horizons=horizons
+            static_columns=STATIC_FEATURE_COLUMNS, horizons=horizons, grain=self.grain
         )
 
-        cut_index = month_index(training_cut_period) if training_cut_period else None
+        cut_index = period_index(training_cut_period, self.grain) if training_cut_period else None
         self._report("Building the direct multi-horizon training frame", 78.0)
         training = build_training_frame(
             panel,
@@ -329,6 +351,7 @@ class AisPanelBuilder:
             horizons=horizons,
             static_columns=STATIC_FEATURE_COLUMNS,
             max_origin_period=cut_index,
+            grain=self.grain,
         )
 
         self._report("Building the scoring frame", 88.0)
@@ -338,6 +361,7 @@ class AisPanelBuilder:
             origin_period=cut_index if cut_index is not None else panel_end,
             horizons=horizons,
             static_columns=STATIC_FEATURE_COLUMNS,
+            grain=self.grain,
         )
 
         self._report("Writing Parquet artifacts", 93.0)
@@ -388,7 +412,7 @@ class AisPanelBuilder:
                     int(training["origin_period"].nunique()) if len(training) else 0
                 ),
                 "scoring_origin": (
-                    index_to_period(cut_index if cut_index is not None else panel_end)
+                    index_to_period(cut_index if cut_index is not None else panel_end, self.grain)
                 ),
                 # Expected to be 0: non-glass SKUs are stock-only, so the
                 # demand-bearing universe excludes them by construction. This

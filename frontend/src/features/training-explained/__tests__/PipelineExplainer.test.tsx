@@ -101,6 +101,7 @@ function explainFixture(): analyticsApi.TrainingExplain {
     validation: {
       method: 'rolling_origin',
       why: 'because',
+      grain: 'monthly',
       horizon_months: 6,
       min_train_periods: 12,
       panel_window: { start: '2024-01', end: '2026-07' },

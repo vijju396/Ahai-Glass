@@ -19,20 +19,28 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from app.ml.features.grain import MONTHLY
+from app.ml.features.grain import index_to_period as _grain_to_period
+from app.ml.features.grain import period_index as _grain_index
 
-def month_index(period: str) -> int:
-    """Turn `YYYY-MM` into a monotonic month counter.
+
+def period_index(period: str, grain: str = MONTHLY) -> int:
+    """Turn a period label into a monotonic counter.
 
     Used instead of a date so lag arithmetic is integer arithmetic - no
-    timezone, no day-of-month, no DST.
+    timezone, no day-of-month, no DST. The counter counts months or ISO weeks
+    depending on `grain`; only `app.ml.features.grain` knows which.
+
+    Named `period_index` rather than `month_index` since D-106: at weekly grain
+    a function called `period_index` returns a week counter, and a name that
+    lies about its unit is exactly how a grain bug survives review.
     """
-    year, month = period.split("-")
-    return int(year) * 12 + (int(month) - 1)
+    return _grain_index(period, grain)
 
 
-def index_to_period(index: int) -> str:
-    year, month = divmod(index, 12)
-    return f"{year:04d}-{month + 1:02d}"
+def index_to_period(index: int, grain: str = MONTHLY) -> str:
+    """The inverse of `period_index`."""
+    return _grain_to_period(index, grain)
 
 
 @dataclass
@@ -69,8 +77,13 @@ def build_period_grid(
     period_col: str = "period_index",
     panel_end: int,
     start_policy: str = "first_observation",
+    grain: str = MONTHLY,
 ) -> tuple[pd.DataFrame, GridStats]:
-    """Expand observations into a gap-free monthly grid per series.
+    """Expand observations into a gap-free grid of periods per series.
+
+    The grid arithmetic is grain-agnostic - it counts integers. `grain` is
+    needed only to turn the first and last index back into labels for the
+    returned stats.
 
     `start_policy`:
 
@@ -131,8 +144,8 @@ def build_period_grid(
         observed_rows=int((~merged["is_materialised"]).sum()),
         materialised_zero_rows=int(merged["is_materialised"].sum()),
         total_rows=len(merged),
-        first_period=index_to_period(int(merged[period_col].min())),
-        last_period=index_to_period(int(merged[period_col].max())),
+        first_period=index_to_period(int(merged[period_col].min()), grain),
+        last_period=index_to_period(int(merged[period_col].max()), grain),
     )
     return merged, stats
 

@@ -28,6 +28,7 @@ import { LoadingBlock } from '@/components/ui/States';
 import { fetchCurrentRun, trainingKeys } from '@/api/training';
 import { TrainingConsole } from '@/features/training-race/TrainingConsole';
 import { CombinedAccuracy } from '@/features/training-race/CombinedAccuracy';
+import { ModelAccuracyTable } from '@/features/training-race/ModelAccuracyTable';
 import {
   SeriesFilter,
   resolveSelection,
@@ -75,7 +76,7 @@ export function TrainingMonitor() {
         <Panel
           title={live ? 'Models racing' : 'How the models did on this line'}
           accent={live ? GREEN : BLUE}
-          note="Each bar is a model; length is its accuracy on this line. The leaderboard beneath lists the same figures."
+          note="Each bar is a model; length is its accuracy over a six-month total on this line. The leaderboard beneath lists the same figures."
         >
           <TrainingConsole scopeKey={selection.scopeKey} untrained={selection.untrained} />
         </Panel>
@@ -85,6 +86,12 @@ export function TrainingMonitor() {
            nobody asks (docs/DECISIONS.md D-096). */
         <>
           <CombinedAccuracy />
+          {/* Per model, not per line. The combined figure above says how
+              accurate the champions are together; this says how each of the
+              thirteen scored on the same window, which is what the champion
+              was picked on. Without it the page could show a winner and never
+              show the number that made it the winner. */}
+          <ModelAccuracyTable />
           <Panel title="Train the models" accent={BLUE} note="Runs all 13 models across every branch and SKU. Drill into any one line with the filter above.">
             <TrainingConsole untrained={selection.untrained} />
           </Panel>

@@ -50,6 +50,47 @@ function payload(overrides: Partial<api.RecommendationsPayload> = {}): api.Recom
     temperature: 2.0,
     model: null,
     provider_error: null,
+    lines: [line()],
+    lines_answered_by: 'openai',
+    line_counts: { critical: 11, high: 29, medium: 0, cannot_recommend: 0 },
+    lines_total: 40,
+    lines_shown: 1,
+    ...overrides,
+  };
+}
+
+/** One ranked branch x SKU line. Censored and zero-stock by default, because
+ *  that is the combination the panel has to render honestly. */
+function line(overrides: Partial<api.LineRecommendation> = {}): api.LineRecommendation {
+  return {
+    scope_key: 'BENGALURU|FG.BA5.LFH.GCG2120000',
+    branch: 'BENGALURU',
+    sku: 'FG.BA5.LFH.GCG2120000',
+    urgency: 'critical',
+    urgency_reason: 'No usable stock against a q95 planning demand of 1,462 units a month.',
+    headline: 'Zero stock against live demand',
+    explanation: 'BENGALURU branch for SKU FG.BA5.LFH.GCG2120000 has zero usable stock.',
+    next_step: 'Open Supply Intelligence and filter to this branch and SKU.',
+    evidence: ['usable_stock: 0.0', 'q95 planning demand: 1461.53'],
+    written_by_model: true,
+    forecast_period: '2026-08',
+    service_level: 95,
+    point_forecast: 652.2,
+    quantile_forecast: 1461.53,
+    usable_stock: 0,
+    on_order: 0,
+    backorders: 0,
+    days_of_cover: 0,
+    lead_time_days: 4,
+    protection_period_days: 34,
+    order_up_to_level: 1632.59,
+    recommended_order: 1632.59,
+    model: 'var_exog',
+    demand_segment: 'smooth',
+    is_censored: true,
+    target_source: 'order',
+    unavailable_reason: null,
+    exceptions: [],
     ...overrides,
   };
 }
@@ -141,11 +182,111 @@ describe('RecommendationList', () => {
     const spy = stub();
     renderWithProviders(<RecommendationList />);
     await screen.findByText('Critical supply exceptions are open');
-    expect(spy).toHaveBeenCalledTimes(1);
 
-    await userEvent.click(screen.getByRole('button', { name: /refresh/i }));
-
+    // Two passes, not one: the computed pass renders in about six seconds and
+    // the written pass replaces its wording when it arrives (D-104).
+    expect(spy).toHaveBeenCalledWith(false);
+    expect(spy).toHaveBeenCalledWith(true);
     expect(spy).toHaveBeenCalledTimes(2);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh recommendations' }));
+
+    expect(spy).toHaveBeenCalledTimes(4);
     expect(screen.getByText('Critical supply exceptions are open')).toBeInTheDocument();
+  });
+
+  it('asks for the computed pass first, so content is not behind the prose', async () => {
+    const spy = stub();
+    renderWithProviders(<RecommendationList />);
+    await screen.findByText('Critical supply exceptions are open');
+
+    // The fast pass must be the first call. Asking for prose first would put
+    // a thirty-five second wait in front of figures that were ready in six.
+    expect(spy.mock.calls[0]).toEqual([false]);
+  });
+});
+
+describe('per branch x SKU lines', () => {
+  it('names the branch and the SKU rather than counting lines', async () => {
+    stub();
+    renderWithProviders(<RecommendationList />);
+
+    // The SKU appears in the card heading and again inside the explanation,
+    // which is the point: the prose names the line rather than saying "this SKU".
+    const named = await screen.findAllByText(/FG\.BA5\.LFH\.GCG2120000/);
+    expect(named.length).toBeGreaterThanOrEqual(1);
+    expect(named[0]!.textContent).toContain('BENGALURU');
+  });
+
+  it('shows the computed reason, not only the model prose', async () => {
+    // The ranking is the application's; the model explains it. If the model
+    // failed, the reason must still be on the card.
+    stub();
+    renderWithProviders(<RecommendationList />);
+
+    expect(
+      await screen.findByText(/No usable stock against a q95 planning demand/),
+    ).toBeInTheDocument();
+  });
+
+  it('flags censored demand, because the order is a lower bound there', async () => {
+    stub();
+    renderWithProviders(<RecommendationList />);
+
+    expect(await screen.findByText('Censored demand')).toBeInTheDocument();
+  });
+
+  it('says how many ranked lines it is not showing', async () => {
+    stub();
+    renderWithProviders(<RecommendationList />);
+
+    expect(await screen.findByText(/Showing 1 of 40 lines/)).toBeInTheDocument();
+    expect(screen.getByText(/39 not shown/)).toBeInTheDocument();
+  });
+
+  it('renders an unavailable line as an absence, never as an order of zero', async () => {
+    stub({
+      lines: [
+        line({
+          urgency: 'cannot_recommend',
+          urgency_reason: 'No active champion is selected for this scope.',
+          recommended_order: null,
+          quantile_forecast: null,
+          unavailable_reason: 'No active champion is selected for this scope.',
+        }),
+      ],
+    });
+    renderWithProviders(<RecommendationList />);
+
+    expect(await screen.findByText('No recommendation')).toBeInTheDocument();
+    expect(screen.getByText(/Nothing was substituted/)).toBeInTheDocument();
+    expect(screen.queryByText('Recommended order')).not.toBeInTheDocument();
+  });
+
+  it('marks a template-written line so it does not read as model-written', async () => {
+    stub({ lines: [line({ written_by_model: false })], lines_answered_by: 'deterministic_after_provider_error' });
+    renderWithProviders(<RecommendationList />);
+
+    expect(await screen.findByText('template')).toBeInTheDocument();
+    expect(
+      screen.getByText(/figures and the ranking are unaffected/),
+    ).toBeInTheDocument();
+  });
+
+  it('filters by branch without changing what was ranked', async () => {
+    const user = userEvent.setup();
+    stub({
+      lines: [line(), line({ scope_key: 'DELHI-1|FG.ZZZ', branch: 'DELHI-1', sku: 'FG.ZZZ' })],
+      lines_shown: 2,
+    });
+    renderWithProviders(<RecommendationList />);
+
+    expect(await screen.findByText(/FG\.ZZZ/)).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Location'), 'BENGALURU');
+
+    expect(screen.queryByText(/FG\.ZZZ/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/FG\.BA5\.LFH\.GCG2120000/).length).toBeGreaterThan(0);
+    // The ranked total is unchanged by a client-side filter.
+    expect(screen.getByText(/of 40 lines/)).toBeInTheDocument();
   });
 });

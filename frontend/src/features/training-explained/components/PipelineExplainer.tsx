@@ -25,6 +25,7 @@ import { fetchTrainingExplain, trainingExplainKeys } from '@/api/analytics';
 import { fetchCurrentForecastRun, forecastKeys } from '@/api/forecasts';
 import { AMBER, BLUE, GREEN, NAVY, Panel, SLATE, TEAL, VIOLET, num } from '@/components/ui/Dashboard';
 import { LoadingBlock } from '@/components/ui/States';
+import { periodNoun, periodNounOne } from '@/app/period';
 
 /** Human names for the hierarchy levels, in the order they nest. */
 const LEVEL_ORDER = ['national', 'region', 'branch', 'segment', 'series'];
@@ -118,6 +119,11 @@ export function PipelineExplainer() {
   const fits = m.counters.total;
   const modelsPerScope = p.registry_models + p.baseline_models;
   const horizonCount = folds[0]?.horizons.length ?? e.validation.horizon_months;
+  // What a period is called here follows the panel, not the prose: at weekly
+  // grain the naive baseline is "next week equals this week", and the horizon
+  // is 26 weeks rather than 26 months.
+  const unit = periodNoun(e.validation.grain);
+  const unitOne = periodNounOne(e.validation.grain);
 
   const levels = LEVEL_ORDER.filter((l) => p.scopes_by_level[l]);
   const winners = Object.entries(p.champion_spread);
@@ -203,15 +209,15 @@ export function PipelineExplainer() {
           </p>
           <p>
             The baselines ({e.selection.baselines.map((b) => b.model_id).join(', ')}) can never be
-            champion. They are the floor: a registered model that cannot beat "next month equals
-            this month" has not earned its complexity, and{' '}
+            champion. They are the floor: a registered model that cannot beat &ldquo;next {unitOne}{' '}
+            equals this {unitOne}&rdquo; has not earned its complexity, and{' '}
             <strong>{p.champions_beaten_by_baseline} of the {p.champions_selected} scope
             champions</strong> on this run were still beaten by a baseline on their own scope —
             which the leaderboard says in words rather than leaving two numbers to be compared.
           </p>
         </Step>
 
-        <Step n={3} title="Each fit is scored on months it was never shown" accent={BLUE}>
+        <Step n={3} title={`Each fit is scored on ${unit} it was never shown`} accent={BLUE}>
           <p>
             {e.validation.method.replace(/_/g, ' ')} — the history is cut at a date, the model
             trains only on what came before, and is scored on what came after. Never a random
@@ -224,7 +230,9 @@ export function PipelineExplainer() {
                 <tr>
                   <th>Fold</th>
                   <th>Trains on</th>
-                  <th className="num">Months</th>
+                  {/* `train_rows` counts panel periods, not months - on a
+                      weekly panel the 78 in this column is 78 weeks. */}
+                  <th className="num capitalize">{unit}</th>
                   <th>Scored on</th>
                   <th className="num">Horizons</th>
                 </tr>
@@ -254,9 +262,10 @@ export function PipelineExplainer() {
         <Step n={4} title="A model that cannot run keeps its row and its reason" accent={AMBER}>
           <p>
             <strong>Ineligible is not failure.</strong> It means the data did not meet a
-            requirement the model states up front — Auto ARIMA needs eighteen months, and
-            multiplicative smoothing divides by the level so a single zero month rules it out
-            arithmetically. Nothing broke; the model declined, and said why.
+            requirement the model states up front — Auto ARIMA needs enough history to find a
+            seasonal cycle, and multiplicative smoothing divides by the level so a single zero{' '}
+            {unitOne} rules it out arithmetically. Nothing broke; the model declined, and said
+            why.
           </p>
           {ineligibleTotal > 0 ? (
             <>
@@ -288,7 +297,8 @@ export function PipelineExplainer() {
           <p>
             This is the step that surprises people. There is no single best model. For{' '}
             <strong>each</strong> of the {p.scopes_total} scopes, the candidate with the lowest{' '}
-            {e.selection.primary_metric.toUpperCase()} wins that scope alone, tie-broken by{' '}
+            {e.selection.primary_metric_label ?? e.selection.primary_metric} wins that scope
+            alone, tie-broken by{' '}
             {e.selection.tie_breaks.join(' → ')}. The rule is deterministic: the same rows always
             give the same champion.
           </p>
@@ -334,8 +344,8 @@ export function PipelineExplainer() {
         <Step n={6} title="The champions are refitted, then made to agree" accent={SLATE}>
           <p>
             Scoring is over. Each scope&apos;s champion is refitted on its{' '}
-            <strong>whole</strong> history — including the months held back for validation,
-            which no longer need holding back — and projects {horizonCount} months forward.
+            <strong>whole</strong> history — including the {unit} held back for validation,
+            which no longer need holding back — and projects {horizonCount} {unit} forward.
           </p>
           <p>
             Every point forecast carries q80 / q90 / q95 beside it: the level below which demand
@@ -359,7 +369,7 @@ export function PipelineExplainer() {
                   ? 'this run’s champions'
                   : `a different training run (${String(fc.training_run_id).slice(0, 8)})`}
               </strong>{' '}
-              at origin {fc.origin_period} — {p.scopes_total} scopes × {horizonCount} months,
+              at origin {fc.origin_period} — {p.scopes_total} scopes × {horizonCount} {unit},
               of which {num(fc.rows_written)} carry a number.{' '}
               {fc.coherent
                 ? 'The stored levels were re-checked from the persisted rows and they agree.'

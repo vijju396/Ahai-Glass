@@ -185,6 +185,8 @@ def _seed_run(
                         # well, or it drops out of the ranking and the
                         # mixed-mode note this test is about never fires.
                         mape=16.661,
+                        horizon_mape=16.661,
+                        horizon_blocks=1,
                         accuracy=83.339,
                         mae=25565.8,
                         bias=3.0,
@@ -214,6 +216,13 @@ def _seed_run(
                     bias=wape / 4,
                     bias_abs=wape / 4,
                     mape=wape + 2,
+                    # The ranking metric since D-120. Mirrors MAPE here so the
+                    # ranking mechanics these tests pin down - the tie-breaks,
+                    # the baseline comparison, the exclusion rules - stay
+                    # independent of which metric is default.
+                    horizon_mape=wape + 2,
+                    horizon_wape=wape,
+                    horizon_blocks=2,
                     accuracy=max(0.0, 100.0 - (wape + 2)),
                     smape=wape + 1,
                     mase=wape / 10,
@@ -251,6 +260,11 @@ def _seed_run(
                     # without one would drop out of the comparison entirely
                     # and "beaten by a baseline" could never be true.
                     mape=(baseline_wape if baseline == "ma6" else baseline_wape + 1.9) + 2,
+                    horizon_mape=(
+                        baseline_wape if baseline == "ma6" else baseline_wape + 1.9
+                    )
+                    + 2,
+                    horizon_blocks=2,
                     mae=(baseline_wape if baseline == "ma6" else baseline_wape + 1.9)
                     * 1650,
                     bias=1.0,
@@ -367,6 +381,9 @@ class TestLeaderboard:
             "wape",
             "mape",
             "accuracy",
+            "horizon_mape",
+            "horizon_accuracy",
+            "horizon_blocks",
             "mae",
             "rmse",
             "smape",

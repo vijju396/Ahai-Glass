@@ -81,8 +81,16 @@ export function MarkedSelect({
       if (e.key === 'Escape') setOpen(false);
     };
     /* The list is positioned once, so anything that moves the button under it
-       closes it rather than leaving it stranded mid-page. */
-    const shut = () => setOpen(false);
+       closes it rather than leaving it stranded mid-page. The scroll listener
+       is on capture so it also sees scrolling inside cards - which means it
+       also sees the list scrolling itself. A list longer than MAX_LIST_HEIGHT
+       scrolls, and closing on that made every row past the eleventh
+       unreachable by mouse, so a scroll that starts inside the list is left
+       alone. */
+    const shut = (e?: Event) => {
+      if (e && e.target instanceof Node && list.current?.contains(e.target)) return;
+      setOpen(false);
+    };
     document.addEventListener('mousedown', away);
     document.addEventListener('keydown', esc);
     window.addEventListener('resize', shut);

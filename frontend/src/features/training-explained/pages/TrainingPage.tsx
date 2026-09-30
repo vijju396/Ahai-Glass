@@ -37,6 +37,7 @@ import { PipelineExplainer } from '../components/PipelineExplainer';
 import { ScopeBanner } from '@/components/ui/ScopeBanner';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
 import { Explain } from '@/components/ui/Explain';
+import { periodNoun } from '@/app/period';
 
 const STATUS_COLOR: Record<string, string> = {
   completed: GREEN,
@@ -87,6 +88,16 @@ export function TrainingPage() {
   const relaxedDiffers = data.models.filter(
     (m) => m.min_history.reference !== m.min_history.monthly_relaxed,
   );
+  // The fold counts below are periods, not months. At weekly grain the horizon
+  // is 26 and the training minimum 52, and calling either a "month" would be a
+  // plain misstatement of what was validated.
+  const periodUnit = periodNoun(data.validation.grain);
+  const periodUnitTitle = periodUnit.charAt(0).toUpperCase() + periodUnit.slice(1);
+  /* The ranking metric in words. The key is a column name — "HORIZON_MAPE" on
+     a tile names nothing a reader can act on, and the thing it names is the
+     point of the change (D-120). */
+  const rankedOn = data.selection.primary_metric_label ?? data.selection.primary_metric;
+  const metricLabels = data.selection.primary_metric_labels ?? {};
 
   return (
     <div className="flex flex-col gap-4">
@@ -123,8 +134,8 @@ export function TrainingPage() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile label="Registered models" value={String(data.model_count)} sublabel="fixed set, never substituted" tint="navy" accent />
         <StatTile label="Validation" value={`${data.validation.origins.length} folds`} sublabel={data.validation.method} tint="blue" />
-        <StatTile label="Horizon" value={`${data.validation.horizon_months} months`} sublabel={`min ${data.validation.min_train_periods} training months per fold`} tint="teal" />
-        <StatTile label="Ranked on" value={data.selection.primary_metric.toUpperCase()} sublabel={`tie-breaks: ${data.selection.tie_breaks.join(' → ')}`} tint="green" />
+        <StatTile label="Horizon" value={`${data.validation.horizon_months} ${periodUnit}`} sublabel={`min ${data.validation.min_train_periods} training ${periodUnit} per fold`} tint="teal" />
+        <StatTile label="Champion picked on" value={rankedOn} sublabel={`tie-breaks: ${data.selection.tie_breaks.join(' → ')}`} tint="green" />
       </div>
 
       <Panel
@@ -138,7 +149,7 @@ export function TrainingPage() {
               <tr>
                 <th>Fold</th>
                 <th>Trains on</th>
-                <th className="num">Months</th>
+                <th className="num">{periodUnitTitle}</th>
                 <th>Scores</th>
               </tr>
             </thead>
@@ -228,7 +239,7 @@ export function TrainingPage() {
         <Panel
           title="Metrics computed on every model run"
           accent={GREEN}
-          note={`Ranked on ${data.selection.primary_metric.toUpperCase()}. ${data.selection.why_bias_second}`}
+          note={`Ranked on the ${rankedOn}. ${data.selection.why_bias_second}`}
         >
           <div className="flex flex-col gap-2">
             {data.metrics.map((metric) => (
@@ -257,12 +268,18 @@ export function TrainingPage() {
 
         <div className="flex flex-col gap-3">
           <Panel title="Champion selection" accent={BLUE} note="Deterministic: the same rows always produce the same champion.">
-            <Kv label="Primary metric" value={data.selection.primary_metric.toUpperCase()} />
+            <Kv label="Primary metric" value={rankedOn} />
             <Kv label="Tie-breaks, in order" value={data.selection.tie_breaks.join(' → ')} />
             <Kv label="Minimum validation points" value={String(data.selection.min_validation_points)} />
             <Kv label="Minimum test-point share" value={String(data.selection.min_test_point_share)} />
             <Kv label="A baseline may be champion" value={data.selection.baselines_never_champion ? 'never' : 'yes'} />
-            <Kv label="Switchable to" value={data.selection.primary_metric_choices.join(' / ')} />
+            <Kv
+              label="Switchable to"
+              value={data.selection.primary_metric_choices
+                .filter((c) => c !== data.selection.primary_metric)
+                .map((c) => metricLabels[c] ?? c)
+                .join(' / ')}
+            />
           </Panel>
 
           <Panel

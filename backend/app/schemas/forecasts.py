@@ -14,9 +14,22 @@ from typing import Any
 
 from pydantic import Field
 
+from app.ml.features.grain import MONTHLY
 from app.schemas.common import ApiModel
 
 PERIOD_PATTERN = r"^\d{4}-\d{2}$"
+
+
+def _default_horizon() -> int:
+    """The mandated horizon at the configured grain, read at request time.
+
+    Deliberately not a module constant: the grain is configuration, and a
+    constant evaluated at import would freeze whichever grain happened to be
+    set when the process started.
+    """
+    from app.core.config import get_settings
+
+    return get_settings().forecast_horizon
 
 
 class ForecastRunRequest(ApiModel):
@@ -32,7 +45,14 @@ class ForecastRunRequest(ApiModel):
             "run records what it fell back from."
         ),
     )
-    horizons: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5, 6])
+    horizons: list[int] = Field(
+        default_factory=lambda: list(range(1, _default_horizon() + 1)),
+        description=(
+            "Periods ahead to forecast, at the panel's grain. Defaults to the "
+            "full mandated horizon: six periods monthly, twenty-six weekly - "
+            "the same six months of demand either way."
+        ),
+    )
 
 
 class ForecastRunOut(ApiModel):
@@ -134,6 +154,24 @@ class ValidationMetrics(ApiModel):
     evaluation_mode: str | None = None
 
 
+class MonthlyRollup(ApiModel):
+    """One calendar month of a weekly forecast, added back up."""
+
+    month: str
+    point_forecast: float
+    q80: float | None = None
+    q90: float | None = None
+    q95: float | None = None
+    #: How many periods were summed into this month. At monthly grain it is
+    #: always 1; at weekly it is 4 or 5, and a month at either end of the
+    #: horizon can hold fewer - which is exactly when a reader needs to know
+    #: not to compare that month with a full one.
+    periods: int
+    #: False where the horizon covers only part of the month, so the total is
+    #: a partial month rather than a forecast of a short one.
+    complete: bool = True
+
+
 class SeriesForecastResponse(ApiModel):
     forecast_run_id: str
     training_run_id: str
@@ -150,6 +188,16 @@ class SeriesForecastResponse(ApiModel):
     reconciliation_method: str | None = None
     coherent: bool = False
     snapshot_caveat: str
+
+    #: The panel's grain, so a reader knows whether `forecasts[].period` is a
+    #: month or an ISO week without having to parse one to find out.
+    panel_grain: str = MONTHLY
+    #: The weekly forecasts added into the calendar months they report under,
+    #: and the total over the whole horizon. At monthly grain the roll-up is
+    #: the same rows restated, and the total is unchanged - which is the point:
+    #: the six-month number means the same thing at either grain.
+    monthly_rollup: list[MonthlyRollup] = Field(default_factory=list)
+    horizon_total: float | None = None
 
 
 class LevelTotals(ApiModel):

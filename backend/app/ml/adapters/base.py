@@ -106,6 +106,12 @@ class ModelContext:
     #: Second endogenous series for VAR (docs/DECISIONS.md D-004).
     var_pair_column: str = "despatched_qty"
 
+    #: The calendar the periods count. Adapters that reason about cycle length
+    #: read it - `auto_arima` raises its seasonal ceiling from 24 to 53 at
+    #: weekly grain, since 52 is a legitimate period there and 24 would refuse
+    #: it silently.
+    grain: str = "monthly"
+
     #: Whether a recursive model may consume actual values from the output
     #: window as it walks forward.
     #:

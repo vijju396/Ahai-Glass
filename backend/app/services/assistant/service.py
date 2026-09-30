@@ -55,7 +55,7 @@ def ask(
     if tools.is_greeting(question):
         return _envelope(
             question,
-            llm.GREETING_MESSAGE,
+            llm.greeting_message(db),
             scope=current_scope or tools._EMPTY_SCOPE,
             answered_by="static",
         )

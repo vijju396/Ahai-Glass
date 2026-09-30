@@ -56,12 +56,8 @@ import { Card } from '@/components/ui/Card';
 import { ScopeBanner } from '@/components/ui/ScopeBanner';
 import { ErrorState, LoadingBlock } from '@/components/ui/States';
 import { Explain } from '@/components/ui/Explain';
+import { periodNoun, shortPeriod } from '../../../app/period';
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const shortPeriod = (period: string) => {
-  const [y, m] = period.split('-');
-  return `${MONTHS[Number(m) - 1] ?? m} ${y?.slice(2) ?? ''}`;
-};
 
 /* `inr` rounds anything over a thousand to "K", which is right for a demand
    value and wrong for a unit price: a 1,575 and a 1,700 both read "\u20B92K" and the
@@ -329,7 +325,13 @@ export function SeriesAnalysisPage() {
             <StatTile
               label="Ordered demand"
               value={`${num(data.kpis.demand_units)} units`}
-              sublabel={`${inr(data.kpis.demand_value)} · ${data.window.periods} months`}
+              /* The window is the panel's own, always at the panel grain - the
+                 grain picker above re-buckets the charts, it does not change
+                 what the panel is made of - so the noun comes from
+                 `panel_grain` and not from the picker. It read "122 months" on
+                 a weekly panel, which is a count of weeks wearing the wrong
+                 word. */
+              sublabel={`${inr(data.kpis.demand_value)} · ${data.window.periods} ${periodNoun(data.panel_grain)}`}
               tint="blue"
               accent
             />

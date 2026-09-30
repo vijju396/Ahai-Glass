@@ -4,7 +4,7 @@ Operating contract for this repository. Read `docs/STATUS.md` before starting
 any work.
 
 **All twelve phases are complete**, plus a reference-led UI parity pass
-(`docs/UI_VISUAL_PARITY.md`). 1,097 tests pass (884 backend, 213 frontend);
+(`docs/UI_VISUAL_PARITY.md`). 1,326 tests pass (1,072 backend, 254 frontend);
 65 API endpoints are documented and cross-checked against the running app. The
 work from here is maintenance and extension, not phase delivery — so the
 discipline below applies to any change, not just to a phase boundary.
@@ -123,15 +123,20 @@ finish everything else and say explicitly what was left and why.
 Two checks worth keeping, because both catch silent rot:
 
 - **Endpoint drift** — every route in the running app must appear in
-  `docs/API_CONTRACT.md` and vice versa. Currently 65 = 65.
+  `docs/API_CONTRACT.md` and vice versa. Measured from the running app's own
+  `/api/openapi.json`: **69 paths, 74 operations**. The old "65 = 65" and the
+  contract's "55 routes" were both stale and counted differently; count paths
+  and operations separately when you check it.
 - **Decision citations** — every `D-nnn` cited in code must exist in
   `docs/DECISIONS.md`. A missing one was found this way (D-042 was cited by
   `scope_builder.py` but never written).
 
 ### Known gaps, stated rather than buried
 
-- The **pooled tier has never been run end to end**. Every measurement in the
-  docs comes from the aggregate and local tiers.
+- The **pooled tier has now run end to end** (D-127): 2 scopes, 3.96 s over
+  32,341 origin feature rows, in the 136-SKU run. It is what covers a series
+  with too little history for the local tier — one series in that run. Older
+  measurements in these docs still come from the aggregate and local tiers only.
 - **Error deterioration has never been measured** — the forecast origin is the
   last observed month, so nothing is observable yet. The endpoint returns
   `computable: false` with that reason.
@@ -148,32 +153,70 @@ Two checks worth keeping, because both catch silent rot:
 - **An OpenAI key is now configured** in `backend/.env`, so the AI Assistant
   and AI Recommendations pages make live paid calls at temperature 2.0. Every
   model path is still tested against a stub.
-- **Eleven pages are unrouted but not deleted** (D-052, D-057, D-086). The UI is
-  seven tabs; the removed components still exist under `src/features/`, so the
-  suite covers unreachable pages. Scenario Planner was the most recent to go,
-  and `POST /api/scenarios` is still live and documented behind it.
+- **Twelve pages are unrouted but not deleted** (D-052, D-057, D-086, D-105).
+  The UI is seven tabs; the removed components still exist under
+  `src/features/`, so the suite covers unreachable pages. **Supply Intelligence
+  was the most recent to go**, replaced in the Operations section by Lead Time;
+  its page, components and endpoints are untouched under `features/supply`,
+  `/supply` falls through to `/overall`, and one nav item plus one route line
+  restore it. Scenario Planner went before it, and `POST /api/scenarios` is
+  still live and documented behind it.
 - **Three pages were unrouted earlier.** Executive Command Center,
   Data & Model Monitoring and Connections & Settings were removed from the nav
   and the router on request (D-052). Their components and tests still exist
   under `src/features/`, so the suite covers three unreachable pages. The
   backend endpoints they read are untouched and still documented.
-- **The whole application is scoped to one set of locations.**
-  `app/domain/ais/workspace.py` resolves it from `AIS_WORKSPACE_BRANCHES`, else
-  the active training run's restriction, else unrestricted. It currently
-  resolves to AHMEDABAD and BENGALURU, so **every page hides 51 of the 53
-  branches** — deliberate, requested, and stated on every payload as
-  `workspace_scope` plus a note (D-049). Clearing the setting and running an
-  unrestricted training run restores all 53 with no code change.
+- **The whole application is scoped to one set of locations and SKUs.**
+  `app/domain/ais/workspace.py` resolves it from `AIS_WORKSPACE_BRANCHES` and
+  `AIS_WORKSPACE_SKUS`, else the active training run's restriction, else
+  unrestricted. It currently resolves to **BENGALURU and DELHI-1 with 136
+  SKUs**, so every page hides 51 of the 53 ordering branches and all but 136 of
+  the 2,063 ordered SKUs — deliberate, requested, and stated on every payload
+  as `workspace_scope` plus a note (D-049, D-127, D-128). **All seven pages
+  now render the identical banner** — `2 of 53 branches · 136 of 2063 SKUs` —
+  including AI Assistant and AI Recommendations, which had none, and Training
+  and Lead Time, which stated the restriction without its denominators
+  (D-131). The data was always scoped correctly; the labels were what lied.
+  The assistant's tools in particular told the model `"the whole network"` on
+  any question that named no branch; they now name the workspace.
+  Changing the setting is **not** enough on its own: the panel is physically
+  cut to the workspace at build time (D-126), so the pipeline must be re-run —
+  preprocessing (if the grain changed), panel build, training, champion
+  selection **including `series`**, then a forecast run.
 - **A training run can be scoped** to named branches and top-N SKUs
   (`branches`, `max_skus`). A scoped run stores and warns about exactly what it
   covered — its leaderboard is not a network result (D-044). The full-network
   run has not been repeated since.
-- **Lead-time variability is surfaced but unused.** `std_lead_time_days` is now
-  shown on Supply Intelligence, and the protection period still uses only the
+- **Lead-time variability is surfaced but unused.** `std_lead_time_days` is
+  shown on the (now unrouted) Supply Intelligence page, and the protection
+  period still uses only the
   average lead time — so a branch with a 3-day mean and a 2.19-day spread
   (NORTH 24 PARAGANAS, 73% variability) gets the same cover as a stable 3-day
   branch. Feeding it into safety stock would change every recommended
-  quantity; that is a decision, not a fix.
+  quantity; that is a decision, not a fix. The new **Lead Time** page compares
+  the master's stated average against the mean of Despatch Date minus Order
+  Date and does not feed safety stock either — it compares, it does not correct
+  (D-105).
+- **AI Recommendations answers at branch × SKU, and the figures are never the
+  model's.** All 261 ranked lines are listed; 12 of them carry model-written
+  prose and the rest carry their computed reason, labelled as such. Every
+  urgency and exception count on the page is a filter into the lines behind it,
+  and each card opens into every figure held for that line (D-132). A count
+  shown without a way to see what it counts is the defect. The model writes
+  sentences only:
+  `_merge_lines` builds every figure chip from the line's own fields, so a chip
+  reads the same in the fast computed pass and the written one. Do not pass a
+  model-supplied number onto a card — that was the defect (D-104, D-131).
+- **A "check this on" label must name a tab that exists.** Five of them named
+  unrouted or renamed pages. `VERIFY_ON` and the per-line `next_step` are
+  checked by `tests/test_line_evidence_is_computed.py`; update them whenever a
+  page is routed or unrouted.
+- **Two branches both numbered decisions to 105.** This tree's D-104 and D-105
+  are the six-month accuracy panel and weekly grain; `origin/main`'s D-104 and
+  D-105 are branch × SKU recommendations and the lead-time comparison. The
+  incoming D-105 sits beside the existing one in `docs/DECISIONS.md` with the
+  collision stated, because renumbering either breaks citations already in the
+  source. Resolve it when the branches are merged, not by a silent edit.
 - **The pre-flight cost estimate is 54% high** on the aggregate tier (424 s
   estimated against 275.8 s actual). Conservative is the right direction for a
   warning, but `cost_model.MEASURED_FIT_SECONDS` is derived from a 28-month

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from app.core.config import get_settings
 from app.db.session import session_scope
 from app.models.datasets import Dataset, DatasetVersion, IngestionStatus
 from app.models.mappings import MappingVersion, PreprocessingRun
@@ -77,7 +78,12 @@ class TestBuildSubmission:
         body = response.json()
         assert body["status"] == "pending"
         assert body["training_cut_period"] == "2025-09"
-        assert body["horizons"] == "1,2,3,4,5,6"
+        # The full mandated horizon at the configured grain, not a literal six:
+        # weekly the same six months of demand is 26 periods.
+        expected = ",".join(
+            str(h) for h in range(1, get_settings().forecast_horizon + 1)
+        )
+        assert body["horizons"] == expected
         assert no_job_submission == [body["id"]]
 
     def test_it_defaults_to_the_newest_completed_run(self, client, no_job_submission) -> None:
