@@ -1,5 +1,14 @@
 /**
- * Lead time: what the master states, beside what the order dates show.
+ * Ordered vs dispatched time: what the master states, beside what the order
+ * dates show.
+ *
+ * **The tab is not called "Lead Time", on purpose.** What this page measures is
+ * Despatch Date minus Order Date — how long the order took to go out. A lead
+ * time runs to *receipt*, and the source files hold no receipt date, so the
+ * observed figure is one leg of the cycle and not the cycle. The master's
+ * `Avg Lead Time` column is still called what the client calls it, because
+ * renaming someone else's field would be worse; the page's own name now
+ * describes its own measurement (D-133).
  *
  * This replaced Supply Intelligence in the Operations section (D-105). Both
  * halves already exist in the client's own files — `Avg Lead Time` in Location
@@ -86,7 +95,7 @@ export function LeadTimePage() {
     <div className="flex flex-col gap-4">
       <header>
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-primary)]">
-          Lead time
+          Ordered vs dispatched time
         </p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[var(--color-text)]">
           What the master says, and what the orders show.

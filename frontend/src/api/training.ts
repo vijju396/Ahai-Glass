@@ -208,18 +208,27 @@ export interface AccuracyWindow {
 export interface AccuracySeries {
   scope_key: string;
   champion_model_id: string | null;
-  /** Keyed by window length in months: "1", "3", "6". */
+  /** Keyed by window length in months: "1", "3", "6". Floored at zero. */
   accuracy_pct: Record<string, number>;
+  /** The same windows as error rather than accuracy, and **measured, not
+   *  derived**. The two do not add to 100 on a floored line: four lines of
+   *  this run read 0% six-month accuracy against real MAPEs of 102.8%, 140.8%,
+   *  357.5% and 100.0%. Never compute one of these from the other (D-134). */
+  mape_pct: Record<string, number>;
   /** This line clears the target over the recommended window (a six-month
    *  total). Drives the panel's headline, not the filter's dot. */
   meets_target: boolean;
   /** 100 − the champion's MAPE: this line's accuracy on the average single
    *  period. Kept beside the six-month figure, never instead of it. */
   champion_accuracy_pct: number | null;
+  /** The champion's own MAPE on the average single period, unfloored. */
+  champion_mape_pct: number | null;
   /** This line's accuracy over the six-month total — the window the dashboard
    *  headline reports. Not always the higher of the two: a model biased one
    *  way compounds over the window instead of cancelling. */
   horizon_accuracy_pct: number | null;
+  /** That same six-month reading as error, measured rather than derived. */
+  horizon_mape_pct: number | null;
   /** That six-month figure clears the target. */
   horizon_meets_target: boolean;
   /** That displayed figure clears the target. This is what the filters mark,

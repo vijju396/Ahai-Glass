@@ -4,7 +4,7 @@ Operating contract for this repository. Read `docs/STATUS.md` before starting
 any work.
 
 **All twelve phases are complete**, plus a reference-led UI parity pass
-(`docs/UI_VISUAL_PARITY.md`). 1,326 tests pass (1,072 backend, 254 frontend);
+(`docs/UI_VISUAL_PARITY.md`). 1,345 tests pass (1,077 backend, 268 frontend);
 65 API endpoints are documented and cross-checked against the running app. The
 work from here is maintenance and extension, not phase delivery — so the
 discipline below applies to any change, not just to a phase boundary.
@@ -156,7 +156,8 @@ Two checks worth keeping, because both catch silent rot:
 - **Twelve pages are unrouted but not deleted** (D-052, D-057, D-086, D-105).
   The UI is seven tabs; the removed components still exist under
   `src/features/`, so the suite covers unreachable pages. **Supply Intelligence
-  was the most recent to go**, replaced in the Operations section by Lead Time;
+  was the most recent to go**, replaced in the Operations section by Ordered
+  vs Dispatched Time;
   its page, components and endpoints are untouched under `features/supply`,
   `/supply` falls through to `/overall`, and one nav item plus one route line
   restore it. Scenario Planner went before it, and `POST /api/scenarios` is
@@ -175,7 +176,8 @@ Two checks worth keeping, because both catch silent rot:
   as `workspace_scope` plus a note (D-049, D-127, D-128). **All seven pages
   now render the identical banner** — `2 of 53 branches · 136 of 2063 SKUs` —
   including AI Assistant and AI Recommendations, which had none, and Training
-  and Lead Time, which stated the restriction without its denominators
+  and Ordered vs Dispatched Time, which stated the restriction without its
+  denominators
   (D-131). The data was always scoped correctly; the labels were what lied.
   The assistant's tools in particular told the model `"the whole network"` on
   any question that named no branch; they now name the workspace.
@@ -193,10 +195,13 @@ Two checks worth keeping, because both catch silent rot:
   average lead time — so a branch with a 3-day mean and a 2.19-day spread
   (NORTH 24 PARAGANAS, 73% variability) gets the same cover as a stable 3-day
   branch. Feeding it into safety stock would change every recommended
-  quantity; that is a decision, not a fix. The new **Lead Time** page compares
-  the master's stated average against the mean of Despatch Date minus Order
-  Date and does not feed safety stock either — it compares, it does not correct
-  (D-105).
+  quantity; that is a decision, not a fix. The **Ordered vs Dispatched Time**
+  page — called **Lead Time** until D-133 — compares the master's stated
+  average against the mean of Despatch Date minus Order Date and does not feed
+  safety stock either: it compares, it does not correct (D-105). The rename is
+  the honest one, because that difference stops at despatch and never reaches
+  receipt, so it is one leg of a lead time and not the whole of it. The route
+  is still `/lead-time` and the nav index is still 24.
 - **AI Recommendations answers at branch × SKU, and the figures are never the
   model's.** All 261 ranked lines are listed; 12 of them carry model-written
   prose and the rest carry their computed reason, labelled as such. Every
@@ -207,6 +212,45 @@ Two checks worth keeping, because both catch silent rot:
   `_merge_lines` builds every figure chip from the line's own fields, so a chip
   reads the same in the fast computed pass and the written one. Do not pass a
   model-supplied number onto a card — that was the defect (D-104, D-131).
+- **Training and Forecasting have no "All locations" and no "All SKUs".** Both
+  resolved to an aggregate *scope* — the national and per-branch series, each a
+  separate thirteen-model race fitted to summed demand. The national scope
+  reports 169.87% MAPE on the current run against 10.45% for the median line
+  over the same six-month total, and the tile silently switched from a
+  six-month figure to a raw per-period one when the scope was not a series.
+  Both pages now open on one branch × SKU, and picking a location that does not
+  stock the current SKU moves the SKU rather than emptying the page (D-133).
+  **The aggregates are still fitted** — MinT reconciliation needs the hierarchy
+  to make the lines add up, and the run reports `coherent: true` with
+  `max_incoherence: 0.0`. Do not "fix" a cross-line figure by fitting a model
+  to summed demand: score each line on its own and report the median, which is
+  what `combined_metrics_best` does.
+- **Never derive MAPE from accuracy, or accuracy from MAPE.** Accuracy is
+  floored at zero (`series_accuracy()`), so on a line whose error exceeds 100%
+  the subtraction prints exactly 100% and hides the real figure — four lines of
+  this run read 0% six-month accuracy against measured MAPEs of 102.8%, 140.8%,
+  357.5% and 100.0%, and twenty floor the same way per period. Both figures are
+  carried on the payload (`mape_pct`, `horizon_mape_pct`, `champion_mape_pct`)
+  and both screens print both (D-134). The two do agree on 257 of 261 lines,
+  which is exactly why the shortcut survives casual testing.
+- **The four line tiles are one component, mounted twice.** Chosen model,
+  six-month accuracy and MAPE, next-month forecast and horizons returned are
+  rendered by `features/line-summary/LineSummaryTiles.tsx` on both Training and
+  Forecasting (D-135). Do not copy them onto a third screen — mount the
+  component. It issues its own queries under the keys Forecasting already uses,
+  so the second mount costs no request.
+- **The deployed image carries the workspace's data, not the repository's.**
+  `scripts/build_scoped_bundle.py` ships one training run, its panel, its
+  fitted models, a branch-restricted extract of the order durations and
+  Location Master — 67.9 MB against 348 MB (D-137). Four client workbooks are
+  **not** deployed, so ingestion, preprocessing and starting a training run are
+  unavailable there, and `/api/health` says so by name. The deployed run
+  history is one run, not seven. Two things bite if forgotten: the database
+  stores **absolute development-machine paths**, which the script rewrites to
+  `/app` and then asserts are gone — without it every page that opens the panel
+  returns 500; and `az acr build` **does not honor `.dockerignore`**, so the
+  context is assembled by `scripts/stage_build_context.py` and the build runs
+  against `deploy/context`, never `.`.
 - **A "check this on" label must name a tab that exists.** Five of them named
   unrouted or renamed pages. `VERIFY_ON` and the per-line `next_step` are
   checked by `tests/test_line_evidence_is_computed.py`; update them whenever a

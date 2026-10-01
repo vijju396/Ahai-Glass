@@ -23,6 +23,16 @@ runtime/storage/*/*
 backend/.env
 frontend/.env.local
 
+# --- deployment staging: client data and a full settings copy, both generated ---
+# `deploy/bundle/` is the scoped data the image ships (a pruned database, the
+# live panel, a branch-restricted order extract) and `deploy/env.azure` is
+# backend/.env with the key stripped.
+# Both are rebuilt by the deploy steps in docs/DEPLOYMENT.md; neither belongs
+# in the history.
+deploy/bundle/
+deploy/context/
+deploy/env.azure
+
 # --- client source data: large, and not ours to commit ---
 data/source/
 OneDrive_1_08-09-2026.zip

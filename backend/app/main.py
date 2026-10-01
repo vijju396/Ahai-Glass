@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.router import api_router
 from app.core.config import get_settings
@@ -116,7 +119,48 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router)
+    _mount_web_app(app, settings.web_dist_dir)
     return app
+
+
+def _mount_web_app(app: FastAPI, dist: Path) -> None:
+    """Serve the built React app from this process, if a build is present.
+
+    Mounted **after** the API router, so every `/api` route is matched first and
+    the catch-all below only ever sees what the API did not claim. An unknown
+    `/api/...` path still 404s rather than being answered with the HTML shell —
+    a page returned where JSON was asked for is the kind of thing that shows up
+    as an unreadable parse error three layers away.
+
+    Anything else falls back to `index.html`, because the router is a
+    `BrowserRouter`: `/forecasting` is a real URL a reader can paste or reload,
+    and only the browser knows what it means.
+
+    No build, no mount. That is the development case — Vite owns the page on
+    :5173 and proxies `/api` here — so this changes nothing locally (D-136).
+    """
+    index = dist / "index.html"
+    if not index.is_file():
+        logger.info("web_app_not_mounted", extra={"dist": str(dist)})
+        return
+
+    assets = dist / "assets"
+    if assets.is_dir():
+        # Hashed filenames, so these are safe to mount as plain static files.
+        app.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+    root = dist.resolve()
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def web_app(path: str) -> Response:
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        candidate = (root / path).resolve()
+        if path and candidate.is_file() and candidate.is_relative_to(root):
+            return FileResponse(candidate)
+        return FileResponse(index)
+
+    logger.info("web_app_mounted", extra={"dist": str(dist)})
 
 
 app = create_app()

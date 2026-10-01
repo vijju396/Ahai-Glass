@@ -8,8 +8,15 @@
  *
  * The lines offered come from the **run**, not from the panel. A scoped run
  * covers a subset of the network, and offering a line it never trained would
- * open a leaderboard with nothing on it. The two slicers narrow each other for
- * the same reason — the same rule the Per Branch & SKU page follows.
+ * open a leaderboard with nothing on it.
+ *
+ * **There is no "All locations" and no "All SKUs".** Both were removed on
+ * request along with the aggregate scopes on Forecasting: a line is what a
+ * planner acts on, and the page now opens on one. Picking a location whose SKU
+ * list does not hold the current SKU moves to that location's first SKU rather
+ * than emptying the page (D-133). The run-wide figures did not go with them —
+ * they sit below the race, where they read as a summary of the lines rather
+ * than as a scope you selected.
  *
  * A 4px green dot, visible only while the list is open, marks an option whose
  * lines **all** forecast at 85% or better on their own, measured on months no
@@ -23,6 +30,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchScopes, leaderboardKeys } from '@/api/leaderboard';
+import { repair } from '@/app/seriesPair';
 import { useLinesAtTarget } from './useLinesAtTarget';
 import { MarkedSelect } from '@/components/ui/MarkedSelect';
 
@@ -96,20 +104,24 @@ export function SeriesFilter({
     const mark = (candidates: { key: string }[]) =>
       candidates.length > 0 && candidates.every((l) => atTarget.has(l.key));
     return {
-      branch: (b: string) => mark(lines.filter((l) => l.branch === b && (!sku || l.sku === sku))),
-      sku: (s: string) => mark(lines.filter((l) => l.sku === s && (!branch || l.branch === branch))),
+      branch: (b: string) => mark(lines.filter((l) => l.branch === b)),
+      sku: (s: string) => mark(lines.filter((l) => l.sku === s && l.branch === branch)),
     };
-  }, [lines, atTarget, branch, sku]);
+  }, [lines, atTarget, branch]);
 
+  /* Every location is offered whatever the SKU says, because picking one now
+     moves the SKU rather than filtering the list — a location list that shrank
+     as you chose would hide locations that are perfectly selectable. */
   const branchOptions = useMemo(
-    () => [...new Set(lines.filter((l) => !sku || l.sku === sku).map((l) => l.branch))].sort(),
-    [lines, sku],
+    () => [...new Set(lines.map((l) => l.branch))].sort(),
+    [lines],
   );
   const skuOptions = useMemo(
-    () => [...new Set(lines.filter((l) => !branch || l.branch === branch).map((l) => l.sku))].sort(),
+    () => [...new Set(lines.filter((l) => l.branch === branch).map((l) => l.sku))].sort(),
     [lines, branch],
   );
-  const selected = branch && sku;
+  const pick = (next: { branch: string; sku: string }, changed: 'branch' | 'sku') =>
+    onChange(repair(lines, next, changed));
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
@@ -120,35 +132,22 @@ export function SeriesFilter({
         label="Location"
         className={SELECT}
         value={branch}
-        onChange={(next) => onChange({ branch: next, sku })}
-        options={[
-          { value: '', label: 'All locations' },
-          ...branchOptions.map((b) => ({ value: b, label: b, marked: strong.branch(b) })),
-        ]}
+        onChange={(next) => pick({ branch: next, sku }, 'branch')}
+        options={branchOptions.map((b) => ({ value: b, label: b, marked: strong.branch(b) }))}
       />
       <MarkedSelect
         label="SKU"
         className={SELECT}
         value={sku}
-        onChange={(next) => onChange({ branch, sku: next })}
-        options={[
-          { value: '', label: 'All SKUs' },
-          ...skuOptions.map((s) => ({ value: s, label: s, marked: strong.sku(s) })),
-        ]}
+        onChange={(next) => pick({ branch, sku: next }, 'sku')}
+        options={skuOptions.map((s) => ({ value: s, label: s, marked: strong.sku(s) }))}
       />
-      {(branch || sku) && (
-        <button
-          type="button"
-          className="link-button text-[11px]"
-          onClick={() => onChange({ branch: '', sku: '' })}
-        >
-          Clear
-        </button>
-      )}
+      <span className="text-[10px] text-[var(--color-text-muted)]">
+        {skuOptions.length} SKUs here
+      </span>
       <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">
-        {selected
-          ? 'Accuracy and the leaderboard below are for this line alone.'
-          : `Every figure below covers all ${lines.length} branch × SKU lines this run trained.`}
+        The race and the leaderboard are for this line alone. The run-wide figures below
+        cover all {lines.length} lines.
       </span>
     </div>
   );

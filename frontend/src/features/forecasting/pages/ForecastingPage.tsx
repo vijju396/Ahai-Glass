@@ -7,6 +7,16 @@
  * and this page names the model and the measured error for whichever series
  * you selected rather than a single headline accuracy.
  *
+ * There is no "All locations" and no "All SKUs". Both used to resolve to a
+ * real forecast — the national and per-branch *aggregate* scopes — and both
+ * were removed on request, because an aggregate is a separate model fitted to
+ * summed demand and its error transfers to nothing underneath it. On this run
+ * the national scope reported 169.87% MAPE while the median line was 10.45%
+ * over the six-month total; the first number described a weekly national sum
+ * and was read as the accuracy of the forecast. The aggregates are still
+ * fitted — MinT reconciliation needs the hierarchy to make the lines add up —
+ * they are simply not a thing this page will show you (D-133).
+ *
  * Three things it refuses to blur:
  *
  * - **q80/q90/q95 are service levels, not a confidence band.** q95 is the
@@ -17,7 +27,7 @@
  * - **The reconciliation adjustment stays a separate column** from the
  *   forecast it adjusted.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   CartesianGrid,
@@ -37,8 +47,9 @@ import { MarkedSelect } from '@/components/ui/MarkedSelect';
 import { monthLabel } from '@/components/charts/Chart';
 import { ApiError } from '@/api/client';
 import { fetchCurrentForecastRun, fetchSeriesForecast, forecastKeys } from '@/api/forecasts';
-import { accuracyKeys, fetchAccuracyWindows, fetchCurrentRun, trainingKeys } from '@/api/training';
 import { periodNounOne } from '@/app/period';
+import { firstPair, repair } from '@/app/seriesPair';
+import { LineSummaryTiles } from '@/features/line-summary/LineSummaryTiles';
 import { fetchScopes, leaderboardKeys } from '@/api/leaderboard';
 import {
   analyticsKeys,
@@ -121,19 +132,39 @@ export function ForecastingPage() {
     () =>
       (scopes.data?.items ?? []).flatMap((s) => {
         const parts = splitSeries(s.scope_key);
-        return parts ? [{ scope_key: s.scope_key, ...parts }] : [];
+        return parts ? [{ key: s.scope_key, ...parts }] : [];
       }),
     [scopes.data],
   );
+
+  /* The page opens on a line rather than on nothing. Every location is offered
+     whatever the SKU says, because picking one now *moves* the SKU rather than
+     filtering it away — a list that shrank as you chose would hide locations
+     that are perfectly selectable. */
+  useEffect(() => {
+    if (branch || parsed.length === 0) return;
+    const start = firstPair(parsed);
+    setBranch(start.branch);
+    setSku(start.sku);
+  }, [parsed, branch]);
+
   const branchOptions = useMemo(
-    () => [...new Set(parsed.filter((r) => !sku || r.sku === sku).map((r) => r.branch))].sort(),
-    [parsed, sku],
+    () => [...new Set(parsed.map((r) => r.branch))].sort(),
+    [parsed],
   );
   const skuOptions = useMemo(
-    () => [...new Set(parsed.filter((r) => !branch || r.branch === branch).map((r) => r.sku))].sort(),
+    () => [...new Set(parsed.filter((r) => r.branch === branch).map((r) => r.sku))].sort(),
     [parsed, branch],
   );
-  const matching = parsed.filter((r) => (!branch || r.branch === branch) && (!sku || r.sku === sku));
+
+  /* Changing either slicer repairs the other, so the pair always names a line
+     the run trained. Picking a location whose SKU list does not include the
+     current one lands on that location's first SKU (D-133). */
+  const pick = (next: { branch: string; sku: string }, changed: 'branch' | 'sku') => {
+    const fixed = repair(parsed, next, changed);
+    setBranch(fixed.branch);
+    setSku(fixed.sku);
+  };
 
   /* A small green dot trails an option whose lines *all* clear 85% accuracy on their
      own, narrowed by whatever the other slicer already says. "All" rather than
@@ -141,44 +172,40 @@ export function ForecastingPage() {
      meaning "strong somewhere" would walk a demo into a branch that is not. */
   const atTarget = useLinesAtTarget();
   const strong = useMemo(() => {
-    const mark = (candidates: { scope_key: string }[]) =>
-      candidates.length > 0 && candidates.every((r) => atTarget.has(r.scope_key));
+    const mark = (candidates: { key: string }[]) =>
+      candidates.length > 0 && candidates.every((r) => atTarget.has(r.key));
     return {
-      branch: (b: string) => mark(parsed.filter((r) => r.branch === b && (!sku || r.sku === sku))),
-      sku: (s: string) => mark(parsed.filter((r) => r.sku === s && (!branch || r.branch === branch))),
+      branch: (b: string) => mark(parsed.filter((r) => r.branch === b)),
+      sku: (s: string) => mark(parsed.filter((r) => r.sku === s && r.branch === branch)),
     };
-  }, [parsed, atTarget, branch, sku]);
+  }, [parsed, atTarget, branch]);
 
-  /** Which forecast scope the current selection addresses.
+  /** The line the current selection addresses — always a series, never an
+   *  aggregate.
    *
-   *  The page used to resolve only when exactly one series matched, so "All
-   *  locations / All SKUs" and "one location / All SKUs" both showed nothing
-   *  — even though the run holds a national forecast and one per branch.
-   *  Every selection that corresponds to a real forecast scope now resolves
-   *  to it, and the level is named on screen so an aggregate figure is never
-   *  mistaken for a cell.
-   *
-   *  The one combination with no scope is a single SKU across branches: the
-   *  hierarchy has no SKU level, so nothing was modelled for it. That is
-   *  stated rather than silently shown as empty. */
-  const resolved = useMemo((): { level: string; key: string; label: string } | null => {
-    if (branch && sku) {
-      const hit = matching.find((r) => r.branch === branch && r.sku === sku);
-      return hit ? { level: 'series', key: hit.scope_key, label: `${branch} × ${sku}` } : null;
-    }
-    if (branch && !sku) return { level: 'branch', key: branch, label: `all SKUs at ${branch}` };
-    if (!branch && !sku)
-      return { level: 'national', key: 'NATIONAL', label: 'every branch and SKU in scope' };
-    return null;
-  }, [branch, sku, matching]);
+   *  The page used to also resolve "All locations" to the **national** scope
+   *  and "one location / All SKUs" to that **branch** scope. Both are real
+   *  forecasts, but they are separately fitted models over *summed* demand,
+   *  and their error is not the error of anything underneath them: the
+   *  national scope on this run reports 169.87% MAPE against 10.45% for the
+   *  median line over the same horizon, because weekly national demand is
+   *  volatile and MAPE punishes small denominators. Showing that number
+   *  beside a model name invited exactly one reading — "the forecast is 170%
+   *  wrong" — and it was never true of any line a planner orders against.
+   *  Both aggregate levels are gone from the picker; they are still fitted,
+   *  because MinT reconciliation needs the hierarchy to make the lines add up
+   *  (D-133). */
+  const resolved = useMemo((): { key: string; label: string } | null => {
+    if (!branch || !sku) return null;
+    const hit = parsed.find((r) => r.branch === branch && r.sku === sku);
+    return hit ? { key: hit.key, label: `${branch} × ${sku}` } : null;
+  }, [branch, sku, parsed]);
 
-  const scopeLevel = resolved?.level ?? '';
   const scopeKey = resolved?.key ?? '';
-  const isAggregate = Boolean(resolved) && resolved!.level !== 'series';
 
   const series = useQuery({
-    queryKey: forecastKeys.series(scopeLevel, scopeKey),
-    queryFn: () => fetchSeriesForecast(scopeLevel, scopeKey),
+    queryKey: forecastKeys.series('series', scopeKey),
+    queryFn: () => fetchSeriesForecast('series', scopeKey),
     enabled: Boolean(scopeKey),
     retry: false,
   });
@@ -188,30 +215,6 @@ export function ForecastingPage() {
     queryFn: () => fetchDrift(branch || undefined, sku || undefined),
     retry: false,
   });
-
-  // This line's accuracy over the six-month total — the same window the
-  // headline panel reports — so drilling into a line does not swap the
-  // measurement out from under the reader. Read from the accuracy-windows
-  // endpoint rather than recomputed: the frontend carries no forecasting
-  // arithmetic.
-  const currentRun = useQuery({
-    queryKey: trainingKeys.current,
-    queryFn: fetchCurrentRun,
-    retry: false,
-    staleTime: 60_000,
-  });
-  const accuracyRunId = currentRun.data?.id;
-  const accuracy = useQuery({
-    queryKey: accuracyKeys.windows(accuracyRunId ?? '', null),
-    queryFn: () => fetchAccuracyWindows(accuracyRunId as string, null),
-    enabled: !!accuracyRunId,
-    retry: false,
-    staleTime: 60_000,
-  });
-  const lineAccuracy =
-    scopeLevel === 'series'
-      ? (accuracy.data?.series ?? []).find((row) => row.scope_key === scopeKey)
-      : undefined;
 
   const data = series.data;
   const forecasts = data?.forecasts ?? [];
@@ -225,18 +228,6 @@ export function ForecastingPage() {
   const rollupHasBand = rollup.some(
     (m) => m.q95 != null && m.q95 !== m.point_forecast,
   );
-  const firstRollup = rollup[0];
-  const nextMonth = firstRollup
-    ? {
-        value: firstRollup.point_forecast,
-        label: `${monthLabel(firstRollup.month)}${
-          firstRollup.complete ? '' : ' (part month)'
-        } · ${firstRollup.periods} weeks`,
-      }
-    : forecasts[0]
-      ? { value: forecasts[0].point_forecast, label: monthLabel(forecasts[0].period) }
-      : null;
-
 
   return (
     <div className="flex flex-col gap-4">
@@ -267,11 +258,12 @@ export function ForecastingPage() {
               label="Location"
               className={SELECT}
               value={branch}
-              onChange={setBranch}
-              options={[
-                { value: '', label: 'All locations' },
-                ...branchOptions.map((b) => ({ value: b, label: b, marked: strong.branch(b) })),
-              ]}
+              onChange={(next) => pick({ branch: next, sku }, 'branch')}
+              options={branchOptions.map((b) => ({
+                value: b,
+                label: b,
+                marked: strong.branch(b),
+              }))}
             />
           </label>
           <label className="inline-flex flex-col gap-0.5">
@@ -282,37 +274,31 @@ export function ForecastingPage() {
               label="SKU"
               className={SELECT}
               value={sku}
-              onChange={setSku}
-              options={[
-                { value: '', label: 'All SKUs' },
-                ...skuOptions.map((s) => ({ value: s, label: s, marked: strong.sku(s) })),
-              ]}
+              onChange={(next) => pick({ branch, sku: next }, 'sku')}
+              options={skuOptions.map((s) => ({ value: s, label: s, marked: strong.sku(s) }))}
             />
           </label>
+          <span className="pb-1.5 text-[10px] text-[var(--color-text-muted)]">
+            {skuOptions.length} SKUs at this location
+          </span>
         </div>
-        <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
-          {resolved ? (
-            <>
-              Forecasting <strong>{resolved.label}</strong> — the{' '}
-              <strong>{resolved.level}</strong> scope{' '}
-              <span className="mono text-[10px]">{scopeKey}</span>.
-            </>
-          ) : (
-            <>
-              <strong>{sku}</strong> is stocked at {matching.length} branches, and the
-              forecast hierarchy has no SKU level — nothing was modelled for one SKU across
-              branches. Pick a location too, or clear the SKU.
-            </>
-          )}{' '}
-          Only scopes a training run actually reached are listed — one it did not reach does
-          not appear here.
-          {run.data && (
-            <>
-              {' '}Origin {monthLabel(run.data.origin_period)}, reconciled by{' '}
-              {run.data.reconciliation_method}.
-            </>
-          )}
-        </p>
+        {/* Provenance only. This used to carry three sentences of explanation
+            under the two pickers — a restatement of the selection the pickers
+            already show, a note that only trained lines are listed, and the
+            reasoning for dropping the aggregate scopes — and it was removed on
+            request. The selection is visible in the controls above it and in
+            the Outlook panel's own title; the reasoning belongs in D-133, not
+            over the reader's shoulder every time they change a SKU.
+
+            What stays is the pair of facts that are *not* stated anywhere else
+            on the page: which origin this forecast was made from, and how it
+            was reconciled (D-134). */}
+        {run.data && (
+          <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+            Origin {monthLabel(run.data.origin_period)}, reconciled by{' '}
+            {run.data.reconciliation_method}.
+          </p>
+        )}
         {run.isError && run.error instanceof ApiError && (
           <p className="hint mt-1">
             {run.error.message} {run.error.remediation}
@@ -320,18 +306,11 @@ export function ForecastingPage() {
         )}
       </Card>
 
-      {!resolved && (
-        <>
-          <DriftPanel query={drift} />
-        </>
-      )}
-
-      {!resolved && (
+      {parsed.length === 0 && scopes.isSuccess && (
         <Card>
-          <EmptyState title="No forecast scope for one SKU across branches">
-            The hierarchy is national → region → branch → branch × SKU. A single SKU spanning
-            several branches is not a level in it, so no model was fitted and no forecast
-            exists. Choose a location as well, or clear the SKU for the national view.
+          <EmptyState title="No trained line to forecast">
+            This run reached no branch × SKU line, so there is nothing to show. Train a run
+            from the Training page and this page fills in.
           </EmptyState>
         </Card>
       )}
@@ -355,64 +334,7 @@ export function ForecastingPage() {
 
       {data && (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            {/* A planner buys by the month, so this tile stays a month even
-                when the panel is weekly: at weekly grain it shows the first
-                month of the roll-up rather than the first week, and says how
-                many weeks that month was built from. Showing a single week
-                under a "next month" label would understate demand roughly
-                fourfold. */}
-            <StatTile
-              label="Next-month forecast"
-              value={formatInt(nextMonth?.value)}
-              sublabel={nextMonth ? `${nextMonth.label} · reconciled units` : 'unavailable'}
-              tint="blue"
-              accent
-            />
-            <StatTile
-              label="Model chosen for this series"
-              value={metrics?.display_name ?? '—'}
-              sublabel="selected on this series alone"
-              tint="navy"
-            />
-            {/* MAPE, not WAPE. MAPE is the metric the champion for this series
-                was selected on (D-043), so the error quoted beside the model
-                name is the error that chose it. WAPE is still computed and
-                still on the leaderboard; quoting it here named one metric while
-                the selection used another. */}
-            {/* The six-month figure where this line has one, because that is
-                what the headline panel reports and what a plan is held to.
-                The single-period figure stays in the sublabel rather than
-                being dropped: on five lines of this run the six-month number
-                is the *worse* of the two, and a tile showing only the
-                flattering one would be picking per line. */}
-            <StatTile
-              label={lineAccuracy?.horizon_accuracy_pct != null ? 'Accuracy, six-month total' : 'Measured error'}
-              value={
-                lineAccuracy?.horizon_accuracy_pct != null
-                  ? `${lineAccuracy.horizon_accuracy_pct.toFixed(1)}%`
-                  : metrics?.mape == null
-                    ? '—'
-                    : `${metrics.mape.toFixed(2)}% MAPE`
-              }
-              sublabel={
-                lineAccuracy?.horizon_accuracy_pct != null
-                  ? `one ${periodNounOne(data.panel_grain)}: ${
-                      lineAccuracy.champion_accuracy_pct == null
-                        ? '—'
-                        : `${lineAccuracy.champion_accuracy_pct.toFixed(1)}%`
-                    } · out of sample`
-                  : `out of sample · ${formatInt(metrics?.validation_points)} points`
-              }
-              tint="teal"
-            />
-            <StatTile
-              label="Horizons available"
-              value={`${forecasts.filter((f) => f.point_forecast !== null).length} / ${forecasts.length}`}
-              sublabel="a horizon with no forecast says why"
-              tint="amber"
-            />
-          </div>
+          <LineSummaryTiles scopeKey={scopeKey} />
 
           <Panel
             title={`Outlook — ${scopeKey}`}
@@ -447,18 +369,6 @@ export function ForecastingPage() {
             )}
             <Explain variant="note">{data.snapshot_caveat}</Explain>
           </Panel>
-
-          {isAggregate && (
-            <div className="rounded-lg border border-[var(--color-warning,#a15c07)]/35 bg-[var(--color-warning,#a15c07)]/5 px-3 py-2">
-              <p className="text-[11px] leading-relaxed text-[var(--color-text)]">
-                <strong>This is an aggregate.</strong> Aggregate demand is far less
-                intermittent than a single branch × SKU cell and much easier to forecast, so
-                this error does <strong>not</strong> transfer down — do not read it as the
-                accuracy you would get on one product at one branch. Pick a location and a
-                SKU for that.
-              </p>
-            </div>
-          )}
 
           {rollup.length > 0 && (
             <Panel
@@ -547,7 +457,16 @@ export function ForecastingPage() {
             <Panel
               title="Why this model, for this series"
               accent={GREEN}
-              note="Measured out of sample on this series only. Aggregate error does not transfer down: an aggregate is far less intermittent and much easier to forecast than a single branch × SKU cell."
+              /* The span has to be named here, because this MAPE and the one
+                 on the tile above are different numbers for the same line —
+                 89.1% against 1.9% — and the tile no longer carries the
+                 single-period reading that used to bridge them. These are the
+                 selection metrics: one period at a time, which is what the
+                 champion was chosen on. The tile is the six-month total, where
+                 the misses cancel (D-134). */
+              note={`Measured out of sample on this series only, one ${periodNounOne(
+                data.panel_grain,
+              )} at a time — these are the figures the champion was selected on, so this MAPE is larger than the six-month one in the tile above. Aggregate error does not transfer down either: an aggregate is far less intermittent and much easier to forecast than a single branch × SKU cell.`}
             >
               <div className="metric-row">
                 {[
@@ -577,7 +496,7 @@ export function ForecastingPage() {
             </Panel>
           )}
 
-                    <DriftPanel query={drift} />
+          <DriftPanel query={drift} />
 
           {data.drivers && (
             <Panel title="What the model was given" accent={SLATE} note="The inputs and the values it resolved for this series.">

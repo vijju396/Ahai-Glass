@@ -31,7 +31,8 @@ describe('accessibility and navigation', () => {
     // Was [1..10]. Three of the original ten were removed from the UI on
     // request (D-052), Scenario Planner (index 8) later on request too
     // (D-086), and Supply Intelligence (index 7) after that, replaced in the
-    // Operations section by Lead Time (index 24, D-105); the survivors keep
+    // Operations section by Ordered vs Dispatched Time (index 24, D-105,
+    // renamed in D-133); the survivors keep
     // their original numbers rather than being renumbered - the gaps are the
     // record of what went.
     // `REQUIRED_NAV_ITEMS` sorts by index; `REQUIRED_NAV_INDEXES` is in nav
@@ -102,7 +103,9 @@ describe('accessibility and navigation', () => {
       'Per Branch & SKU',
       'Training',
       'Forecasting',
-      'Lead Time',
+      // Renamed from "Lead Time": the page measures Despatch Date minus Order
+      // Date, which stops at despatch and never reaches receipt (D-133).
+      'Ordered vs Dispatched Time',
       'AI Assistant',
       'AI Recommendations',
     ]) {

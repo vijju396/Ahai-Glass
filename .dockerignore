@@ -1,0 +1,49 @@
+# What must never reach a build context.
+#
+# `backend/.env` is first on the list and is the one that matters: it holds a
+# live OpenAI key, and anything copied into an image stays in that image's
+# layers whether or not a later line deletes it. The deployment reads
+# `deploy/env.azure` instead — the same settings with the key removed — and
+# receives the key itself as a Container Apps secret.
+
+backend/.env
+frontend/.env.local
+*.pem
+*.key
+
+# --- rebuilt inside the image ---
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# --- not needed at run time ---
+.git/
+.claude/
+docs/
+runtime/backups/
+runtime/logs/
+backend/mlruns/
+AIS-forecasting-analysis.html
+OneDrive_1_08-09-2026.zip
+*.zip
+
+# --- the working data, superseded by the bundle ---
+# Nothing under runtime/ or data/ is copied directly any more. The image takes
+# `deploy/bundle/`, which `scripts/build_scoped_bundle.py` builds: the live run
+# and its panel, the order durations cut to the workspace branches, and a
+# `sqlite3 .backup` of the database pruned to the same scope (D-137). Keeping
+# these out of the context is most of why it fell from 348 MB to 68 MB.
+runtime/
+data/
+deploy/db/
+
+.DS_Store
+Thumbs.db
+desktop.ini

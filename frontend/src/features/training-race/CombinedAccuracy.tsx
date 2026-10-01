@@ -102,10 +102,19 @@ export function CombinedAccuracy() {
           hint={horizon ? 'over six months, higher is better' : `per ${unitOne}, higher is better`}
           strong
         />
+        {/* Named for the metric it is, not just for what it does. The two
+            screens that quote a line's error now both say "MAPE" beside the
+            accuracy it pairs with, so a figure can be carried from Training to
+            Forecasting without a reader having to work out whether the two
+            words mean the same measurement (D-134). */}
         <Metric
           value={m.mape_pct}
-          label="Average miss"
-          hint={horizon ? 'over six months, lower is better' : `per ${unitOne}, lower is better`}
+          label="MAPE"
+          hint={
+            horizon
+              ? 'average miss across the six months, lower is better'
+              : `average miss per ${unitOne}, lower is better`
+          }
         />
         <Metric
           value={m.weighted_accuracy_pct}
@@ -115,20 +124,24 @@ export function CombinedAccuracy() {
         <Metric value={m.wape_pct} label="Volume-weighted miss" hint="miss as a share of volume, lower is better" />
       </div>
 
-      {/* The single-period figure is kept in view rather than replaced. Six
-          months is the number a plan is held to, but it is a larger total with
-          the misses cancelling inside it; a reader who takes 82.8% to mean
-          "any given week lands within 17%" has misread it, and the only
-          reliable guard against that is showing both. */}
-      {horizon && perPeriod && perPeriod.accuracy_pct != null && (
+      {/* The single-{unitOne} accuracy used to be quoted here beside the
+          six-month one. It was dropped on request — two accuracies measured
+          over different spans, on one panel, is a question nobody asked, and
+          Forecasting dropped its copy of the same figure at the same time.
+
+          What is *not* dropped is the reason it was there. A six-month total
+          is higher than a single period because misses inside the window
+          cancel, so reading it as "any given week lands this close" is a real
+          misreading, and the lines that get *worse* over the window are the
+          proof that cancelling is not automatic. That caution is now stated in
+          words rather than by printing a second number (D-134). */}
+      {horizon && (
         <p className="mt-3 border-t border-[var(--color-border)] pt-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-          <strong>One {unitOne} on its own is {perPeriod.accuracy_pct.toFixed(1)}% accurate</strong>
-          {perPeriod.weighted_accuracy_pct != null &&
-            ` (${perPeriod.weighted_accuracy_pct.toFixed(1)}% volume-weighted)`}
-          . It is the same forecasts either way — six months is higher because
-          over- and under-forecasts inside the window cancel, not because the
-          model is better. Plan a half-year against the figure above; do not
-          read it as what a single {unitOne} will do.{' '}
+          This is the <strong>average miss across the whole six months</strong>, not
+          what a single {unitOne} does. Over- and under-forecasts inside the window
+          cancel, so the half-year total lands closer than any {unitOne} in it —
+          plan a half-year against this figure, and open a line for that line&rsquo;s
+          own numbers.{' '}
           {horizon.series_at_target} of {horizon.series_scored} lines clear{' '}
           {d.target_accuracy_pct}% on their own over six months
           {horizon.meets_target === false &&

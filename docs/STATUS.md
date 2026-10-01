@@ -4510,3 +4510,204 @@ in the browser: 16 months, 32 line points, 62 bars, both trend lines rising.
 ```
 backend 970 passed · frontend 244 passed (21 files) · tsc --noEmit clean
 ```
+
+## Training and Forecasting start at a line — 1 October 2026 (D-133)
+
+The Forecasting page showed **169.87% MAPE** at All locations / All SKUs. It was
+neither an average of the lines nor a sum of them: "All locations" resolved to
+the **national scope**, a separate thirteen-model race run on the week-by-week
+sum of every branch × SKU cell. Its error describes that sum and nothing
+underneath it.
+
+```
+scope                       model                      MAPE       WAPE
+national  NATIONAL           ES Additive             169.87%    35.87%
+branch    BENGALURU          ES Additive              71.29%    42.68%
+branch    DELHI-1            ES Additive              81.36%    41.98%
+median line, six-month total                          10.45%    13.05%
+```
+
+A second defect compounded it: the tile reads the six-month accuracy when the
+scope is a series and falls back to the raw per-period MAPE when it is not, so
+the same tile answered a different question depending on the selection.
+
+Both aggregate levels are now off the pickers on Forecasting and Training. Both
+pages open on a line — first in branch order, then SKU order — and picking a
+location that does not stock the current SKU moves to that location's first SKU
+rather than emptying the page. Training's run-wide panels (combined accuracy,
+the per-model table, the train control) moved below the race instead of being
+deleted with the "All" selection that used to gate them; both figures in them
+are per-line medians, which is the averaging the request asked for.
+
+**The aggregates are still fitted.** MinT reconciliation needs the hierarchy —
+the current run reports `coherent: true`, `max_incoherence: 0.0` — so only the
+pickers changed.
+
+Lead Time is renamed **Ordered vs Dispatched Time**: the page measures Despatch
+Date minus Order Date, which stops at despatch and never reaches receipt. Route
+and nav index are unchanged.
+
+Files changed: `frontend/src/app/seriesPair.ts` (new),
+`frontend/src/features/forecasting/pages/ForecastingPage.tsx`,
+`frontend/src/features/training-race/SeriesFilter.tsx`,
+`frontend/src/features/training-explained/components/TrainingMonitor.tsx`,
+`frontend/src/components/ui/MarkedSelect.tsx`,
+`frontend/src/features/lead-time/pages/LeadTimePage.tsx`,
+`frontend/src/app/navigation.ts`, `frontend/src/test/accessibility.test.tsx`.
+New tests: `frontend/src/app/__tests__/seriesPair.test.ts` (8),
+`frontend/src/features/training-race/__tests__/SeriesFilter.test.tsx` (6).
+
+```
+frontend 268 passed (24 files) · tsc --noEmit clean
+```
+
+Verified in the browser: Forecasting opens on BENGALURU × FG.ALP.LFH.GCG2120000
+at 98.1% over the six-month total, the location list offers two rows and neither
+is "All", switching to DELHI-1 lands on its own first SKU (134 offered against
+BENGALURU's 136), Training opens on the same line with the 89.5% run-wide figure
+beneath it, no console errors, no sideways overflow at 375 px. The backend suite
+was not re-run: no backend file changed.
+
+## Accuracy and MAPE, both printed, on both screens — 1 October 2026 (D-134)
+
+Requested after D-133 removed the aggregate scopes: show the MAPE beside the
+accuracy, drop the single-period reading, and make Training and Forecasting say
+it the same way.
+
+**MAPE is 100 − accuracy on 257 of the run's 261 lines.** It is carried on the
+payload anyway, because accuracy floors at zero and on the four lines that
+floor, the subtraction is wrong on three of them:
+
+```
+line                              accuracy    100 - accuracy    measured MAPE
+BENGALURU|FG.J90.LFH.SCSB1B0000       0.0%            100.0%          102.76%
+DELHI-1|FG.BA3.LFH.GCG2120000         0.0%            100.0%          140.78%
+DELHI-1|FG.MF8.LFH.GCG2120000         0.0%            100.0%          357.53%
+DELHI-1|FG.MP6.LFH.GCG2120000         0.0%            100.0%          100.00%
+```
+
+`accuracy_windows` gained `series_error()` and three per-line fields. The
+Forecasting tile reads `98.1% · 1.9% MAPE`; Training's combined panel renames
+*Average miss* to **MAPE**; both carry the same "average miss across the six
+months" wording. The single-period accuracy came off both, and the caution it
+carried is written out in words instead.
+
+Forecasting's "Why this model" panel reports the single-period selection
+metrics — 89.1% MAPE on the line whose tile says 1.9% — so its note now names
+its own span and says why it is the larger number.
+
+Files changed: `backend/app/services/training/accuracy_windows.py`,
+`frontend/src/api/training.ts`,
+`frontend/src/features/forecasting/pages/ForecastingPage.tsx`,
+`frontend/src/features/training-race/CombinedAccuracy.tsx`.
+New tests: `backend/tests/test_accuracy_window_error_is_carried.py` (5).
+
+```
+backend 1,077 passed · frontend 268 passed (24 files) · tsc --noEmit clean
+```
+
+The backend was restarted to serve the new fields — uvicorn runs without
+`--reload`.
+
+The explanatory paragraph under Forecasting's two pickers was removed on
+request — it restated the selection and argued the aggregate-scope case. Only
+the run provenance (origin and reconciliation method) stays, because nothing
+else on the page carries it. Frontend 268 passed, `tsc --noEmit` clean.
+
+## Training shows the line's four tiles, from the same component as Forecasting
+
+Training picked a branch × SKU line and raced thirteen models on it without ever
+stating the four plain facts about that line. It states them now — chosen model,
+measured accuracy and MAPE over the six-month total, next-month forecast,
+horizons returned — as **the same component Forecasting renders**, not a copy
+(`src/features/line-summary/LineSummaryTiles.tsx`, D-135). The accuracy tile has
+been reworded twice in two days; a copy would already be out of step.
+
+The component issues its own queries under the keys Forecasting already uses, so
+that page makes no extra request and Training fetches once. On
+`BENGALURU|FG.ALP.LFH.GCG2120000` both pages read `98.1% · 1.9% MAPE`, which is
+also what the leaderboard directly beneath the tiles reports for the champion.
+268 frontend tests pass and `tsc --noEmit` is clean.
+
+## Deployed to Azure, carrying the workspace's data only
+
+**URL:** https://ca-aisglass-demo.blackhill-cbe3225f.centralindia.azurecontainerapps.io
+
+One container: FastAPI serves the API and the built React page from the same
+origin, so there is one URL, no CORS list and no build-time API address
+(D-136). Resource group `rg-aisglass-demo-ci`, registry `acraisglassdemoci`,
+environment `cae-aisglass-demo`, app `ca-aisglass-demo` at 2 vCPU / 4 GiB,
+one replica, external ingress on 8000. Revision `ca-aisglass-demo--v2`.
+
+The image carries **67.9 MB of data instead of 348 MB** (D-137): one training
+run, its panel and fitted models, an order-duration extract cut to the two
+workspace branches, and Location Master. Four client workbooks are withheld,
+so ingestion and preprocessing are unavailable there and `/api/health` says so
+by name rather than reporting four files mysteriously missing.
+
+### Two pages were returning 500, and why
+
+`/api/analytics/summary` and `/api/inventory/recommendations` failed on the
+first deployment with
+`FileNotFoundError: '/Users/HXT/ashai glass/Ahai-Glass/runtime/storage/prepared/panel_…/panel.parquet'`.
+The database records artefact locations as absolute paths **on the machine that
+trained the run**. The bundle script now rewrites the development project root
+to `/app` across every text column of every table and every shipped manifest,
+then asserts none survives — seven columns in five tables, two of them inside
+JSON blobs, and two manifest files. Both endpoints return 200 on v2.
+
+### What was checked against the running deployment
+
+All **37 parameterless GET endpoints return 200**. The one that did not —
+`/api/inventory/transferable` — was my missing required `canonical_sku`; with
+it, 200 on both sides. `/api/openapi.json` reports **69 paths, 74 operations**,
+which is the documented count.
+
+Eleven payloads were compared field by field against the local app:
+
+```
+identical  /api/analytics/summary            (334 fields)
+identical  /api/analytics/branch-scorecard   (84)
+identical  /api/analytics/exceptions         (205)
+identical  /api/analytics/impact             (91)
+identical  /api/models/leaderboard/scopes    (10)
+identical  /api/models/champions/current     (29)
+identical  /api/inventory/recommendations    (145)
+identical  /api/inventory/overview           (70)
+identical  /api/forecasts/hierarchy          (50)
+identical  /api/training/current             (182)
+DIFFERS    /api/monitoring  — 4 of 100 fields: `generated_at` and three
+           `age_days`, differing by the second between the two requests
+```
+
+`/api/analytics/lead-time-observed` differs **by design**: the observed figures
+are identical (DELHI-1 4.18 days over 10,424 lines, BENGALURU 3.73 over 19,793;
+775,912 lines parsed, 68 missing a date, 216 out of range), and the deployed
+payload carries an extra `extract` block —
+`{"lines_in_extract": 69353, "lines_in_full_parse": 775628}` — so the page
+states it is reading an extract rather than implying it read the workbook.
+
+### Every page, in the browser
+
+| Page | What it showed |
+| --- | --- |
+| Overall Analysis | ₹60.24Cr ordered, 146.8K units, 88.4% covered, all charts drawn — **this was one of the two 500s** |
+| Per Branch & SKU | 231.0K units, 20.4K unfilled, 88.3% fill rate, 271 series |
+| Training | 31 next-month · Auto ARIMA with exogenous variables · **98.1% · 1.9% MAPE** · 26/26 horizons, thirteen-model leaderboard |
+| Forecasting | the same four tiles, identical figures — the shared component (D-135) reads the same on both |
+| Ordered vs Dispatched Time | 30,217 lines used of 7,75,628, 2 branches, 216 excluded, trend chart drawn |
+| AI Assistant | live answer: 82 lines zero stock with live demand, 6,249 units, BENGALURU and DELHI-1, top line FG.BA5.LFH.GCG2120000 at 695 units |
+| AI Recommendations | 261 lines, 12 model-written, 85 critical / 155 high / 11 medium / 10 cannot-recommend — identical counts local and deployed |
+
+The workspace banner reads `2 of 53 branches · 136 of 2063 SKUs` on all seven.
+No console errors. The assistant and the recommendations both answer from the
+bundled data with a live OpenAI call (`gpt-4.1-mini`, `answered_by: openai`).
+
+### Noticed, pre-existing, not introduced here
+
+Two endpoints count the same exception differently and both pages show it:
+`/api/inventory/recommendations` reports `Zero stock, live demand` as 81 lines
+/ 6,247 units and `Short despatch` as 237 / 20,408, while the assistant's
+`stock_exceptions` tool reports 82 / 6,249 and 240 / 20,449. **The figures are
+identical local and deployed**, so this is a difference between two filters in
+the application, not a deployment defect. It is not fixed here.

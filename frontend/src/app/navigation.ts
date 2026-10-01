@@ -48,7 +48,12 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     label: 'Operations',
     items: [
-      { index: 24, label: 'Lead Time', path: '/lead-time' },
+      /* Named for what it measures. The page compares the master's stated
+         "Avg Lead Time" against Despatch Date minus Order Date — the time
+         between ordering and despatching, which is one leg of a lead time and
+         not the whole of it: it stops at despatch and never reaches receipt.
+         Calling the tab "Lead Time" claimed the whole cycle (D-133). */
+      { index: 24, label: 'Ordered vs Dispatched Time', path: '/lead-time' },
     ],
   },
   {
@@ -71,8 +76,10 @@ export const LANDING_PATH = '/overall';
  *  returning a shorter array. Index 8 (Scenario Planner) and index 7 (Supply
  *  Intelligence) were removed from the UI on request; their pages, APIs and
  *  tests are untouched, so either route can be restored by putting the item
- *  and the index back. Index 24 (Lead Time) took Supply Intelligence's place
- *  in the Operations section (D-105). */
+ *  and the index back. Index 24 (Ordered vs Dispatched Time) took Supply
+ *  Intelligence's place in the Operations section (D-105); it kept its index
+ *  and its `/lead-time` path through the rename, so no bookmark broke
+ *  (D-133). */
 export const REQUIRED_NAV_INDEXES = [20, 21, 22, 23, 24, 13, 14] as const;
 
 export const REQUIRED_NAV_ITEMS: NavItem[] = NAV_ITEMS.filter((item) =>

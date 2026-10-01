@@ -103,9 +103,12 @@ export function MarkedSelect({
     };
   }, [open]);
 
-  /* A value the options no longer offer (the other slicer narrowed it away)
-     falls back to the first row, which is the "all" row — the same thing the
-     native control did when its value stopped matching an option. */
+  /* A value the options no longer offer falls back to the first row, the same
+     thing the native control did when its value stopped matching an option.
+     That used to land on an "All locations"/"All SKUs" row; those are gone
+     (D-133), so it now lands on the first real row instead. Callers keep the
+     value inside the list — `seriesPair.repair` is how Training and
+     Forecasting do it — and this is only the frame before they have. */
   const picked = options.find((o) => o.value === value) ?? options[0];
 
   const choose = (next: string) => {

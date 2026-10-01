@@ -47,6 +47,29 @@ def _cache_root() -> Path:
     return root
 
 
+def _shipped_extract(root: Path) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]] | None:
+    """The durations a deployment carries in place of the orders workbook.
+
+    Distinguished from the ordinary cache by what it lacks: a cache is keyed on
+    a fingerprint of the file it was built from, and an extract has no such
+    file, so it carries an `extract` block instead. Returning None here means
+    "this is not one", and the caller falls through to the normal path.
+    """
+    meta_path = root / "meta.json"
+    lines_path = root / "lines.parquet"
+    if not (meta_path.is_file() and lines_path.is_file()):
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - an unreadable extract is not an outage
+        logger.warning("lead-time extract unreadable: %s", exc)
+        return None
+    extract = meta.get("extract")
+    if not extract or meta.get("fingerprint"):
+        return None
+    return pd.read_parquet(lines_path), meta.get("notes", {}), extract
+
+
 def build(
     *,
     refresh: bool = False,
@@ -65,8 +88,29 @@ def build(
     orders_path = source / ORDERS_SPEC.filename
     master_path = source / LOCATION_MASTER_SPEC.filename
 
+    root = _cache_root()
+    frame_path = root / "branches.parquet"
+    meta_path = root / "meta.json"
+    lines_path = root / "lines.parquet"
+
+    lines: pd.DataFrame | None = None
+    notes: dict[str, Any] | None = None
+    master: pd.DataFrame | None = None
+    cached_hit = False
+    extract: dict[str, Any] | None = None
+
+    # A deployment carries the parsed durations, not the 67 MB workbook they
+    # came out of (docs/DECISIONS.md D-137). `build_scoped_bundle.py` writes
+    # them with an `extract` block and no fingerprint — no fingerprint is the
+    # signal, because there is no file here to fingerprint against.
+    shipped = _shipped_extract(root)
+    if shipped is not None and not orders_path.exists() and master_path.exists():
+        lines, notes, extract = shipped
+        master = observed.read_master(master_path)
+        cached_hit = True
+
     missing = [p.name for p in (orders_path, master_path) if not p.exists()]
-    if missing:
+    if lines is None and missing:
         return {
             "empty": True,
             "reason": (
@@ -77,37 +121,27 @@ def build(
             "notes": {},
         }
 
-    root = _cache_root()
-    stamp = _fingerprint([orders_path, master_path])
-    frame_path = root / "branches.parquet"
-    meta_path = root / "meta.json"
+    if lines is None:
+        stamp = _fingerprint([orders_path, master_path])
+        if not refresh and lines_path.exists() and meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if meta.get("fingerprint") == stamp:
+                    lines = pd.read_parquet(lines_path)
+                    notes = meta["notes"]
+                    master = observed.read_master(master_path)
+                    cached_hit = True
+            except Exception as exc:  # noqa: BLE001 - a bad cache must not break the page
+                logger.warning("lead-time cache unreadable, rebuilding: %s", exc)
 
-    lines_path = root / "lines.parquet"
-    cached_hit = False
-
-    lines: pd.DataFrame | None = None
-    notes: dict[str, Any] | None = None
-    master: pd.DataFrame | None = None
-
-    if not refresh and lines_path.exists() and meta_path.exists():
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            if meta.get("fingerprint") == stamp:
-                lines = pd.read_parquet(lines_path)
-                notes = meta["notes"]
-                master = observed.read_master(master_path)
-                cached_hit = True
-        except Exception as exc:  # noqa: BLE001 - a bad cache must not break the page
-            logger.warning("lead-time cache unreadable, rebuilding: %s", exc)
-
-    if lines is None or notes is None or master is None:
-        lines, notes = observed.read_durations(orders_path)
-        master = observed.read_master(master_path)
-        lines.to_parquet(lines_path, index=False)
-        meta_path.write_text(
-            json.dumps({"fingerprint": stamp, "notes": notes}, default=str),
-            encoding="utf-8",
-        )
+        if lines is None or notes is None or master is None:
+            lines, notes = observed.read_durations(orders_path)
+            master = observed.read_master(master_path)
+            lines.to_parquet(lines_path, index=False)
+            meta_path.write_text(
+                json.dumps({"fingerprint": stamp, "notes": notes}, default=str),
+                encoding="utf-8",
+            )
 
     scoped = observed.restrict(lines, branches=branches, skus=skus)
     comparison = observed.compare(
@@ -129,6 +163,7 @@ def build(
             "skus": len(set(skus)) if skus else int(scoped["sku"].nunique()),
             "restricted": bool(branches or skus),
         },
+        extract=extract,
     )
 
 
@@ -143,6 +178,7 @@ def _payload(
     distribution: list[dict[str, Any]] | None = None,
     trend: dict[str, Any] | None = None,
     scope: dict[str, Any] | None = None,
+    extract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     columns = [
         "branch", "lines", "stated_avg", "stated_std", "transit", "service_factor",
@@ -169,6 +205,13 @@ def _payload(
         "branches": branches,
         "flagged_count": len(flagged),
         "scope": scope or {},
+        # Null when the figures came off the workbook itself. Non-null means
+        # this deployment carries a branch-restricted extract of the parse
+        # instead of the 67 MB file, and the page says so rather than letting
+        # a reader assume the whole order history is behind these numbers
+        # (D-137). The parse statistics in `notes` still describe the full
+        # file, because that is the parse these durations came out of.
+        "extract": extract,
         "scoped_lines": scoped_lines,
         "by_sku": by_sku or [],
         "by_month": by_month or [],

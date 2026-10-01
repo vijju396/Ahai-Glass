@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 
 from fastapi import APIRouter
 from sqlalchemy import text
@@ -57,6 +58,24 @@ def _check_source_data() -> HealthComponent:
         )
     present = {p.name for p in settings.source_data_dir.iterdir() if p.is_file()}
     missing = sorted(expected - present)
+
+    # A scoped deployment carries the workspace's data rather than the client's
+    # workbooks, and `BUNDLE.json` is the record of that choice (D-137). The
+    # files are absent on purpose, so the honest reading is "this deployment
+    # cannot ingest", not "four files have gone missing" — but it is still
+    # stated, with the names, and the capability it removes is named too.
+    bundle = _bundle_manifest()
+    if missing and bundle is not None:
+        return HealthComponent(
+            name="source_data",
+            status="ok",
+            detail=(
+                f"Scoped bundle: {len(expected) - len(missing)} of {len(expected)} "
+                f"source files shipped. Withheld: {', '.join(missing)}. "
+                "Ingestion and preprocessing are unavailable on this deployment; "
+                "every page reads the bundled run and panel."
+            ),
+        )
     if missing:
         return HealthComponent(
             name="source_data",
@@ -66,6 +85,18 @@ def _check_source_data() -> HealthComponent:
     return HealthComponent(
         name="source_data", status="ok", detail="All 5 source files present."
     )
+
+
+def _bundle_manifest() -> dict | None:
+    """`BUNDLE.json`, written next to the data by `build_scoped_bundle.py`."""
+    settings = get_settings()
+    path = settings.source_data_dir.parent.parent / "BUNDLE.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - an unreadable manifest is not health data
+        return None
 
 
 def _check_ml_dependencies() -> HealthComponent:

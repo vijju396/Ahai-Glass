@@ -108,9 +108,31 @@ class WindowScore:
         return self.abs_error_total / self.actual_total * 100
 
     def series_accuracy(self) -> dict[str, float]:
-        """Each line's own accuracy over this window."""
+        """Each line's own accuracy over this window, floored at zero.
+
+        The floor is deliberate - an accuracy of -240% is not a reading anyone
+        can use - but it is lossy, which is why `series_error()` exists beside
+        it. Four of 261 lines floor here on the six-month total and twenty do
+        on the single period, and on those `100 - accuracy` is **not** the
+        line's MAPE (D-134).
+        """
         return {
             key: max(0.0, 100.0 - statistics.median(values))
+            for key, values in self.by_series.items()
+            if values
+        }
+
+    def series_error(self) -> dict[str, float]:
+        """Each line's own MAPE over this window, unclamped.
+
+        The same median `series_accuracy` subtracts from 100, returned before
+        the floor is applied. A screen that prints accuracy and error side by
+        side has to read this for the error: deriving it as `100 - accuracy`
+        would print exactly 100% for every floored line and claim a figure
+        that was never measured.
+        """
+        return {
+            key: statistics.median(values)
             for key, values in self.by_series.items()
             if values
         }
@@ -332,6 +354,15 @@ def accuracy_by_window(
                 for score in scores
                 if score.series_accuracy().get(key) is not None
             },
+            # The same windows as `accuracy_pct`, as error rather than as
+            # accuracy, and **not** derived from it. On a floored line the two
+            # do not add to 100, which is the whole reason this is carried
+            # rather than computed on the screen (D-134).
+            "mape_pct": {
+                str(score.months): round(score.series_error().get(key), 2)
+                for score in scores
+                if score.series_error().get(key) is not None
+            },
             # The champion's own accuracy, 100 - MAPE, on the average month.
             # This is the figure the leaderboard and the training console show
             # for this line, and it is a different measurement from any window
@@ -341,6 +372,15 @@ def accuracy_by_window(
             # month, and both are true.
             "champion_accuracy_pct": (
                 round(max(0.0, 100.0 - line_metrics[key][0]), 2)
+                if line_metrics.get(key, (None, None))[0] is not None
+                else None
+            ),
+            # The champion's MAPE on the average period, unfloored. Twenty of
+            # 261 lines read 0.0% accuracy here, and on those the real error is
+            # anything from 100% upward - the figure the leaderboard prints for
+            # the same line (D-134).
+            "champion_mape_pct": (
+                round(line_metrics[key][0], 2)
                 if line_metrics.get(key, (None, None))[0] is not None
                 else None
             ),
@@ -359,6 +399,7 @@ def accuracy_by_window(
         # line on a run where no window reaches 85% - a run whose six-month
         # figures are still perfectly real and are what the screens now show.
         row["horizon_accuracy_pct"] = row["accuracy_pct"].get(str(horizon_months))
+        row["horizon_mape_pct"] = row["mape_pct"].get(str(horizon_months))
         row["horizon_meets_target"] = bool(
             row["horizon_accuracy_pct"] is not None
             and row["horizon_accuracy_pct"] >= TARGET_ACCURACY

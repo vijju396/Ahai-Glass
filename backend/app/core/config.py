@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     project_root: Path = PROJECT_ROOT
     source_data_dir: Path = PROJECT_ROOT / "data" / "source"
     runtime_dir: Path = PROJECT_ROOT / "runtime"
+    #: The built React app, served from this same process when it is present.
+    #:
+    #: In development it is absent — Vite serves the app on :5173 and proxies
+    #: `/api` here — so the mount simply does not happen and nothing changes.
+    #: In the deployed container the build is copied here, which puts the page
+    #: and the API on one origin: `VITE_API_BASE` stays at its `/api` default,
+    #: no CORS entry is needed, and there is one URL to hand out (D-136).
+    web_dist_dir: Path = PROJECT_ROOT / "frontend" / "dist"
 
     # --- persistence -------------------------------------------------------
     # SQLite for the POC. A PostgreSQL DSN here needs no code change: the

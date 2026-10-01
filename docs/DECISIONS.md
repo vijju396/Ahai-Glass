@@ -5303,3 +5303,388 @@ the fix is transport compression, not a shorter list.
 Tests: 1,072 backend, 254 frontend, all passing. `tsc --noEmit` clean. Verified
 in the browser — filters, disclosure, paging, no console errors, and no sideways
 overflow at 375 px.
+
+## D-133 — Training and Forecasting start at a line; the aggregate scopes come off the pickers
+
+Requested, after the Forecasting page showed **169.87% MAPE** at All locations /
+All SKUs: *"i want least min mape error possible by avg out the scope errors not
+adding them … starting only strt with some branch and sku and remove branch wise
+scopes and overall scopes as i said they are not useful anyway and on branch is
+selected route to some sku directly"*.
+
+### What that number actually was
+
+Not an average of the lines, and not a sum of them either. "All locations / All
+SKUs" resolved to the **national scope** — a thirteen-model race run on one
+series, the week-by-week sum of every branch × SKU cell, with its own champion
+and its own measured error. Selecting one location resolved to that **branch
+scope**, the same construction one level down. Measured on the current run:
+
+```
+scope                       model                      MAPE       WAPE
+national  NATIONAL           ES Additive             169.87%    35.87%
+branch    BENGALURU          ES Additive              71.29%    42.68%
+branch    DELHI-1            ES Additive              81.36%    41.98%
+median line, six-month total                          10.45%    13.05%
+```
+
+Two separate things made the headline figure unreadable, and they compounded:
+
+- **It was an aggregate's error, not anybody's.** An aggregate is a different
+  series with different statistics, so its error transfers to nothing
+  underneath it. The page did carry a warning saying so; a warning under a
+  number in 24px type loses.
+- **It was a per-period figure where every other tile is a six-month one.** The
+  tile reads `lineAccuracy.horizon_accuracy_pct` when the scope is a series and
+  falls back to raw `metrics.mape` when it is not — so the same tile changed
+  *which question it answered* depending on the selection. 169.87% is a weekly
+  MAPE on a volatile national sum, and MAPE divides by the actual: a quiet week
+  in the denominator is worth more than a bad forecast.
+
+The user's instinct is the correct one and is already implemented elsewhere:
+`combined_metrics_best` scores every line on its own and reports the **median**
+— 89.55% accurate, 10.45% miss across 261 lines — rather than fitting one model
+to summed demand. That is "avg out the scope errors, not adding them", and it
+is the figure that now sits on Training without a selection having to be made.
+
+### What changed
+
+- **"All locations" and "All SKUs" are gone from both pickers.** Every
+  selection on Forecasting and on Training resolves to one branch × SKU.
+- **Both pages open on a line** — first in branch order, then SKU order.
+  Deliberately the first and not the best: opening on the strongest line would
+  flatter the run, and alphabetical is a rule a reader can check.
+- **Picking a location moves the SKU with it** when that location does not
+  stock the current one, instead of emptying the page. The slicer the reader
+  just touched is never overridden; only the other one moves.
+- **The location list no longer narrows by SKU.** The two used to filter each
+  other, which hid DELHI-1 whenever a BENGALURU-only SKU was selected — with no
+  "All SKUs" to clear back to, that would have made DELHI-1 unreachable.
+- **Training's run-wide panels moved below the race** rather than being deleted
+  with the "All" selection that used to gate them. The combined accuracy, the
+  per-model table and the train control are not scopes; they are summaries over
+  the lines, and both figures in them are per-line medians.
+- The aggregate warning box on Forecasting went with the aggregates, and so did
+  the "no forecast scope for one SKU across branches" empty state — neither is
+  reachable now.
+
+**The aggregates are still fitted.** Only the pickers changed. MinT
+reconciliation needs the full hierarchy to make the lines add up — the current
+run reports `coherent: true` with `max_incoherence: 0.0` — so removing the
+national, region, branch, segment and pooled tiers from *training* would break
+the guarantee that the per-line forecasts reconcile. They are computed and
+served; they are simply not something these two pages will show you.
+
+### Lead Time is renamed to Ordered vs Dispatched Time
+
+Requested: *"change the lead time panel name to ordered vs dispatched time as
+what we are having is not lead time"* — and that is right. The page computes
+**Despatch Date minus Order Date**. A lead time runs to *receipt*, and the
+source files hold no receipt date, so what is measured is one leg of the cycle
+and not the cycle. The master's own `Avg Lead Time` column keeps its name,
+because renaming a client's field would be worse than leaving it; the page's
+name now describes the page's own measurement.
+
+The route stays `/lead-time` and the nav index stays 24, so no bookmark breaks
+and the D-105 numbering still reads.
+
+Tests: 268 frontend (14 new — 8 on the pairing rule, 6 on the filter),
+`tsc --noEmit` clean. Verified in the browser: Forecasting opens on
+BENGALURU × FG.ALP.LFH.GCG2120000 at 98.1% over the six-month total, the
+location list offers two rows and neither is "All", switching to DELHI-1 lands
+on its own first SKU with 134 offered against BENGALURU's 136, Training opens on
+the same line with the 89.5% run-wide figure beneath it, no console errors, no
+sideways overflow at 375 px.
+
+## D-134 — Accuracy and MAPE are both printed, and neither is derived from the other
+
+Requested: *"please give accuracy and mape as well"*, then *"i hope mape is
+100- accuracy and no need to show for 1 weeks accuracy just vaguely explain it
+sux months averaged mape"*, then *"i need same things in both training and
+forecasting"*.
+
+**MAPE is 100 − accuracy, on 257 of this run's 261 lines.** The expectation is
+right almost everywhere, and the exception is the reason this is carried in the
+payload rather than computed on the screen: `WindowScore.series_accuracy()`
+floors at zero, because an accuracy of −257% is not a reading anyone can use.
+On a floored line the subtraction gives exactly 100% and the real error is
+larger:
+
+```
+line                              accuracy    100 - accuracy    measured MAPE
+BENGALURU|FG.J90.LFH.SCSB1B0000       0.0%            100.0%          102.76%
+DELHI-1|FG.BA3.LFH.GCG2120000         0.0%            100.0%          140.78%
+DELHI-1|FG.MF8.LFH.GCG2120000         0.0%            100.0%          357.53%
+DELHI-1|FG.MP6.LFH.GCG2120000         0.0%            100.0%          100.00%
+```
+
+Three of those four would be a figure nobody measured, printed on the worst
+lines in the run — which `CLAUDE.md` prohibits outright. Twenty lines floor the
+same way on the single-period reading. So `accuracy_windows` gained
+`series_error()`, the unclamped mirror of `series_accuracy()`, and every
+per-line row now carries `mape_pct` per window, `horizon_mape_pct` and
+`champion_mape_pct` beside the accuracies it already had. The route has no
+`response_model`, so nothing needed declaring.
+
+### What the two screens show
+
+Both say the same thing in the same words, which was the third request:
+
+- **Forecasting** — the tile reads `98.1% · 1.9% MAPE`, labelled *Accuracy,
+  six-month total*, with *average miss across the six months, out of sample*
+  beneath it.
+- **Training** — the combined panel's *Average miss* is renamed **MAPE**, with
+  the same *average miss across the six months* hint. The per-line leaderboard
+  already carried both columns and matches the tile exactly.
+
+**The single-period accuracy came off both**, on request. It was a second
+accuracy over a different span sitting next to the first, and reading one as
+the other is the misunderstanding it existed to prevent — so the caution it
+carried is now written out instead of printed as a number: misses inside the
+window cancel, so the half-year total lands closer than any week in it, and
+`lines_worse_over_horizon` still names the lines where cancelling did not
+happen.
+
+One consequence had to be handled. Forecasting's "Why this model, for this
+series" panel reports the **selection** metrics, one period at a time — 89.1%
+MAPE on the same line whose tile says 1.9%. The tile's single-period figure
+used to bridge the two. With it gone the panel's note now names its own span
+and says why it is the larger number.
+
+### The paragraph under the Forecasting pickers is gone
+
+Requested: *"this explanation is not needed"*, pointing at the three sentences
+beneath the two slicers. They restated the selection the pickers already show,
+said that only trained lines are listed, and argued the case for dropping the
+aggregate scopes. None of it is a fact about the forecast on screen: the
+selection is in the controls and in the Outlook panel's title, and the
+reasoning belongs in this file rather than over a reader's shoulder every time
+they change a SKU.
+
+**What stays is the provenance** — `Origin 2026-W31, reconciled by
+mint_shrinkage` — because the origin and the reconciliation method are stated
+nowhere else on the page, and a forecast without its origin is undated.
+
+Tests: 1,077 backend (5 new, on the floor and on what is recoverable from it),
+268 frontend, `tsc --noEmit` clean. Verified in the browser on both pages after
+a backend restart — uvicorn runs without `--reload`, so the new fields needed
+one.
+
+---
+
+## D-135 — The line's four tiles are one component, shown on both screens
+
+Requested: *"we have to show top model as cards here as well fo each sku like
+forecasting with same cards and same data"*, pointing at the branch × SKU filter
+on the Training page.
+
+Training already picked a line and raced thirteen models on it, but it never
+stated the four plain facts about that line — which model won, how accurate it
+measured, what it forecasts next month, how many horizons came back. Those four
+were on Forecasting only, so reading them meant leaving the page that chose the
+line.
+
+**They are now the same component, not a second copy.**
+`src/features/line-summary/LineSummaryTiles.tsx` takes a `scope_key` and renders
+the four `StatTile`s; both pages mount it. A copy was the obvious alternative and
+is the wrong one: the accuracy tile alone has been reworded twice in two days
+(D-133 moved it from a per-period figure to the six-month total, D-134 added the
+measured MAPE beside it), and either edit would have left the two screens
+disagreeing about the same line.
+
+**It runs its own queries rather than taking props.** The keys are the ones
+Forecasting already issues — `forecastKeys.series('series', scopeKey)`,
+`trainingKeys.current`, `accuracyKeys.windows(runId, null)` — so on Forecasting
+every one is a cache hit and the page makes no extra request; on Training they
+are the first fetch. The alternative, threading three payloads down from each
+caller, would have made the component unusable anywhere a `scope_key` is in hand
+without assembling them first.
+
+Measured, on `BENGALURU|FG.ALP.LFH.GCG2120000`: both pages read
+`98.1% · 1.9% MAPE` against Auto ARIMA with exogenous variables, and the
+leaderboard's champion row on Training reads the same 98.1% / 1.9% — the tile and
+the race it sits above agree. Switching the location to DELHI-1 repairs the SKU
+to `FG.ANL.LFH.GCG2120000` (D-133) and the tiles follow to
+`86.9% · 13.1% MAPE` against Exponential Smoothing Additive, again matching the
+leaderboard beneath them.
+
+Tests: 268 frontend, `tsc --noEmit` clean. Verified in the browser on both pages,
+no console errors, no horizontal overflow at 375px.
+
+---
+
+## D-136 — Deployed to Azure as one container, page and API on one origin
+
+Requested: *"we have azure connected with cli deploy this whole application
+there and check from the front end that everythng is working as expected and
+from the deployed link"*.
+
+### One service, not two
+
+The obvious shape is a Static Web App for the page and an App Service for the
+API. It was rejected: it needs `VITE_API_BASE` set at build time, a CORS
+allowlist in `frontend_origins` that has to track a generated hostname, and two
+things to deploy in the right order. Every one of those is a way for the
+deployed page to be subtly different from the one that was tested.
+
+Instead FastAPI serves the build itself (`app/main.py::_mount_web_app`). The
+client's `API_BASE` already defaults to `/api`, so same-origin means **no
+build-time configuration at all** — the bundle that runs in Azure is byte-for-
+byte the bundle `npm run build` produces locally.
+
+The mount goes on after `include_router(api_router)`, and the catch-all 404s
+anything under `/api` rather than answering it with the HTML shell. A page
+returned where JSON was asked for surfaces three layers away as a parse error;
+a 404 says what actually happened. Everything else falls back to `index.html`,
+because the router is a `BrowserRouter` and `/forecasting` is a URL a reader
+can paste. With no build present the mount does not happen, so local
+development is untouched — Vite still owns the page and proxies `/api`.
+
+### The image carries the data, and that is a real trade
+
+`runtime/storage/`, `runtime/db/ais.db` and all five files in `data/source/` go
+into the image. Two of the source files are read at run time, not just during
+preprocessing: the Ordered vs Dispatched Time page parses the orders workbook
+directly, and the health check reports on all five. The lead-time cache is
+keyed on name, size and **mtime**, and `COPY` preserves mtime, so the cache
+hits instead of re-parsing 775,912 rows on the first view.
+
+The database ships as a `sqlite3 .backup` of the live file, not a byte copy.
+The live one has a 15 MB write-ahead log attached; copying the three files
+would put a half-applied WAL and a stale shared-memory file into the image.
+
+**The cost, stated plainly: writes do not survive a restart.** A training run
+started from the deployed page works and is gone when the revision cycles. The
+seven shipped runs come back every time because they are in the image. Durable
+writes mean mounting Azure Files at `/app/runtime`, which is a separate
+decision and was not taken here.
+
+### The key is not in the image
+
+`backend/.env` is in `.dockerignore`; `deploy/env.azure` — the same settings
+with `OPENAI_API_KEY` stripped, generated by `scripts/make_azure_env.py` — is
+copied in its place, and the key is injected as a Container Apps secret. Copy
+it and delete it later does not work: the layer keeps it.
+
+The rest of `.env` **is** shipped, deliberately. The workspace, the grain, the
+eligibility profile and every measured accuracy constant are in that file, and
+a deployment that quietly fell back to code defaults would be reporting on a
+different slice than these documents describe.
+
+### Why Container Apps, 2 vCPU / 4 GiB, centralindia
+
+It is what the sibling demos in this subscription already do —
+`ca-meriton-demo` is the same kind of application at the same size. Following
+the house pattern means the operational knowledge transfers.
+
+Two departures from the sibling: `minReplicas` is 1 rather than 0, because the
+image is large and TensorFlow's import is slow enough that the first visit
+after an idle period would look broken; and ingress is on port 8000 with one
+uvicorn worker, because the job runner is in-process and a second worker would
+be a second scheduler racing the first over one SQLite file.
+
+Built with `az acr build`, which builds on amd64 hardware in Azure. The
+development machine is Apple Silicon, so the alternative was an emulated build
+or pushing several gigabytes up a home connection.
+
+### Not addressed
+
+Ingress is external and there is no authentication — the URL is unlisted, not
+protected, and the pages carry real client demand data. The sibling demos are
+configured the same way. Entra can be put in front of it without touching the
+image.
+
+## D-137 — The image carries the workspace's data, and the stored paths are rewritten to match
+
+**Date:** 2026-10-01
+**Status:** Accepted
+
+The first Azure image (D-136) carried everything this workspace has ever held:
+348 MB of build context, of which the deployed pages could reach a small
+fraction. The request was to cut it to the scope — *"we do not need to update
+all the data just the considered scope data"* — with the assistant and the
+recommendations still answering from it.
+
+### What ships
+
+`scripts/build_scoped_bundle.py` writes `deploy/bundle/`. It finds the newest
+training run, follows it to its panel build and preprocessing run, and keeps
+those three and nothing else.
+
+| | Before | After |
+|---|---|---|
+| Database | 81.3 MB, 7 training runs | 52.1 MB, the live run |
+| Panel and artefacts | 113 MB | 14.8 MB |
+| Order history | 67 MB workbook | 69,353-line extract, 0.11 MB |
+| Client workbooks | 5 (150 MB) | Location Master only (24 KB) |
+| **Total** | **348 MB** | **67.9 MB** |
+
+What that costs, stated rather than discovered later:
+
+- **Six superseded training runs are gone.** They are 40-to-49-series *monthly*
+  runs; the live one is the 281-series weekly run every screen reads. A monthly
+  run's forecasts cannot be read at the current weekly grain anyway (D-105), so
+  keeping them would have offered a reader runs whose numbers contradict the
+  current ones. The deployed run history is one run, not seven.
+- **A panel over 68,675 series is gone** — 81 MB that no live run points at.
+- **Four of the five client workbooks are not deployed.** Ingestion and
+  preprocessing are therefore unavailable on the deployment, and
+  `/api/health` says exactly that by name rather than reporting four files
+  mysteriously missing. Location Master ships whole at 24 KB because the
+  Ordered vs Dispatched Time page compares observed durations against the
+  stated averages held in it.
+
+### Ordered vs Dispatched Time keeps working without the orders workbook
+
+What that page needs is the parsed durations, not the workbook. The bundle
+ships `lines.parquet` filtered to the workspace branches — 69,353 of 775,628
+order lines — and `lead_time_service.build()` reads it when the workbook is
+absent and Location Master is present, flagged in the payload as `extract` so
+the page is never silently reporting on a subset while claiming the whole.
+
+### The stored paths had to be rewritten
+
+The database records where artefacts live as **absolute paths on the machine
+that trained the run**. Copied into an image they name a directory that does
+not exist, and the deployment returned 500 on `/api/analytics/summary` and
+`/api/inventory/recommendations` with
+`FileNotFoundError: '/Users/HXT/ashai glass/Ahai-Glass/runtime/storage/prepared/panel_…/panel.parquet'`
+while the same code worked locally.
+
+`_rewrite_paths()` replaces the development project root with `/app` — the
+root the Dockerfile fixes and `app/core/config.py` derives from — across every
+text column of every table, then asserts that none survives. Seven columns in
+five tables currently carry one, two of them inside JSON blobs, which is the
+kind of hand-maintained list that goes stale silently. It is recorded in
+`BUNDLE.json` under `stored_paths`.
+
+Rewriting at build time rather than resolving at read time is the narrower
+change: the bundle is built for one known layout, and the two ends agree by
+construction.
+
+### `.dockerignore` does not work with `az acr build`
+
+A `.dockerignore` listing `frontend/node_modules/` still uploaded 15,956
+entries from it; the context measured 309 MB against a 68 MB bundle. The CLI
+packs the context with its own archiver.
+
+`scripts/stage_build_context.py` replaces it with an allowlist: it copies the
+named trees and files into `deploy/context/` and builds from there. 71.0 MB and
+352 files, and the upload fell from roughly fourteen minutes to one.
+
+The allowlist is also the safer direction for the key. An ignore rule that
+quietly stops matching puts a live OpenAI key in an image layer; an allowlist
+cannot. The script additionally refuses — and deletes the context — if any
+`.env` lands in it.
+
+### Run order
+
+    python scripts/build_scoped_bundle.py
+    python scripts/stage_build_context.py
+    az acr build --registry acraisglassdemoci --image ais-glass-demo:v2 \
+        --platform linux/amd64 --file Dockerfile deploy/context
+    az containerapp update -n ca-aisglass-demo -g rg-aisglass-demo-ci \
+        --image acraisglassdemoci.azurecr.io/ais-glass-demo:v2
+
+`deploy/bundle/`, `deploy/context/` and `deploy/env.azure` are generated and
+gitignored.
