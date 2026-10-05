@@ -86,7 +86,7 @@ export function DemandAnalyticsPage() {
   const [endPeriod, setEndPeriod] = useState('');
   const [grain, setGrain] = useState('monthly');
 
-  const filtersQuery = useQuery({ queryKey: analyticsKeys.filters, queryFn: fetchAnalyticsFilters });
+  const filtersQuery = useQuery({ queryKey: analyticsKeys.filters, queryFn: () => fetchAnalyticsFilters() });
   const filters = filtersQuery.data;
 
   const query: AnalyticsQuery = useMemo(

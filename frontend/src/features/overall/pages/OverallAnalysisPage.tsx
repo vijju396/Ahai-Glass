@@ -96,7 +96,15 @@ export function OverallAnalysisPage() {
   const [endPeriod, setEndPeriod] = useState('');
   const [grain, setGrain] = useState('monthly');
 
-  const filtersQuery = useQuery({ queryKey: analyticsKeys.filters, queryFn: fetchAnalyticsFilters });
+  /* This page reports the client's whole network - every branch, every SKU -
+     while Training, Forecasting and Per Branch & SKU stay on the workspace.
+     The banner states which, and the payload's `workspace_scope` carries
+     `restricted: false`, so a network total can never be read as a workspace
+     one (D-138). */
+  const filtersQuery = useQuery({
+    queryKey: analyticsKeys.networkFilters,
+    queryFn: () => fetchAnalyticsFilters(true),
+  });
   const filters = filtersQuery.data;
 
   /* With no FROM chosen, the page starts at the first month holding real
@@ -121,8 +129,8 @@ export function OverallAnalysisPage() {
   );
 
   const summaryQuery = useQuery({
-    queryKey: analyticsKeys.summary(query),
-    queryFn: () => fetchAnalyticsSummary(query),
+    queryKey: analyticsKeys.networkSummary(query),
+    queryFn: () => fetchAnalyticsSummary(query, true),
     enabled: !!filters,
   });
 

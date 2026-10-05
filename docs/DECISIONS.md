@@ -5688,3 +5688,77 @@ cannot. The script additionally refuses — and deletes the context — if any
 
 `deploy/bundle/`, `deploy/context/` and `deploy/env.azure` are generated and
 gitignored.
+
+## D-138 — Overall Analysis reports the client's whole network; every other page stays on the workspace
+
+Requested: describe the client's full data on Overall Analysis, keep forecasting
+on the two locations and 136 SKUs, and change no visual.
+
+This is a deliberate departure from D-049's "one scope for the whole
+application". It is confined to one page and to one kind of question. Overall
+Analysis describes *what the client's data says*; Training, Forecasting, Per
+Branch & SKU and the recommendation pages report *what this deployment
+modelled*. Those are different questions, and answering the first at workspace
+scope was understating the client's own business by a factor of six. Everywhere
+a forecast, a model or a recommendation is involved, the one-scope rule still
+holds.
+
+**The panel cannot serve it.** A panel is a full branch x SKU x period grid, so
+an unrestricted build materialises every series the extract holds. That was
+attempted before and exhausted memory at 68,675 series over 28 monthly periods
+(`panel_service._scope_artifacts`); at the current weekly grain the same build
+is 70,089 series over 122 periods, about 8.6 M rows. Widening the panel was not
+an option.
+
+**The preprocessed facts already are the whole network**, and they are small:
+582,324 order rows and 975,275 sales rows against 53 branches and 2,063 SKUs.
+`app/domain/ais/network_frame.py` assembles them into a frame carrying the
+panel's columns, joined to the product and branch masters, and runs it through
+`analytics.derive_columns` — the same derivation the panel path uses, called
+rather than reimplemented. Every chart, filter and tile is then the existing
+analytics code, unchanged, which is what keeps the visuals identical.
+
+```
+1,052,033 rows · 68,597 series · 122 weekly periods · 2024-W14 .. 2026-W31
+assembled in 14 s, held at 362 MB
+ordered units 2,602,392 — equal to the figure measured from the client file
+```
+
+**A sum over observed rows equals a sum over the grid**, because the rows the
+grid adds are zeros. So totals, shares and movements over time are exact. What
+the frame does not carry is a materialised zero cell, so **any figure that
+counts rows means something different here** than on a panel-backed page. The
+coverage block says so in its own words rather than leaving a reader to infer
+it.
+
+### Four things that had to be got right
+
+**The banner states the scope rather than falling silent.** `ScopeBanner`
+rendered nothing when `restricted` was false, which was the honest output while
+unrestricted meant "no workspace configured". Here it would have left a page of
+network figures with nothing on screen saying why they are six times the
+neighbouring pages'. A `full_network` variant now reads
+`53 of 53 branches · 2063 of 2063 SKUs · the client's whole dataset` and names
+the pages that differ.
+
+**The numerator and the denominator count the same universe.** The scope
+denominator counts the order book. Counting the frame's SKUs counted
+proxy-only ones too and printed `2,315 of 2,063` — a numerator larger than its
+own denominator. Coverage is now taken on `target_source == "order"`, with the
+252 proxy-only SKUs reported separately.
+
+**A bare `queryFn` would have switched five pages to the network silently.**
+`fetchAnalyticsFilters` gained an optional first argument, and five pages passed
+the function itself to react-query, which calls it with its own context object —
+truthy. Those pages would have gone network-wide with no visible change but
+their numbers. `tsc` caught it; every call site is now wrapped.
+
+**`period` stays a plain string.** Categoricals cut the frame from 1,267 MB to
+276 MB, but an unordered categorical refuses `min`/`max`, which the shared
+analytics code takes on `period`. Making it ordered would have imposed a sort
+order on a column other code treats as a label, so `period` is excluded from the
+conversion and the saving comes from `series_id` and `canonical_sku` instead —
+362 MB, and the shared code untouched.
+
+An empty order fact now raises with its remediation instead of a `KeyError` on
+a column that is absent rather than empty.

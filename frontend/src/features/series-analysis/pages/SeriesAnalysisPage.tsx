@@ -83,7 +83,7 @@ export function SeriesAnalysisPage() {
 
   const filters = useQuery({
     queryKey: analyticsKeys.filters,
-    queryFn: fetchAnalyticsFilters,
+    queryFn: () => fetchAnalyticsFilters(),
     retry: false,
   });
   const series = useQuery({

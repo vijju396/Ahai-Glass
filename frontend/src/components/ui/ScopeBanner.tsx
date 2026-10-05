@@ -9,6 +9,12 @@
  * So it is one component, used identically on every page, rather than a
  * sentence each page remembers to print. It renders nothing at all when the
  * workspace is unrestricted, which is the honest output in that case.
+ *
+ * **One scope is unrestricted and still states itself**: `full_network`, which
+ * Overall Analysis uses to report the client's whole network while every other
+ * page stays on the workspace (D-138). Silence there would be the same defect
+ * read the other way round — a reader moving between pages would find figures
+ * six times larger with nothing on screen saying why.
  */
 import { useState } from 'react';
 import type { WorkspaceScope } from '@/api/analytics';
@@ -21,6 +27,39 @@ const SOURCE_LABEL: Record<string, string> = {
 
 export function ScopeBanner({ scope }: { scope?: WorkspaceScope | null }) {
   const [open, setOpen] = useState(false);
+
+  if (scope?.source === 'full_network') {
+    return (
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+            Full network
+          </span>
+          <span className="text-[11px] text-[var(--color-text)]">
+            <strong>
+              {scope.total_branches
+                ? `${scope.branch_count} of ${scope.total_branches}`
+                : scope.branch_count}
+            </strong>{' '}
+            branches ·{' '}
+            <strong>
+              {scope.total_skus ? `${scope.sku_count} of ${scope.total_skus}` : scope.sku_count}
+            </strong>{' '}
+            SKUs
+          </span>
+          <span className="text-[10px] text-[var(--color-text-muted)]">
+            the client&rsquo;s whole dataset
+          </span>
+        </div>
+        <p className="mt-0.5 text-[10px] leading-relaxed text-[var(--color-text-muted)]">
+          This page describes every branch and SKU in the source data. Training,
+          Forecasting and Per Branch &amp; SKU report the modelled workspace instead, so
+          their totals are smaller by design.
+        </p>
+      </div>
+    );
+  }
+
   if (!scope?.restricted) return null;
 
   const branches = scope.branches ?? [];

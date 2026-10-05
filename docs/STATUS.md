@@ -4711,3 +4711,53 @@ Two endpoints count the same exception differently and both pages show it:
 `stock_exceptions` tool reports 82 / 6,249 and 240 / 20,449. **The figures are
 identical local and deployed**, so this is a difference between two filters in
 the application, not a deployment defect. It is not fixed here.
+
+## Overall Analysis on the client's full data — 5 October 2026 (D-138)
+
+Requested: Overall Analysis over the client's whole dataset, forecasting left on
+the two locations and 136 SKUs, same graphs and visuals.
+
+**Done, and nothing visual changed.** Overall Analysis calls `/analytics/summary`
+and `/analytics/filters` with `full_network=true`; every other page calls them
+without it and is byte-identical to before.
+
+```
+                         branches        SKUs        ordered units      value
+Overall Analysis         53 of 53     2063 of 2063      2,602,392    Rs 860.04Cr
+Training / Forecasting    2 of 53      136 of 2063        146,814    Rs  60.24Cr
+Per Branch & SKU          2 of 53      136 of 2063
+```
+
+**Not a panel.** An unrestricted panel build is 8.6 M rows and is documented as
+having exhausted memory at 1.5 M. The new `app/domain/ais/network_frame.py`
+assembles the preprocessed facts — already unrestricted — into a frame carrying
+the panel's columns, then runs `analytics.derive_columns` so every chart is the
+existing code.
+
+```
+1,052,033 rows · 68,597 series · 122 weeks · 2024-W14 .. 2026-W31
+14 s to assemble, 362 MB held, cached per preprocessing run
+ordered units 2,602,392 — matches the figure measured from the client file exactly
+```
+
+**Stated limit:** observed rows only. Totals, shares and trends are exact; there
+are no materialised zero cells, so row counts are not comparable with the
+workspace pages. The payload carries that sentence.
+
+### Defects found and fixed on the way
+
+- **Five pages would have gone network-wide silently.** `fetchAnalyticsFilters`
+  gained an optional first argument and five pages passed it bare to
+  react-query, which calls a `queryFn` with its context object — truthy. Caught
+  by `tsc`, every call site wrapped.
+- **The banner fell silent at network scope**, leaving six-times-larger figures
+  unexplained next to the workspace pages. `ScopeBanner` has a `full_network`
+  variant.
+- **`2,315 of 2,063`** — the numerator counted proxy-only SKUs, the denominator
+  the order book. Coverage now counts the order book on both sides.
+- **An empty order fact raised `KeyError`** on an absent column rather than a
+  stated reason.
+
+```
+backend 1,088 passed (11 new) · frontend 268 passed (24 files) · tsc clean
+```

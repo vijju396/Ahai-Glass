@@ -24,6 +24,7 @@ from app.ml.features.grain import MONTHLY, is_period, period_month
 from app.core.errors import ConflictError
 from app.db.session import get_db
 from app.domain.ais import analytics
+from app.domain.ais import network_frame
 from app.domain.ais.workspace import WorkspaceScope, resolve_workspace
 from app.services import lead_time_service
 from app.models.mappings import PreprocessingRun
@@ -198,12 +199,97 @@ def _stamp(payload: dict[str, Any], scope: WorkspaceScope) -> dict[str, Any]:
 
 
 @router.get("/filters", summary="Filter options for the demand-analytics pages")
-def get_filters(db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_filters(
+    full_network: bool = Query(
+        False,
+        description=(
+            "Options across the whole client network rather than the "
+            "workspace. Paired with the same flag on `/summary` so a page "
+            "cannot offer a branch its figures do not cover."
+        ),
+    ),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if full_network:
+        frame, run, coverage = _network(db)
+        payload = analytics.filters(frame)
+        payload["preprocessing_run_id"] = run.id
+        payload["network_coverage"] = coverage
+        total_branches, total_skus = _demand_universe(db)
+        payload["workspace_scope"] = {
+            "restricted": False,
+            "source": "full_network",
+            "branches": None,
+            "branch_count": coverage["branches"],
+            "total_branches": total_branches,
+            "skus": None,
+            "sku_count": coverage["skus"],
+            "total_skus": total_skus,
+            "detail": "Every branch and SKU in the client's own order and sales data.",
+            "note": coverage["note"],
+        }
+        return payload
     panel, build, _path, scope = _panel(db)
     payload = analytics.filters(panel)
     payload["panel_build_id"] = build.id
     payload["training_cut_period"] = build.training_cut_period
     return _stamp(payload, scope)
+
+
+@lru_cache(maxsize=1)
+def _network_frame_from(order: str, sales: str, product: str, branch: str, grain: str):
+    """The whole client network, assembled once and held.
+
+    Cached on the artifact paths, so a new preprocessing run invalidates it by
+    writing elsewhere. One entry: the frame is 276 MB and there is only ever
+    one network.
+    """
+    import pandas as pd
+
+    return network_frame.build(
+        pd.read_parquet(order), pd.read_parquet(sales),
+        pd.read_parquet(product), pd.read_parquet(branch), grain=grain,
+    )
+
+
+def _network(db: Session):
+    """Overall Analysis at full client scope: every branch, every SKU.
+
+    Deliberately NOT workspace-restricted, and the only path in this file that
+    is. Every other page stays on the workspace panel, so the one-scope rule
+    (D-049) still holds everywhere a forecast or a model is involved. This page
+    answers a different question - what the client's own data says - and says
+    so in its own banner (D-138).
+
+    The panel cannot serve it: an unrestricted grid is 8.6 M rows and the build
+    exhausts memory. The preprocessed facts are already unrestricted, and a sum
+    over observed rows equals a sum over the grid.
+    """
+    run = db.scalars(
+        select(PreprocessingRun)
+        .where(PreprocessingRun.status == "completed")
+        .order_by(PreprocessingRun.created_at.desc())
+        .limit(1)
+    ).first()
+    if run is None:
+        raise ConflictError(
+            "No completed preprocessing run exists yet.",
+            remediation="Run ingestion and preprocessing, then reload this page.",
+        )
+    artifacts = dict(run.artifacts_json or {})
+    missing = [k for k in ("order_fact", "sales_fact", "product_dim", "branch_dim")
+               if not artifacts.get(k)]
+    if missing:
+        raise ConflictError(
+            f"The newest preprocessing run recorded no {', '.join(missing)}.",
+            remediation="Re-run preprocessing, then reload this page.",
+        )
+    frame, coverage = _network_frame_from(
+        artifacts["order_fact"], artifacts["sales_fact"],
+        artifacts["product_dim"], artifacts["branch_dim"],
+        get_settings().panel_grain,
+    )
+    return frame, run, coverage
 
 
 @router.get("/summary", summary="Every Demand Analytics panel, for one filter state")
@@ -215,12 +301,39 @@ def get_summary(
     start_period: str | None = Query(None, pattern=r"^\d{4}-\d{2}$"),
     end_period: str | None = Query(None, pattern=r"^\d{4}-\d{2}$"),
     grain: str = Query("monthly"),
+    full_network: bool = Query(
+        False,
+        description=(
+            "Read the whole client network - every branch and SKU - instead of "
+            "the workspace. Overall Analysis uses it; no other page does. "
+            "Observed rows only, so totals and trends are exact while row "
+            "counts are not comparable with the workspace pages (D-138)."
+        ),
+    ),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    cut = _scope(branch, sku, product_group, value_class, start_period, end_period, grain)
+    if full_network:
+        frame, run, coverage = _network(db)
+        payload = analytics.cached_summary(frame, f"network:{run.id}", cut)
+        payload["preprocessing_run_id"] = run.id
+        payload["network_coverage"] = coverage
+        total_branches, total_skus = _demand_universe(db)
+        payload["workspace_scope"] = {
+            "restricted": False,
+            "source": "full_network",
+            "branches": None,
+            "branch_count": coverage["branches"],
+            "total_branches": total_branches,
+            "skus": None,
+            "sku_count": coverage["skus"],
+            "total_skus": total_skus,
+            "detail": "Every branch and SKU in the client's own order and sales data.",
+            "note": coverage["note"],
+        }
+        return payload
     panel, build, path, scope = _panel(db)
-    payload = analytics.cached_summary(
-        panel, path, _scope(branch, sku, product_group, value_class, start_period, end_period, grain)
-    )
+    payload = analytics.cached_summary(panel, path, cut)
     payload["panel_build_id"] = build.id
     return _stamp(payload, scope)
 

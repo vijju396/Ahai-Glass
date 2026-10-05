@@ -235,17 +235,35 @@ export interface AnalyticsQuery {
 
 export const analyticsKeys = {
   filters: ['analytics', 'filters'] as const,
+  /* Keyed by scope as well as filter state. The workspace and the network
+     answer the same URL with different numbers, so one cache entry for both
+     would let whichever loaded last stand for the other. */
+  networkFilters: ['analytics', 'filters', 'network'] as const,
   summary: (q: AnalyticsQuery) => ['analytics', 'summary', q] as const,
+  networkSummary: (q: AnalyticsQuery) => ['analytics', 'summary', 'network', q] as const,
   exceptions: (q: AnalyticsQuery) => ['analytics', 'exceptions', q] as const,
   scorecard: (q: AnalyticsQuery) => ['analytics', 'scorecard', q] as const,
 };
 
-export function fetchAnalyticsFilters(): Promise<AnalyticsFilters> {
-  return getJson<AnalyticsFilters>('/analytics/filters');
+/**
+ * `fullNetwork` reads every branch and SKU in the client's own data instead of
+ * the workspace. Overall Analysis passes it; no other page does, so the
+ * one-scope rule still holds anywhere a forecast or a model is involved
+ * (D-138). The payload's `workspace_scope` reports `restricted: false` and the
+ * banner states it, so a network figure can never read as a workspace one.
+ */
+export function fetchAnalyticsFilters(fullNetwork = false): Promise<AnalyticsFilters> {
+  return getJson<AnalyticsFilters>('/analytics/filters', { full_network: fullNetwork });
 }
 
-export function fetchAnalyticsSummary(query: AnalyticsQuery): Promise<AnalyticsSummary> {
-  return getJson<AnalyticsSummary>('/analytics/summary', query as Record<string, unknown>);
+export function fetchAnalyticsSummary(
+  query: AnalyticsQuery,
+  fullNetwork = false,
+): Promise<AnalyticsSummary> {
+  return getJson<AnalyticsSummary>('/analytics/summary', {
+    ...(query as Record<string, unknown>),
+    full_network: fullNetwork,
+  });
 }
 
 export function fetchExceptions(query: AnalyticsQuery): Promise<ExceptionsPayload> {

@@ -112,7 +112,7 @@ export function ForecastingPage() {
 
   const filters = useQuery({
     queryKey: analyticsKeys.filters,
-    queryFn: fetchAnalyticsFilters,
+    queryFn: () => fetchAnalyticsFilters(),
     retry: false,
   });
   const run = useQuery({

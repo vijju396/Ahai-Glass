@@ -74,7 +74,7 @@ export function ExceptionsPage() {
   const [type, setType] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const filtersQuery = useQuery({ queryKey: analyticsKeys.filters, queryFn: fetchAnalyticsFilters });
+  const filtersQuery = useQuery({ queryKey: analyticsKeys.filters, queryFn: () => fetchAnalyticsFilters() });
   const query: AnalyticsQuery = useMemo(() => ({ branch: branch || undefined }), [branch]);
   const exceptionsQuery = useQuery({
     queryKey: analyticsKeys.exceptions(query),

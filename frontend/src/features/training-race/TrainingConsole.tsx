@@ -77,7 +77,7 @@ export function TrainingConsole({
 
   const filters = useQuery({
     queryKey: analyticsKeys.filters,
-    queryFn: fetchAnalyticsFilters,
+    queryFn: () => fetchAnalyticsFilters(),
     retry: false,
     staleTime: 5 * 60_000,
   });
