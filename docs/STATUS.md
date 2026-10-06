@@ -4761,3 +4761,88 @@ workspace pages. The payload carries that sentence.
 ```
 backend 1,088 passed (11 new) · frontend 268 passed (24 files) · tsc clean
 ```
+
+### Reconciled against the client's own files — 6 October 2026 (D-139, D-140)
+
+Asked, twice and explicitly without code: *"check the poc, whether the data
+given by client is matching with our analysis or not, if there is any mistakes
+show here"*, then *"fix all the issues"*.
+
+**Method.** Every figure was recomputed directly from the five source workbooks
+by an independent script, not read back out of this application's own code. The
+source files were fingerprinted byte-for-byte first, so there is no question of
+comparing against a different copy. Window: April 2025 – July 2026, 70 weeks.
+
+**Result after the fixes — the client's whole network:**
+
+```
+                     client file        our analysis
+ordered units          2,602,392           2,602,392
+despatched units       2,133,961           2,133,961
+shortfall units          504,052             504,052
+fill rate                 82.00%              82.00%
+order value    Rs 8,571,223,655.30   Rs 8,571,057,107.30
+```
+
+All 53 branches exact on units and on despatch. **51 of 53 exact on value.**
+Glass type, value class, vehicle category, the top-10 SKUs and all 16 trend
+months exact. On the workspace scope every figure including value is exact:
+146,814 / 129,559 / Rs 59.95 Cr / 88.25%.
+
+**Two value differences, pulling opposite ways, Rs 166,548 net (0.019%).**
+
+- **JABALPUR, one line.** Order `E1/05-25/02/JLR`, 2025-05-01,
+  `FG.VL1.LFH.GCG3130000`: 22 units at Rs 21,500, but the client's own
+  `MRP Value` column reads Rs 709,500 = 33 x 21,500. Their quantity and value
+  columns contradict each other. We follow rate x quantity and are Rs 236,500
+  **lower**.
+- **COIMBATORE, 44 lines.** No rate at all, client value zero. `mean_mrp` is
+  computed over a cell's priced lines and applied to the cell's whole ordered
+  quantity, so those 246 units are valued at the rate their neighbours carry
+  and we are Rs 69,952 **higher**.
+
+**A correction to the entry above.** An earlier revision of this section and of
+D-139 said COIMBATORE made us the *lower* side and that imputation had been
+rejected. Both were wrong: the code has always valued a cell's whole quantity
+at its priced-line mean. Found by summing the client's own `MRP Value` column
+per branch rather than only recomputing rate x quantity. Stated here rather
+than quietly overwritten, because the wrong figures went into a client-facing
+document.
+
+**Three real defects were found and fixed** (D-139, D-140):
+
+- **Mean price was unweighted** — a 2-unit line counted as much as a 2,000-unit
+  one. 19,359 of 582,324 cells hold more than one price; network value was
+  Rs 2.92 Cr high. Now `mrp_value_sum / mrp_qty_sum`, so
+  `ordered_qty * mean_mrp` reproduces the line-level sum.
+- **A blank despatch quantity was read as zero** rather than unknown, turning
+  the whole ordered quantity into shortfall on 44 lines — 246 fabricated units.
+  Now counted in `despatch_unknown_lines`.
+- **Rows with no product attribute were dropped**, so every product-attribute
+  chart fell 2,641 units short of its own headline tile with nothing on screen
+  explaining it — two SKUs the client orders across 44 of 53 branches are absent
+  from the client's own product master. Now a named `Not in product master`
+  bucket.
+
+**Two apparent mismatches were my own test errors, not defects**, and are
+recorded because a disagreement is not automatically a fault in the system. The
+first branch comparison omitted the date filter and showed ~60% of branches
+mismatching; with the filter, all 53 matched. The first trend comparison used
+calendar months instead of the ISO rule (a week belongs to the month containing
+its Thursday) and showed all 16 months wrong; under the correct rule all 16
+matched.
+
+**The panel was rebuilt** after the preprocessing change. No source file was
+touched.
+
+**Supersedes a figure above.** The D-138 section records network order value as
+Rs 860.04 Cr and the workspace as Rs 60.24 Cr. Those were measured before
+D-139; the weighted figures are Rs 857.10 Cr and Rs 59.95 Cr. Unit counts are
+unchanged.
+
+```
+backend 1,093 passed (6 new) · frontend 268 passed (24 files) · tsc clean
+```
+
+Written up for the client in
+`docs/AIS_Glass_Does_Our_Analysis_Match_Client_Data.pdf`.

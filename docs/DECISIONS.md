@@ -5762,3 +5762,132 @@ conversion and the saving comes from `series_id` and `canonical_sku` instead —
 
 An empty order fact now raises with its remediation instead of a `KeyError` on
 a column that is absent rather than empty.
+
+---
+
+## D-139 — Mean price is weighted by quantity, and a blank despatch is unknown
+
+Found by reconciling the preprocessed facts against the client's own workbook
+rather than against our own code. Two defects, both in
+`app/services/preprocessing/ais_preprocessing.py`, both silent.
+
+**The mean price was unweighted.** `MonthlyFactRow` accumulated a running mean
+of the rate column, so a line for 2 units counted as much as a line for 2,000.
+Every page prints value as `ordered_qty * mean_mrp`, so wherever a branch x SKU
+x period cell holds more than one price that product disagreed with the sum of
+the lines it came from. **19,359 of 582,324 cells hold more than one price**,
+and the network order value came out **Rs 2.92 Cr high**.
+
+The fix is to carry the numerator and the denominator rather than the quotient:
+
+```python
+mrp_value_sum: float = 0.0
+mrp_qty_sum: float = 0.0
+
+@property
+def mean_mrp(self) -> float | None:
+    return self.mrp_value_sum / self.mrp_qty_sum if self.mrp_qty_sum else None
+```
+
+`ordered_qty * mean_mrp` then reproduces the line-level sum exactly, which is
+the property the pages assume and the one the old code quietly broke. The sales
+path is weighted the same way, so proxy months are valued on the same basis as
+order months rather than on a second convention.
+
+**A blank despatch quantity was read as zero.** `to_float` returns `None` for
+an empty cell, and `or 0.0` collapsed that into nothing despatched — so the
+whole ordered quantity became shortfall. **44 order lines are blank here**,
+contributing **246 units of fabricated shortfall** and depressing the fill rate.
+`None` and `0.0` are different answers: nobody recorded it, versus nothing
+shipped. The loop now branches on `despatched_raw is None` and counts those
+lines in `despatch_unknown_lines`, so the absence is carried rather than
+absorbed.
+
+**The unpriced lines are valued at their own cell's mean, and that is stated
+rather than claimed otherwise.** The same 44 lines carry no rate. `mean_mrp` is
+computed over the priced lines of a cell, and `demand_value` is then
+`target * mean_mrp` over the cell's **whole** ordered quantity — so 246 unpriced
+units at COIMBATORE are valued at the going rate of the lines beside them,
+Rs 69,952, and our figure sits **above** the client's stated zero for them.
+An earlier revision of this entry claimed the opposite — that imputation was
+rejected and our figure was the lower one. That was wrong in both direction and
+mechanism; the code has always valued the whole cell. Recorded here rather than
+silently edited, because the wrong version was cited in a client-facing report.
+
+Leaving it this way is a choice: a unit that was ordered is demand, and pricing
+it at the rate its neighbours carry is more defensible than valuing it at zero.
+What is not defensible is not saying so, which is what this paragraph fixes.
+
+**Measured after the fix**, against the client workbook recomputed
+independently — a separate script reading the sheet XML, sharing no code with
+this application:
+
+```
+                      client file          our analysis
+ordered units           2,602,392             2,602,392
+despatched units        2,133,961             2,133,961
+shortfall units           504,052               504,052
+fill rate                  82.00%                82.00%
+order value       Rs 8,571,223,655.30   Rs 8,571,057,107.30
+```
+
+All 53 branches exact on units and on despatch. **51 of 53 exact on value**,
+the whole difference being Rs 166,548 (0.019%) from two lines pulling opposite
+ways:
+
+- **JABALPUR, one line.** Order `E1/05-25/02/JLR`, 2025-05-01,
+  `FG.VL1.LFH.GCG3130000`: 22 units at Rs 21,500, but the client's own
+  `MRP Value` column reads Rs 709,500, which is 33 x 21,500. The client's
+  quantity and value columns disagree with each other. We follow rate x
+  quantity, so we are Rs 236,500 **lower**.
+- **COIMBATORE, 44 lines.** No rate, client value zero, valued by us at the
+  cell mean as above, so we are Rs 69,952 **higher**.
+
+On the workspace scope every figure including value is exact: 146,814 /
+129,559 / Rs 59.95 Cr / 88.25%.
+
+Pinned by `tests/test_preprocessing.py`:
+`test_mean_mrp_is_weighted_by_quantity`,
+`test_an_unweighted_mean_would_have_got_it_wrong` (which fails against the old
+behaviour rather than merely passing against the new), and
+`test_a_blank_despatch_is_unknown_not_zero`.
+
+The panel was rebuilt after the change; no source file was touched.
+
+---
+
+## D-140 — A row with no product attribute is labelled, never dropped
+
+`_by_dimension` built every product-attribute chart — glass type, value class,
+vehicle category — with `dropna(subset=["key"])`. Two SKUs that the client
+orders **across 44 of its 53 branches** are absent from the client's own
+product master, so they have no attribute to group by and were discarded.
+
+The effect was a chart that did not add up to its own tile. Every
+product-attribute breakdown fell **2,641 units short** of the headline total,
+with nothing on screen to explain the hole. A reader comparing the bars against
+the tile above them would find the difference and have no way to account for it.
+The branch and trend panels never had this problem because every branch the
+orders name is in Location Master.
+
+```python
+UNKNOWN_DIMENSION = "Not in product master"
+work["key"] = work["key"].where(work["key"].notna(), UNKNOWN_DIMENSION)
+work["key"] = work["key"].mask(
+    work["key"].astype("string").str.strip() == "", UNKNOWN_DIMENSION
+)
+```
+
+Blank counts as unknown alongside null, so a whitespace-only attribute does not
+become its own bar. The label names the cause rather than saying `Unknown` or
+`Other`: the SKU is not in the product master, and that is a gap in the client's
+reference data worth surfacing to them, not an internal defect to hide.
+
+**Rejected: assigning these rows to the largest category, or to `Other`.** Both
+make the chart add up while asserting something about the product that the data
+does not support. Prohibited by the data-honesty rule in `CLAUDE.md` —
+`missing_data` is its own state and is never collapsed into another.
+
+Pinned by `tests/test_network_frame.py::TestUnknownDimensionBucket`, including
+`test_the_breakdown_adds_back_to_the_total`, which asserts the property that was
+broken rather than the implementation that fixes it.

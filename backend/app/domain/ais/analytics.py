@@ -402,9 +402,23 @@ def _trend(frame: pd.DataFrame, grain: str) -> list[dict[str, Any]]:
     return out
 
 
+#: Where a row lands when the product master has no attribute for its SKU.
+#: Named on screen so the gap is visible and the bars add back to the tile.
+UNKNOWN_DIMENSION = "Not in product master"
+
+
 def _by_dimension(frame: pd.DataFrame, column: str, label: str) -> list[dict[str, Any]]:
     """Totals per level of one dimension. Vectorised, for the same reason
-    `_trend` is."""
+    `_trend` is.
+
+    A row whose attribute is unknown goes to an explicit `Not in product
+    master` bucket rather than being dropped (D-140). Dropping it made every
+    product-attribute chart fall 2,641 units short of the headline total,
+    with nothing on screen to explain the hole - two SKUs that the client
+    orders across 44 of 53 branches are absent from their own product master.
+    The branch and trend panels never had this problem because every branch is
+    in Location Master.
+    """
     if frame.empty or column not in frame.columns:
         return []
     despatched = pd.to_numeric(frame["despatched_qty"], errors="coerce")
@@ -419,7 +433,12 @@ def _by_dimension(frame: pd.DataFrame, column: str, label: str) -> list[dict[str
             "sku": frame[SKU_COL].astype("object"),
             "series": frame[SERIES_COL].astype("object"),
         }
-    ).dropna(subset=["key"])
+    )
+    # Labelled, not dropped: the units are real and belong in the total.
+    work["key"] = work["key"].where(work["key"].notna(), UNKNOWN_DIMENSION)
+    work["key"] = work["key"].mask(
+        work["key"].astype("string").str.strip() == "", UNKNOWN_DIMENSION
+    )
     if work.empty:
         return []
     agg = work.groupby("key", observed=True).agg(
