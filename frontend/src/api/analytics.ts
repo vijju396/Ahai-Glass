@@ -53,6 +53,9 @@ export interface TrendPoint {
   gap_units: number | null;
   shortfall_units: number;
   fill_rate_pct: number | null;
+  /** Gross shortfall over ordered, for this bucket. Deliberately not
+   *  `100 - fill_rate_pct` — fill rate is net of over-despatch (D-153). */
+  unfilled_rate_pct: number | null;
   order_share_pct: number | null;
   proxy_share_pct: number | null;
   censored_share_pct: number | null;
@@ -109,6 +112,13 @@ export interface AnalyticsSummary {
     /** Coverage on a value basis: despatched value ÷ `ordered_value_known`.
      *  `fill_rate_pct` is the same ratio in units. */
     fill_rate_value_pct: number | null;
+    /** `shortfall_units` ÷ `ordered_units_known` — the gross positive
+     *  shortfall as a share of the order book, and **not** the complement of
+     *  `fill_rate_pct`. Fill rate is net of over-despatch, so on the network
+     *  panel `100 - fill_rate_pct` is 18.0% while this is 19.4%, and only this
+     *  one divides the `shortfall_units` actually shown beside it (D-153).
+     *  Optional: older payloads do not carry it. */
+    unfilled_rate_pct?: number | null;
     order_share_pct: number | null;
     censored_rows: number;
     series_count: number;

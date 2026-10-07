@@ -425,6 +425,17 @@ def _trend(frame: pd.DataFrame, grain: str) -> list[dict[str, Any]]:
                 ),
                 "shortfall_units": round(float(r["shortfall"]), 2),
                 "fill_rate_pct": _ratio(float(r["despatched"]), float(r["ordered_known"])) if known_rows else None,
+                # Gross shortfall over what was ordered, period by period, built
+                # the same way as the summary KPI of the same name and for the
+                # same reason: it is NOT `100 - fill_rate_pct`. Fill rate is
+                # net, so an over-despatched line cancels part of a shortage on
+                # another line. The tile that carries this draws its sparkline
+                # from here rather than dividing the two series in the browser,
+                # which would put a second definition of "unfilled" in the code
+                # and let the two drift (D-153, D-158).
+                "unfilled_rate_pct": (
+                    _ratio(float(r["shortfall"]), float(r["ordered_known"])) if known_rows else None
+                ),
                 "order_share_pct": _ratio(float(r["order_rows"]), rows),
                 "proxy_share_pct": _ratio(rows - float(r["order_rows"]), rows),
                 "censored_share_pct": _ratio(float(r["censored"]), rows),
@@ -697,6 +708,7 @@ def summary(panel: pd.DataFrame, scope: AnalyticsScope) -> dict[str, Any]:
     # the two totals would read a data gap as an unfilled order.
     ordered_value_known = float(pd.to_numeric(known["demand_value"], errors="coerce").fillna(0.0).sum())
     ordered_known = float(pd.to_numeric(known[TARGET_COL], errors="coerce").fillna(0.0).sum())
+    shortfall_positive = float(frame["shortfall_positive"].fillna(0.0).sum())
     order_mask = frame["target_source"] == "order"
     order_rows = int(order_mask.sum())
     # The periods the comparable rows actually span. Ordered and despatched are
@@ -722,7 +734,7 @@ def summary(panel: pd.DataFrame, scope: AnalyticsScope) -> dict[str, Any]:
             # fill rate - counting them as zero sales would be a fabrication.
             "despatch_value": round(despatched_value, 2) if len(known) else None,
             "despatched_units": round(despatched, 2) if len(known) else None,
-            "shortfall_units": round(float(frame["shortfall_positive"].fillna(0.0).sum()), 2),
+            "shortfall_units": round(shortfall_positive, 2),
             "ordered_value_known": round(ordered_value_known, 2) if len(known) else None,
             "ordered_units_known": round(ordered_known, 2) if len(known) else None,
             # Ordered minus despatched, on those same rows. A straight
@@ -738,6 +750,17 @@ def summary(panel: pd.DataFrame, scope: AnalyticsScope) -> dict[str, Any]:
             ),
             "fill_rate_pct": _ratio(despatched, ordered_known),
             "fill_rate_value_pct": _ratio(despatched_value, ordered_value_known),
+            # The gross positive shortfall as a share of what was ordered, and
+            # deliberately NOT `100 - fill_rate_pct`. Fill rate is net: it
+            # divides despatched by ordered, so the 5,534 rows that were
+            # over-despatched by 21,106 units cancel part of the shortage on
+            # other rows. `shortfall_units` on the tile beside this one is the
+            # gross figure - 504,298 against a net 468,431 on the network panel
+            # - so subtracting the fill rate would print 18.0% next to a number
+            # that is 19.4% of the order book. Net and gross are reported
+            # separately everywhere else; this keeps the two tiles dividing the
+            # same quantity.
+            "unfilled_rate_pct": _ratio(shortfall_positive, ordered_known),
             "order_share_pct": _ratio(order_rows, len(frame)),
             "censored_rows": int(frame["is_censored"].fillna(False).astype(bool).sum()),
             "series_count": int(frame[SERIES_COL].nunique()),

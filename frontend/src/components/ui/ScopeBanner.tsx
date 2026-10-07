@@ -111,10 +111,12 @@ export function ScopeBanner({ scope }: { scope?: WorkspaceScope | null }) {
         </button>
       </div>
 
-      <p className="mt-1 text-[10px] leading-relaxed text-[var(--color-text-muted)]">
-        Every figure on this page describes that slice only — not the national network.
-      </p>
-
+      {/* The counts are the statement; the sentence that used to sit under
+          them is now inside "What is in scope?" (D-160). The banner's job is
+          to say what slice the page is on, and "2 of 53 branches · 136 of 2063
+          SKUs" says it in the width it already occupies — a second line
+          restating it in prose was two rows of chrome above every page. The
+          explanation is not dropped, only folded into the disclosure. */}
       {open && (
         <div className="mt-2 flex flex-col gap-2 border-t border-[var(--color-primary)]/20 pt-2">
           {branches.length > 0 && (
@@ -146,6 +148,7 @@ export function ScopeBanner({ scope }: { scope?: WorkspaceScope | null }) {
             </div>
           )}
           <p className="text-[10px] leading-relaxed text-[var(--color-text-muted)]">
+            Every figure on this page describes that slice only — not the national network.
             Source: {scope.detail}. The five client files are untouched — this narrows what
             is read, it does not delete anything.
           </p>

@@ -632,6 +632,16 @@ narrower span is visible.
 The same fields appear per period on `trend`, `null` in a bucket where no row
 records a despatch.
 
+**`unfilled_rate_pct` is gross and is not `100 - fill_rate_pct`.** It divides
+the **positive** shortfall — `shortfall_units`, lines that were short — by
+`ordered_units_known`. Fill rate is net: it divides despatched by ordered, so a
+line that was over-despatched cancels part of a shortage on another line. On the
+network panel the two read 19.4% and 18.0%, and the gap is the 5,534
+over-despatched lines. It is published on `kpis` and, since D-158, on each
+`trend` bucket as well, `null` wherever `fill_rate_pct` is `null` — so a
+consumer drawing it over time never has to divide the two series itself and
+arrive at a second definition (D-153, D-158).
+
 **Every exception carries its definition.** Each row in
 `/api/analytics/exceptions` names the condition it was found by, its severity,
 and the unit its measure is in. The ranked entity is a **branch x SKU line** —

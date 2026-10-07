@@ -6390,3 +6390,855 @@ July and August never sees a partial year.
 ```
 backend 1088 passed · frontend 268 passed (24 files) · tsc --noEmit clean
 ```
+
+## D-148 — The date range is back, at the head of the filter bar
+
+Requested: add a date-range filter at the start of the bar, and verify every
+graph changes with it.
+
+**This reverses D-145, on the user's instruction.** D-145's reasoning was not
+wrong and is not withdrawn: FROM cannot go below `orders_start_month`, because
+D-122 pins the page's floor to the first month holding a real order and every
+earlier month is sales-proxy rows with no order and no despatch. What D-145 got
+wrong was the conclusion drawn from it. A bound on one end of a control is a
+*floor*, not a reason to delete the control — TO was always free, and a reader
+asking "what did the last quarter look like?" had no way to say so.
+
+So the floor is now expressed as the floor: `minMonth={ordersStart}` on the
+picker, with `effectiveStart` taking the reader's value only when it is later,
+as a second line of defence against a typed value. The picker leads the bar
+because the period is the question asked first; everything after it narrows
+that window rather than the other way round.
+
+**No inverted-range message, deliberately.** `MonthRange` hands each field the
+other as its bound (`fromMax = to`, `toMin = from`) and runs `clamp` on every
+change, so FROM cannot pass TO through the control. A first draft carried a
+"start must be on or before end" line; it was removed once measurement showed
+it could never render. Typing `2024-06` into FROM snaps it to `2025-04` and
+leaves the window at `2025-W14 → 2026-W31 · 70 weeks` with the count still at
+`2,063 of 2,063 SKUs` — the 2,279-SKU proxy-only figure never leaks in.
+
+**Verified against the payload, not by eye.** Every key of `/analytics/summary`
+was hashed under five windows and compared with the page's real baseline
+(`start_period=2025-04`, which is what the page always sends):
+
+| panel | responds |
+|---|---|
+| `kpis` `trend` `seasonality` `coverage` `concentration` `notes` `scope` `window` | changed |
+| `by_branch` `by_sku` `by_value_class` `by_product_group` `by_glass_type` `by_vehicle_category` `by_vehicle_age` | changed |
+| `branch_by_group` `branch_over_time` | changed |
+| `available_grains` `grain_note` `panel_grain` `preprocessing_run_id` `network_coverage` `workspace_scope` `empty` | unchanged, correctly — none is a measurement of the window |
+
+**The filter partitions the data; it does not resample it.** Three adjacent
+windows covering the whole order book sum exactly to the whole:
+
+```
+2025-04..09   951,381 units   218,322 rows
+2025-10..03   911,405 units   209,695 rows
+2026-04..07   739,606 units   154,307 rows
+------------------------------------------
+sum         2,602,392 units   582,324 rows
+whole       2,602,392 units   582,324 rows   diff 0
+```
+
+**In the browser.** Setting `2026-04 → 2026-07` moved the window line to
+`2026-W14 → 2026-W31 · 18 weeks`, the count to `53 of 53 branches and 1,691 of
+2,063 SKUs`, and every one of the five time-axis charts to exactly
+`Apr 26 | May 26 | Jun 26 | Jul 26`; the month-of-year chart to `A | M | J | J`
+and its caption to `Each column averages 1 year`. Fill rate reads 87.45% on
+2025-04..09, 85.5% on 2025-10..03 and 70.67% on 2026-04..07 — the recent
+window is genuinely worse served, which the fixed full window averaged away to
+82.0%.
+
+```
+tsc --noEmit clean
+```
+
+## D-149 — Demand by Branch replaces the branch × value-class stack, and the magnitude charts get a log axis
+
+Requested: remove Demand by Branch × Value Class and keep a plain Demand by
+Branch; make sure the branch chart responds to the value-class, glass-type and
+vehicle filters; and put the charts on a logarithmic scale so the small
+categories are visible.
+
+**The stack answered two questions and neither well.** 53 columns each split
+five ways left the smaller branches as a few unreadable slivers, and the
+value-class split already has its own panel directly below it. The replacement
+plots `by_branch`, one bar per branch, sorted largest first.
+
+**It now plots units, not value.** The stack was drawn in rupees while every
+other "Demand by …" panel on the page is in units, and the two disagree about
+the ranking — SECUNDRABAD orders more units than BENGALURU (56,847 against
+54,350) and less value (₹181.9 Cr against ₹190.1 Cr). Two charts side by side
+ranking the same branches differently, with nothing saying why, is the defect.
+The value is still on the tooltip. `branch_by_group` is untouched on the
+payload: the unrouted reference-parity page still renders it.
+
+**The filters were already correct; this is now measured rather than assumed.**
+`by_branch` is cut by the same frame as everything else. Selecting Sidelite
+moves JAIPUR above BENGALURU — that ranking flip is real, not a rendering
+artefact — and Sidelite + 3W leaves exactly one branch with any demand.
+
+| filter | branches drawn | leader |
+|---|---|---|
+| none | 53 | BENGALURU |
+| glass type = Sidelite | 53 | JAIPUR |
+| Sidelite + vehicle category = 3W | 1 | BENGALURU |
+
+**The log axis is the fix for a real defect, not a preference.** Ordered demand
+is violently skewed, and on a linear axis the page was drawing its own
+categories at zero pixels. Measured by `getBBox()` on the smallest bar of each
+panel, linear against log:
+
+| panel | spread | smallest bar, linear | log |
+|---|---|---|---|
+| Demand by Branch | 242× | **1 px** | 47 px |
+| Demand by Value Class | 727× | **0 px** | 13 px |
+| Demand by Glass Type | 279,112× | **0 px** | 19 px |
+| Demand by Vehicle Category | 846× | **0 px** | 45 px |
+| Demand by Vehicle Age | 265× | **1 px** | 58 px |
+| Unfilled Demand by Value Class | 659× | **0 px** | 22 px |
+| Ordered vs Despatched by Value Class | 743× | **0 px** | 11 px |
+
+**It is a toggle, defaulted on, and it says what it costs.** The two scales
+answer different questions — linear says "how much bigger", log says "what is
+there at all" — and log's price is that bar *length* stops being proportional
+to the value. The Demand by Branch note says so in the reader's words: "read
+the gridline a column reaches, not its height."
+
+**Four kinds of chart are deliberately excluded, because log would make each
+worse:**
+
+- **Stacked** — Top SKUs stacks filled on unfilled. Stacked segments do not add
+  up on a log axis, so the chart would be arithmetically false.
+- **Percentages** — Fill Rate by Glass Type and Unfilled Share by Vehicle Age
+  are already on a 0–100 scale where the small values are legible.
+- **Time series** — Trend, Branch over Time, Seasonality, Realised Price and
+  Ordered vs Despatched. Log bends the shape of a trend, which is the one thing
+  those charts exist to show.
+- **Below 1.5 decades of spread** — enforced in code by `LOG_MIN_SPREAD = 30`,
+  not by a hand-maintained list. Value per Unit by Vehicle Category spans only
+  17× and four of its five segments sit between ₹2,304 and ₹4,880; a log axis
+  renders those four at visibly equal height, hiding a difference the linear
+  axis shows plainly. It keeps its linear axis even with the toggle on.
+
+Volume vs Value by SKU was already log on both axes and is unchanged.
+
+**Two details that only showed up once it was drawn.** Recharts' `auto` bounds
+on a log scale crop the smallest column, so `logDomain` sets the domain
+explicitly to whole decades either side of the data. And Demand by Glass Type
+spans eight decades — eight labels on a 215 px axis is a ladder, not a scale —
+so past six decades the tick labels thin to every other one.
+
+```
+frontend 26 passed (no-duplicate-registry, ReferenceParityPages) · tsc --noEmit clean
+```
+
+## D-150 — Realised Price per Unit was flat because of its zero baseline, not its scale
+
+Reported: the Log scale toggle does not change Realised Price per Unit.
+
+**It does not, and it should not.** The toggle declines the panel by the rule
+already in `logDomain`: `LOG_MIN_SPREAD = 30`. Realised price runs ₹3,184 to
+₹3,510 across the window — a spread of **1.10×**. A log axis compresses orders
+of magnitude, and there are none here; drawing this series on one would move
+every point by less than a pixel. The toggle was working.
+
+**The actual defect was the axis baseline.** The axis ran ₹0 to ₹3,600 while
+every value sat in a ₹326 band at the top of it, so the whole of the series'
+movement was rendered in **9% of the panel's height** and the line read as
+flat. It is not flat: price is up about 10% from ₹3,194 in February to ₹3,510
+in June, with a visible dip through August and September. That was on the page
+the whole time and invisible.
+
+`tightDomain` fits the axis to the data plus a 15% margin and folds the average
+in, so the dashed reference line cannot fall outside the axis it is drawn on.
+Measured: the line went from 9% to **65%** of the plot height.
+
+**Legitimate on a line, and refused on a bar.** A line carries its value in its
+*position*, so moving the baseline moves the whole line and changes nothing it
+says. A bar carries its value as length *from* the baseline, so cutting the
+baseline off a bar chart overstates every difference on it. That is why this is
+applied to one line chart and nowhere else, and why the note says so in plain
+words — "Axis starts above zero."
+
+**The note had to stay under 90 characters.** `Panel` folds a longer note
+behind a "How to read this" click. The first draft read "The axis is fitted to
+the range and does not start at zero", which at 110 characters hid the one
+caveat a reader must not have to click for. Shortened rather than left hidden.
+
+**Recharts' own ticks were unusable on the fitted domain** — ₹3130, ₹3280,
+₹3560, three labels at uneven spacing, none a number anyone would pick. The
+step is now rounded to 1, 2 or 5 times a power of ten, giving ₹3100 … ₹3600 in
+hundreds.
+
+**The other two time charts keep their zero baseline, deliberately.** Ordered
+Demand Trend spans 1.46× and uses 29% of its height, and Demand by Branch over
+Time spans 3.6× and uses 55% — neither is misread as flat, and unlike a price,
+a volume has a meaningful zero that is worth showing.
+
+```
+tsc --noEmit clean
+```
+
+## D-151 — Every panel on Overall Analysis expands, in place, under the live filter bar
+
+> **The expand *mechanism* described here was rejected by the user and is
+> superseded by D-152.** Hiding the rest of the page and scrolling to the top
+> was wrong. Everything else below — the button, the icon, the Escape key, the
+> measured height, the filters driving the expanded chart, the opt-in at the
+> component — survives unchanged in D-152. Kept because the reasoning for
+> *not* building a conventional dialog is still the reasoning, and because the
+> two paragraphs that were wrong are more useful stated than deleted.
+
+Requested: an expand button in the corner of every graph; clicking it shows the
+graph big; the big view sits below the filters; it changes with the filters;
+the same corner closes it and the page returns to normal.
+
+**It is not a modal, and that is the whole design.** *(This is the part the
+user rejected — see D-152, which keeps the conclusion and throws away the
+means.)* A dialog is the obvious way to make a chart big and the wrong one
+here. It would cover the filter bar, and the reason to blow a chart up on this
+page is to *interrogate* it — change the branch, narrow the dates, flip the
+scale, watch it move. So the expanded panel is the ordinary panel, still in the
+page, with everything around it hidden: the section links, the KPI tiles, the
+window note, each section heading, and the other sixteen panels. The filter bar
+is outside that block and never hides.
+
+**"It should change with the filters" needed no wiring.** The panel is never
+unmounted, so it goes on reading the same `summary` query every other panel
+reads, and `keepPreviousData` (D-144) means it holds the previous payload while
+the next one lands rather than blanking. Measured with Demand by Branch
+expanded, driving three different controls without ever collapsing it:
+
+| action while expanded | result | still expanded |
+|---|---|---|
+| glass type = Sidelite | leader BENGALURU → **JAIPUR**, 2,063 → 1,201 SKUs | yes |
+| + TO = Sep 2025 | 53 → **50** branches, 1,092 SKUs | yes |
+| Log scale off | y-axis decades → `0, 3.5K … 14.0K` | yes |
+
+The chart held 649 px throughout.
+
+**The height is measured, not assumed.** An expanded chart fills what is left of
+the viewport under the filter bar — and the bar's own height is read with a
+`ResizeObserver`, because it wraps from one row to three as the window narrows.
+A constant tuned at 1280 px either overlaps the bar or wastes a third of the
+screen at 900 px. Measured at 1440×900: Realised Price per Unit goes from 186 px
+to **649 px**, with the filter bar at 147 px above it. `Math.max` against the
+panel's own base height so the 460 px SKU scatter does not shrink on expand.
+
+**Expanding scrolls to the top**, because "below the filters" is only true if
+the filters are on screen; without it, expanding a panel from the bottom of a
+six-screen page left the reader looking at the empty space the page used to
+occupy. *(Also rejected. D-152 gets "below the filters" from the filter bar's
+own measured position instead, and never moves the reader.)*
+
+**Three details the first draft got wrong.**
+
+- The icon was an X. An X reads as "close this chart", which is the opposite of
+  what the control does. It is now outward arrows to expand and inward arrows to
+  restore, and the label reads "Restore <panel> to normal size".
+- There was no keyboard escape. A control that takes over the screen and can
+  only be dismissed by finding one small button again is a trap. Escape closes
+  it.
+- `Panel` already had an `action` slot, used by two panels for their clear-chip.
+  The button sits beside `action`, not instead of it.
+
+**Opt-in at the component.** `expanded` and `onToggleExpand` are both optional
+on `Panel`; every other page passes neither and renders exactly as before, so
+none of them grew a button it did not ask for. Expanding a second panel
+collapses the first — one at a time, held by id.
+
+```
+frontend 268 passed (24 files) · tsc --noEmit clean
+```
+
+## D-152 — The expanded panel is a popup over an untouched page, not a takeover of it
+
+D-151 shipped the expand button and the user rejected how it opened:
+
+> "no it should come like a pop up explanding keeping the backround as it is
+> and not moving other things and when we close it should go back to its place
+> and the scrolled thngs should be in place."
+
+Three requirements, and the previous build broke all three: it hid sixteen
+panels and every heading, which moved everything; it scrolled to the top, which
+lost the reader's place; and closing returned them to a page they were no
+longer looking at.
+
+**The panel lifts out and leaves its own shape behind.** The chosen `Card`
+switches to `position: fixed` with a box the page measures, and `Panel` renders
+an `invisible` placeholder of the card's last resting height in the grid slot it
+came from. `invisible`, not `hidden` — the slot still exists, so the grid keeps
+the same item count, the same spans and the same track heights. Nothing behind
+reflows because, as far as the layout is concerned, nothing left.
+
+The resting height is captured in a `useLayoutEffect` that runs on every render
+*while not expanded*, so the placeholder is sized from what the card actually
+was, including a note folded or unfolded — not from a guess.
+
+**"Below the filters" is read, not scrolled to.** The popup's top is
+`filterBar.getBoundingClientRect().bottom + 10`, remeasured on window resize and
+by a `ResizeObserver` on the bar, which wraps from one row to three as the
+window narrows. That is where D-151's scroll-to-top came from, and it is no
+longer needed: the bar is sticky, so its bottom is a viewport coordinate whatever
+the scroll position. The scroll position is never read and never written.
+
+**The backdrop starts below the bar.** `fixed inset-0` with `top` overridden to
+the popup's top, so the filter bar sits above it and stays interactive rather
+than merely visible. Measured at 1440×900 with Demand by Glass Type open:
+`elementFromPoint` at the bar's centre returns `SELECT`, not the backdrop.
+
+**Scroll is locked without shifting the page.** `documentElement.style.overflow
+= 'hidden'` alone moves every pixel sideways by the scrollbar width on a desktop
+browser, which is exactly "moving other things". The gutter
+(`innerWidth - documentElement.clientWidth`) is added back as
+`body.paddingRight` and both are restored from their previous values on close.
+
+**Measured, at 1440×900, with the page scrolled to 2400 px.** Opening
+Demand by Glass Type:
+
+| | before | expanded | after close |
+|---|---|---|---|
+| `window.scrollY` | 3200 | **3200** | **3200** |
+| document height | 6792 | **6792** | **6792** |
+| body width | 835 | **835** | **835** |
+| panels rendered | 17 | **17** | **17** |
+| Top SKUs rect | `1998,234,577×366` | **identical** | **identical** |
+| Fill Rate rect | `2670,234,577×301` | **identical** | **identical** |
+| the popped panel | `979,234,577×293` | `262` fixed | **`979,234,577×293`** |
+
+Every background panel is at the same coordinate to the pixel, and the popped
+one comes back to the slot it left.
+
+**The filters still drive it, and it still holds.** With the popup open:
+vehicle category = CAR & MUV took the chart from five bars to four; Log scale
+off dropped the smallest bar to 0 px and back on restored it to 64 px; the
+chart canvas was 625 px against ~215 px resting. The card's `position` read
+`fixed` after every one of them.
+
+**Four ways out, all verified:** the corner button, Escape, a backdrop click,
+and expanding a different panel. After each, `position` is back to `static`, the
+backdrop is gone, `documentElement.style.overflow` and `body.paddingRight` are
+restored, no placeholder is left in the DOM, 17 panels are rendered, and
+`window.scrollY` is unchanged.
+
+**`Card` became a `forwardRef`** so `Panel` can measure it, and `overlayStyle`
+joins `expanded`/`onToggleExpand` as optional props. Every other page passes
+none of the three and is byte-identical in behaviour.
+
+```
+frontend 268 passed (24 files) · tsc --noEmit clean
+```
+
+## D-153 — The Per Branch & SKU tiles report the order book, not the panel
+
+The user queried one figure: "i think 1334.97 cr is wrong". It was, and the
+check found two separate defects in three tiles.
+
+**₹1,334.97Cr was a third sales proxy, printed under the word "Ordered".**
+`demand_units` and `demand_value` sum *every* panel row, and `target_source` is
+`sales_proxy` on 509,227 of the network panel's 1,503,753 rows — the stretch
+before Apr 2025, where there is no order book at all. Measured on the live
+network payload, which reproduces the user's screen to the paisa:
+
+| | units | value |
+|---|---|---|
+| printed as "Ordered demand" | 4,140,507 | **₹1,334.97Cr** |
+| of which, the order book | 2,602,392 | **₹860.04Cr** |
+| of which, sales proxy | 1,538,115 | **₹474.93Cr** |
+
+CLAUDE.md is explicit — "Ordered quantity is the target. `sales_proxy` is a
+labelled substitute; never call the two equivalent" — and the tile called them
+equivalent. It overstated ordered demand by 59% in units and 55% in value.
+
+**No new field was needed for it.** `ordered_units_known` and
+`ordered_value_known` were already on the payload and are already the order
+book: every row carrying a despatch figure is an order row, and the 631,221
+order rows without one have a target of zero, so the `_known` totals equal the
+`target_source == 'order'` totals exactly — 2,602,392 units and ₹862.74Cr on
+the monthly panel, by both readings. **Overall Analysis has read those fields
+since D-121.** This page was the one that did not, so the fix is a consistency
+repair, not a new policy.
+
+**"· 122 weeks" went with it**, and not only because the user asked. It
+described the *panel's* window; the order book covers 70 of those 122 weeks. A
+window count that outruns the figure beside it is worse than no window count.
+
+**The value is MRP, and now says so.** `demand_value` is
+`target × mean_mrp` — list price, not realised revenue — so the sublabel reads
+"₹860.04Cr at mean MRP". The number was never revenue and the tile never said
+which it was.
+
+**"Fill rate" became "Unfilled rate", and it is not `100 - fill_rate_pct`.**
+This is the trap the rename walked into. Fill rate is **net**: despatched ÷
+ordered, so the 5,534 rows despatched *over* their order quantity cancel part
+of the shortage elsewhere. The `Unfilled` tile beside it is **gross** — 504,298
+units, the sum of positive shortfalls only. Measured on the network panel:
+
+- net shortfall 468,431 → `100 - fill_rate_pct` = **18.0%**
+- gross shortfall 504,298 → `shortfall_units ÷ ordered_units_known` = **19.4%**
+
+Subtracting the fill rate would have printed 18.0% directly beside a figure
+that is 19.4% of the order book — two tiles failing to divide into each other,
+which is exactly the net/gross collapse CLAUDE.md forbids. So
+`unfilled_rate_pct` is its own backend field, computed from the same numerator
+the tile beside it shows.
+
+**The tiles now, against what they replaced:**
+
+| | before | after |
+|---|---|---|
+| Ordered demand | 4140.5K units · ₹1334.97Cr · 122 weeks | **2602.4K units · ₹860.04Cr at mean MRP** |
+| Unfilled | 504.3K units · 142.5K short-despatched rows | **504.3K units · ordered but not despatched** |
+| rate | Fill rate 82.0% | **Unfilled rate 19.4%** |
+
+**Still carrying the defect, stated rather than fixed:**
+`features/demand-analytics/DemandAnalyticsPage.tsx:285` prints
+`inr(kpis.demand_value)` over `num(kpis.demand_units)` + "units ordered" — the
+same mislabel. It is one of the twelve unrouted reference-parity pages, so it
+is unreachable in the UI; it is named here so the next person to route it fixes
+the tile first.
+
+```
+backend  67 passed (tests/test_analytics_api.py, 5 new) · frontend 268 passed · tsc --noEmit clean
+```
+
+## D-154 — Axis labels have a width budget, and `num` had no millions step
+
+Reported against one expanded panel: the y-axis numbers on Demand by Glass Type
+were cut off at the left edge. Measuring every tick on every chart — each tick's
+bounding box against its SVG's — found four clipped panels and two separate
+causes, plus two more on the other page.
+
+**The root cause was a missing step in the shared formatter.** `num` abbreviates
+at a thousand and stops there, so it renders a million as `1000.0K` and ten
+million as `10000.0K` — seven characters in a 46px gutter. A log axis reaches
+those decades as a matter of course, because its top tick is
+`10 ** ceil(log10(max))`: the 348K Backlite column alone puts a 1,000,000 tick
+on the axis. Measured overhang past the left edge:
+
+| panel | tick | cut by |
+|---|---|---|
+| Demand by Glass Type | `1000000` | **19.3px** |
+| Demand by Glass Type | `10000` | 6.4px |
+| Demand by Value Class | `10000.0K` | 5.9px |
+| Ordered vs Despatched by Value Class | `10000.0K` | 5.9px |
+
+**`num` itself was left alone, and a separate `tickNum` added.** The two have
+different budgets. An axis tick is scanned and has a hard width limit; a KPI
+tile is read, and `2602.4K units` carries four more significant digits than
+`2.6M units` would — those tiles were corrected in D-153 one change ago and
+reducing their precision now would be a silent regression. `tickNum` also drops
+the trailing `.0` on an exact decade, which is every tick on a log axis.
+
+**Glass Type had no formatter at all**, which is why it printed `1000000`
+rather than even `1000.0K`. So did the two horizontal bar charts' quantity
+axes, and Top SKUs, which printed `25000 / 50000 / 100000` where every sibling
+chart said `25K`. Not clipped, but the same oversight, and now consistent.
+
+**The fourth was not a number at all.** On Unfilled Demand by Value Class the
+category label `Not in product master`, rotated -30° at 8px, needed more
+vertical band than the `height={52}` it was given and was cut off 5.6px below
+the plot. Now 64.
+
+**The same defect was on Per Branch & SKU, and worse there** — clipped at
+resting size, not only when expanded. Two axes with no formatter printed
+`55000 / 110000 / 165000 / 220000` and `45000 / 90000 / 135000 / 180000`, cut
+by up to 10px. Both now read `55K … 220K`.
+
+**Verified by measurement, not by eye.** Every tick on all 17 Overall Analysis
+panels was checked expanded *and* at rest, and all four Per Branch & SKU charts:
+
+```
+before : 4 panels clipped on /overall, 2 charts clipped on /series
+after  : 17 panels expanded, 17 at rest, 4 charts on /series - 0 clipped
+```
+
+Log decades now read `1 · 100 · 10K · 1M` where they read `1 · 100 · 10000 ·
+1000000`.
+
+**One case `tickNum` deliberately does not handle.** It has no billions step,
+so ₹13.46bn would read `13460.2M`. A money axis uses `inr`, which goes to lakh
+and crore and gives `₹1346.02Cr`. The test asserts both, so the boundary is
+documented rather than discovered.
+
+```
+frontend 275 passed (25 files, 6 new) · tsc --noEmit clean
+```
+
+## D-155 — Volume vs Value is four blocks, and the marks moved into a list
+
+Requested: drop the individual SKU points, show the percentages and words on
+the graph with colour shading, and open a scrollable table per block — no
+expand button, since the panel is already full width.
+
+**The scatter was answering a question nobody asked.** It drew one bubble per
+SKU across 2,063 of them, and at that count the middle was a solid smear: the
+only marks that carried a reading were the handful at the edges, and the 1,715
+in the tail were what made it unreadable. The reading was never *which mark is
+where* — it is *how much sits in each quadrant*, and that is four numbers.
+
+**The quadrants are preserved, as a 2×2 map.** Position still means what it
+meant: value rises up the page, units rise to the right, and the split is the
+same two Pareto cuts. Losing the axes would have turned four quadrants into
+four unrelated boxes, so both directions are labelled in words. Each block
+carries its revenue share as a number, as a bar of that length, and its SKU
+count, catalogue share and unit share underneath — the same four facts the
+bullet list above the chart used to carry, which is why that list is gone
+rather than duplicated.
+
+| block | revenue | SKUs | units |
+|---|---|---|---|
+| Most revenue and most volume | 77.9% | 182 (8.8%) | 65.9% |
+| Low on both | 14.2% | **1,715 (83.1%)** | 19.3% |
+| More volume, less revenue | 5.8% | 148 (7.2%) | 14.1% |
+| Less volume, more revenue | 2.1% | 18 (0.9%) | 0.7% |
+
+**Nothing was lost — the marks became rows.** Clicking a block opens the SKUs
+behind it, largest first by ordered value, with the block's totals pinned above
+the table and the column headings sticky over it. 1,715 rows in a 571px
+scroller is a list; 1,715 bubbles in a 460px chart was a smear.
+
+**It reuses the expand popup rather than inventing a second one.** Same
+geometry, same backdrop, same three ways out, driven by one `overlayFor` value
+instead of two parallel sets of effects that could disagree about whether the
+page is frozen. Opening a panel closes a drawer and vice versa, so there is
+never more than one fixed card.
+
+**No expand button on this panel**, as asked: it is already full width and a
+block has no detail to magnify. `Panel` takes `expanded`/`onToggleExpand` as
+optional, so withholding them is the whole change — the page now has 16 expand
+buttons, not 17.
+
+**Two defects found in the building and fixed:**
+
+- `inr` abbreviates over a thousand, so the per-unit column read `₹2K` and
+  `₹7K` — two prices that differ by 3× rendered three characters apart. A
+  per-unit price now gets its digits (`₹3,723`), the same `rupees` helper Per
+  Branch & SKU already carries.
+- The share percentages rendered as `8%` beside `72.1%`, because the rounding
+  drops a trailing zero. Side by side in four blocks that reads as a different
+  precision rather than the same one; all six now carry one decimal.
+
+**`tsc` did not catch the real bug here.** The drawer's derived rows were first
+written beside the other overlay helpers, 250 lines *above* `skuMix` — a `const`
+is not hoisted, so it threw `Cannot access 'skuMix' before initialization` in
+the browser while the typecheck passed clean. Moving the declaration below
+`skuMix` fixed it. Worth remembering that a clean `tsc` is not evidence a page
+renders.
+
+**Measured, at 1440×900, scrolled to 2600px:** opening a block leaves
+`scrollY`, document height and body width unchanged; the drawer sits 10px under
+the filter bar and never covers it; the table holds 1,715 rows against a 571px
+scroller; corner button, Escape and backdrop each close it and restore the
+locked styles. Under a Sidelite filter the blocks move together (77.9% → 72.1%,
+182 → 278 SKUs) and the open drawer follows to 278 rows without closing.
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## D-156 — The four blocks sit on a real plot, and carry two numbers each
+
+The blocks of D-155 were laid out as an even 2×2 grid. That is the wrong
+drawing. A cross through the middle of a box, with "80%" written next to it,
+puts the line in a place the data never said and then labels it as if it had —
+so the panel now draws the axes and the blocks take the positions the cuts
+actually fall at.
+
+**The frame is the chart.** A log value axis up the left with its decade ticks
+in `inr`, a log unit axis along the bottom in `tickNum`, decade gridlines
+between them, and the two 80% cuts as dashed lines across the plot. The blocks
+are absolutely positioned against that frame, each filling its own quadrant,
+so the panel reads as one drawing rather than a grid pasted over a label.
+
+`plotGeometry` is where the positions come from. It takes each axis out to the
+decade below the smallest SKU and the decade above the largest, places the cut
+by its log position in that span, and clamps the result to 6–94% so a cut that
+lands near an edge still leaves a block you can see. The cuts are unequal and
+that inequality is the Pareto reading: **measured at 1440×900, the plot is
+1016×500 and the blocks sit at 62%×29%, 36%×29%, 62%×68% and 36%×68%.** The
+80% of units arrives at 62% across; the 80% of value arrives two-thirds of the
+way up. An even grid would have hidden exactly that.
+
+`PLOT_H` is 500 rather than the 460 the scatter used. The top row is only 27.6%
+of the plot, and the two blocks that carry the money sit in it — at 460 they
+were too short to hold their own numbers.
+
+**Each block shows two percentages and nothing else.** The fill bar is gone, as
+asked, and so is the footer line of SKU count, unit share and rupee total: the
+block's own area already encodes its size, so a bar inside it was drawing the
+same fact twice, and the footer was four figures in a space that could not set
+them legibly. What is left is the share of revenue and the share of SKUs, sized
+to the block by container query units (`containerType: 'size'`, `min(cqh, cqw)`
+inside a `clamp`) so the type tracks whichever dimension is tighter. **Measured
+at 1440×900:** the 632×338 tail block sets its revenue figure at 58px, the
+366×144 top-right block at 31.8px, and at an 820px viewport — where that block
+is 154×144 and previously overflowed — at 19.8px with nothing clipped. That
+block's reading is 77.9% of revenue against 8.8% of SKUs, which is the whole
+point of the panel and now the largest thing in it.
+
+The exact figures stay reachable: the drawer is unchanged, and the counts
+behind the four blocks are 18, 182, 1,715 and 148 — **2,063, every ordered SKU
+in exactly one block.**
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## D-157 — The value cut is placed to fill the corner to 80%, not the row
+
+The top-right block read **77.9% of revenue**. The two cuts of D-155 were
+independent 80% Paretos, so the statement that was exactly true was about the
+top *row*: the first 80% of value, split 77.9% / 2.1% by the units cut slicing
+a sliver of it into the low-volume block. True, and not the number anyone
+takes off the panel. The number they take off it is the corner's, and on
+request the corner now carries 80%.
+
+**Only the value cut changed.** The units line is still the plain 80%-of-units
+Pareto, and the right-hand column still holds exactly 80.0% of units. The value
+threshold is lowered from ₹72.40L to ₹58.58L — 200 SKUs in the value core
+become 239 — until the SKUs that are big on *both* counts reach 80% of all
+revenue. `cornerValueCut` is a separate construction from `coreOf` for that
+reason, and the two are not interchangeable.
+
+**What it reads now, against what it read before:**
+
+| Block | Revenue | was | SKUs | was |
+|---|---|---|---|---|
+| Most revenue and most volume | **80.0%** | 77.9% | 10.2% (210) | 8.8% (182) |
+| Less volume, more revenue | 3.0% | 2.1% | 1.4% (29) | 0.9% (18) |
+| More volume, less revenue | 3.7% | 5.8% | 5.8% (120) | 7.2% (148) |
+| Low on both | 13.3% | 14.2% | 82.6% (1,704) | 83.1% (1,715) |
+
+210 + 29 + 120 + 1,704 = 2,063; revenue and units each still sum to 100%.
+10.2% of the catalogue earning 80% of the revenue is a sharper Pareto reading
+than the one it replaces.
+
+**The row above the line now holds 82.98%, so that line is no longer labelled
+"80% of value".** It reads `↑ value cut`. Leaving the old label on a line that
+had moved would have been the actual defect — the panel would have asserted a
+share it no longer carried. The vertical label is untouched because it is still
+true.
+
+**80% in the corner is not always reachable, and the first cut of this change
+drew a broken chart when it wasn't.** The corner can only hold revenue that
+belongs to a high-*volume* SKU, so the ceiling is what those SKUs carry between
+them: 93.7% across the whole catalogue, but **75.03% under a Sidelite filter**.
+With the target unreachable the loop ran off the end of the ranking, swept
+every SKU into the value core, and emptied both bottom blocks — the panel
+rendered `0.0% of revenue, 0.0% of SKUs` twice. One filter click from the
+default view. It now tests the ceiling first and falls back to the plain
+80%-of-value Pareto cut, which under Sidelite gives 278 / 61 / 54 / 808 — all
+four blocks populated, summing to 1,201 — and the note says why the corner is
+72.1% rather than 80%. A panel that cannot make its headline true should say
+so, not redraw itself into nonsense.
+
+**Measured at 1440×900:** corner 80.0% / 10.2%; drawer row counts 210, 29, 120,
+1,704 summing to 2,063; page position, height and width unchanged through all
+four open/close cycles; the cuts re-solve under a glass-type filter and restore
+exactly on clearing it.
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## D-158 — Unfilled rate is a fourth tile, and its sparkline is built server-side
+
+Overall Analysis carried three tiles that reconcile exactly — orders received,
+sales despatched, and the difference. On request there is now a fourth: the
+unfilled rate, 19.4%.
+
+**It is a rate, not a sum, so it sits outside the `tile 1 − tile 2 = tile 3`
+identity** the first three hold, and the comment above them says so. It also
+divides a different quantity from the tile beside it, which is the part that
+could mislead: "Orders not despatched" carries the **net** gap of 468.4K units
+and a value coverage of 83.4%, while this divides the **gross** shortfall of
+504.3K. A reader who subtracts 83.4 from 100 gets 16.6% and is wrong twice
+over — wrong basis (value, not units) and wrong side of the net/gross line.
+So the sublabel shows the division rather than naming a rate: **504.3K of
+2602.4K units short**, and the paragraph under the tiles now says in as many
+words that the rate is not 100% minus the coverage figure next to it.
+
+**The sparkline is a new backend field, not a browser division.** `trend`
+already carried `shortfall_units` and `ordered_units_known`, so the tile could
+have divided them per period in the page. It doesn't. The gross/net distinction
+is precisely the kind that drifts once two copies of it exist — D-153 was
+written because one page had already got it wrong — so `_trend` now publishes
+`unfilled_rate_pct` built by the same `_ratio(shortfall, ordered_known)` as the
+KPI, `null` wherever `fill_rate_pct` is `null`. A proxy-only month has no
+denominator, and returning `0.0` would draw a dip to the floor that reads as a
+month in which every order was filled.
+
+**The per-period figures confirm the distinction is not academic:** 2025-04
+reads 14.28% unfilled against a fill rate of 86.75%, whose complement is
+13.25%. Every bucket differs. The series runs 14.3% → 37.0% across the window,
+so the tile's spark is a genuinely rising line rather than decoration.
+
+Two tests guard it (`TestTheUnfilledRateOnTheTrendMatchesTheKpi`): one asserts a
+bucket with one short line and one over-despatched line reads 10% rather than
+the fill rate's complement of 5% and agrees with the KPI over the same rows;
+one asserts a proxy-only bucket returns `null`.
+
+`unfilled_rate_pct` was also missing from `docs/API_CONTRACT.md` entirely — it
+has been published on `kpis` since D-153 and was never written down. Added
+there with the gross/net rule stated.
+
+**Measured at 1440×900:** four tiles, 275px each on one row, each with its own
+spark. At 1000px they fall to a 2×2 grid of 365px tiles; the grid is
+`sm:grid-cols-2 xl:grid-cols-4`, so a phone gets one column rather than four
+unreadable ones.
+
+```
+backend  69 passed (tests/test_analytics_api.py)
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## D-159 — The demand chart opens on the comparable stretch, and the bars are a line
+
+Four changes to "Demand over time" on Per Branch & SKU, all requested.
+
+**It opens on the 16 months the order book covers**, not the full 28. Before
+Apr 2025 there is despatch and nothing to compare it against, so two-thirds of
+the old default view carried one line, no gap, and nothing the panel exists to
+show. The reader had to find the dashed marker to know which part of the
+picture was the comparison. The earlier year is not deleted: a small `‹ 12
+earlier` chip sits against the plot's left edge — the edge the hidden history
+is behind — and opens it. Collapsed, that chip is the only thing saying there
+is more record than the chart is showing, so it carries a label and not just a
+glyph. It counts in the current grain: `52 earlier` at weekly.
+
+**The dashed "order book starts" marker is drawn only when expanded.**
+Collapsed, the order book starts at the first point and the marker would sit on
+the axis labelling the whole chart.
+
+**The short bars are a red line.** Same colour, same axis, same quantity as the
+two series above it, so it belongs on the same kind of mark.
+
+**The unfilled share is on hover, not on the chart.** It was briefly a fourth
+line — a dashed teal series on a right-hand 0-100% axis — and is now a row in
+the hover card instead, which keeps the chart at three lines and needs no
+second axis. It reads `unfilled_rate_pct` from the payload (D-158), not
+`100 - fill_rate_pct`, so the percentage and the red line in the same card
+divide the same gross shortfall: **Jun 26 shows Short 71.3K against Ordered
+193.0K and Not filled 37.0%**, and those three figures agree.
+
+**Turning the bars into a line exposed a real defect.** `shortfall_units` is
+`0`, not null, on a sales-proxy month — there is no order book, so nothing can
+be short, and the figure is unmeasurable rather than nil. As a bar that cost
+nothing, because a zero bar draws nothing. As a line it drew a red rule pinned
+to the axis across the whole earlier year, measured running the full 1,058px
+plot width, which reads as twelve months in which every order was filled. That
+is the "unknown is never zero" rule in CLAUDE.md, hidden for as long as the
+mark happened not to render it. The series is now nulled on proxy months and
+the line starts at the boundary (measured: 506px in, 588px wide), the hover
+drops the phantom `Short 0 units` row with it, and the "Not filled" row is left
+out there rather than printed as a zero.
+
+**Measured at 1440×900:** collapsed Apr 25 → Jul 26, 16 labels, 0 bars, 1 area
++ 2 lines, one y-axis; expanded Apr 24 → Jun 26 with the marker back; the chip
+toggles both ways and clears the top gridline by 4px; notes change with the
+state and the noun follows the grain (16 months / 70 weeks, 12 earlier / 52
+earlier).
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## D-160 — Accuracy and MAPE are one tile each, and the scope banner is one line
+
+Three trims to the line tiles and the workspace banner, all requested.
+
+**"Horizons available" is gone.** It read `26 / 26` on every line anyone has
+looked at — a tile that has never once carried news, holding a quarter of the
+strip. The information it guarded is not lost: a horizon with no forecast still
+says why, in the forecast table that lists them.
+
+**Accuracy and MAPE are two tiles now, not one tile printing both.** The old
+value string was `98.1% · 1.9% MAPE`, two measures crammed into one line of a
+tile sized for one. They are the same two figures, now each in its own box with
+its own label.
+
+**Each reads its own payload field, and that part is not cosmetic.** Accuracy
+comes from `horizon_accuracy_pct` and MAPE from `horizon_mape_pct`; neither is
+derived from the other. Accuracy is floored at zero, so on a line whose error
+exceeds 100% the subtraction `100 - accuracy` prints exactly 100.0% and hides
+the real figure — four lines of this run read 0% accuracy against measured
+MAPEs of 102.8%, 140.8%, 357.5% and 100.0% (D-134). The other 257 agree, which
+is why the shortcut survives casual testing. Splitting the tile was the moment
+to re-assert it, because a MAPE tile standing on its own is exactly where
+someone would later be tempted to compute it from its neighbour. Both tiles
+show "—" when their own field is absent rather than borrowing the other's.
+
+**Neither carries a sublabel**, as asked. The old ones were "average miss
+across the six months, out of sample" and "a horizon with no forecast says
+why". The six-month window is already in both labels; "out of sample" is stated
+by the panel below, which is where the method belongs.
+
+**The workspace banner is one line.** `Every figure on this page describes that
+slice only — not the national network.` was a second row of prose restating
+what the counts above it already said, on all seven pages. The counts are the
+statement. The sentence is folded into "What is in scope?" rather than deleted,
+so the explanation is still reachable and the restriction is still named on
+every page — which is the requirement D-049 and D-131 exist to hold.
+
+**Measured at 1440×900, on Training and Forecasting both:** four tiles reading
+`Next-month forecast 31` · `Auto ARIMA with exogenous variables` ·
+`Accuracy, six-month total 98.1%` · `MAPE, six-month total 1.9%`, and the
+banner reading `WORKSPACE · 2 of 53 branches · 136 of 2063 SKUs · fixed by
+configuration · What is in scope?` with the sentence present once the
+disclosure is open. The protected pair for BENGALURU ×
+FG.ALP.LFH.GCG2120000 is unchanged at 98.1% / 1.9%.
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## D-161 — Ordered vs Dispatched Time is unrouted, and the Operations section goes with it
+
+Requested: "remove the operations and the ordered vs dispatched time page only
+from the application."
+
+**Unrouted, not deleted**, which is what every previous removal in this project
+has meant (D-052, D-057, D-086, D-105, D-133). The nav item and the route line
+are gone; `features/lead-time/pages/LeadTimePage.tsx`, its chart component, and
+the endpoint they read — `/analytics/lead-time-observed` — are all untouched.
+This project has no git history, so unrouting is the only reversible form of
+removal available. Restoring the page is three lines: the nav block, the route,
+and index 24 in `REQUIRED_NAV_INDEXES`.
+
+**The section went because it was empty, not as a second decision.** Operations
+held exactly one destination. Index 24 took Supply Intelligence's place there
+when that page was removed (D-105) and was renamed in place (D-133); with it
+gone the section would have rendered a heading over nothing. The request named
+both, and they are the same removal either way.
+
+**Index 24 is not reassigned.** `REQUIRED_NAV_INDEXES` drops from
+`[20, 21, 22, 23, 24, 13, 14]` to `[20, 21, 22, 23, 13, 14]` and the gap stays.
+Numbers in this file have always been identifiers rather than positions, so the
+gaps are the record of what went away.
+
+**An old `/lead-time` bookmark lands on Overall Analysis.** The `path="*"`
+wildcard in `routes.tsx` already redirected to `LANDING_PATH`, so removing the
+route is enough — nobody gets a blank screen.
+
+**The backend is unchanged.** Checked before assuming otherwise: `VERIFY_ON` in
+`recommendations.py` never named this page, and
+`tests/test_line_evidence_is_computed.py` only asserts
+`VERIFY_ON["model_leaderboard"] == "Training"`. No "check this on" label points
+at a tab that no longer exists, which is the rule that makes unrouting safe.
+
+**The accessibility test now asserts the removal from both sides.** It checks
+the six surviving indexes, and `Ordered vs Dispatched Time` and `/lead-time`
+joined the lists of labels and paths nothing may link to — so re-adding a link
+without re-adding the page fails.
+
+**Measured at 1440×900:** the sidebar renders three section headings — Analysis,
+Modelling, Assistant — and six links, with no Operations heading. Loading
+`/lead-time` directly redirects to `/overall`, which renders normally. Per
+Branch & SKU still draws all four charts.
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```

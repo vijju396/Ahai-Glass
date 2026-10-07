@@ -7,7 +7,8 @@
  * property is worth more than the individual components, so the structure is
  * preserved exactly and only the palette and the money formatter are AIS's.
  */
-import type { ReactNode } from 'react';
+import { forwardRef, useLayoutEffect, useRef } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { Area, AreaChart, ResponsiveContainer } from 'recharts';
 import { Explain } from '@/components/ui/Explain';
 
@@ -125,17 +126,57 @@ export function StatTile({
   );
 }
 
-export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
+export const Card = forwardRef<
+  HTMLDivElement,
+  { children: ReactNode; className?: string; style?: CSSProperties }
+>(function Card({ children, className = '', style }, ref) {
   return (
     <div
+      ref={ref}
+      style={style}
       className={`rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-[var(--shadow-sm)] ${className}`}
     >
       {children}
     </div>
   );
-}
+});
 
 /** Chart panel: colour spine, uppercase title, optional note and action slot. */
+/** The expand / restore control that sits in a panel's top-right corner.
+ *  Outward arrows to open, inward arrows to come back — an X was the first
+ *  draft and read as "close this chart" rather than "return it to normal
+ *  size", which is the opposite of what it does (D-151). */
+function ExpandButton({ expanded, title, onClick }: { expanded: boolean; title: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={expanded}
+      aria-label={expanded ? `Restore ${title} to normal size` : `Expand ${title}`}
+      title={expanded ? 'Close (Esc)' : 'Expand'}
+      className="-m-1 shrink-0 rounded p-1 text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]"
+    >
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {expanded ? (
+          <>
+            <path d="M1.5 6.5H6.5V1.5" />
+            <path d="M14.5 9.5H9.5V14.5" />
+            <path d="M6.5 6.5L1.5 1.5" />
+            <path d="M9.5 9.5L14.5 14.5" />
+          </>
+        ) : (
+          <>
+            <path d="M6.5 1.5H1.5V6.5" />
+            <path d="M9.5 14.5H14.5V9.5" />
+            <path d="M1.5 1.5L6.5 6.5" />
+            <path d="M14.5 14.5L9.5 9.5" />
+          </>
+        )}
+      </svg>
+    </button>
+  );
+}
+
 export function Panel({
   title,
   note,
@@ -143,6 +184,9 @@ export function Panel({
   action,
   children,
   className = '',
+  expanded,
+  onToggleExpand,
+  overlayStyle,
 }: {
   title: string;
   note?: string;
@@ -150,15 +194,52 @@ export function Panel({
   action?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** Omit all three and the panel renders exactly as it always has — every
+   *  other page passes none of them, so none of them grows a button it did not
+   *  ask for. */
+  expanded?: boolean;
+  onToggleExpand?: () => void;
+  /** Fixed-position box the card jumps into while expanded. Supplied by the
+   *  page, which is the only thing that knows where the filter bar ends. */
+  overlayStyle?: CSSProperties;
 }) {
+  /* The card's height while it is sitting normally in the grid, re-measured on
+     every render it spends there. When it lifts out into the popup the
+     placeholder below takes exactly that height, so the grid keeps the same
+     number of items at the same spans and NOTHING on the page behind moves
+     (D-152). Measuring continuously rather than at click time is what makes it
+     survive a filter change that happened while the popup was open. */
+  const cardRef = useRef<HTMLDivElement>(null);
+  const restingHeight = useRef<number>(0);
+  useLayoutEffect(() => {
+    if (!expanded && cardRef.current) restingHeight.current = cardRef.current.offsetHeight;
+  });
+
+  const popped = !!(expanded && overlayStyle);
+
   return (
-    <Card className={className}>
+    <>
+      {/* Holds the slot. `invisible` and not `hidden`: it must still occupy the
+          grid cell, it simply must not be seen. */}
+      {popped && (
+        <div className={`invisible ${className}`} style={{ height: restingHeight.current }} aria-hidden="true" />
+      )}
+      <Card
+        ref={cardRef}
+        className={popped ? 'z-40 flex flex-col overflow-auto' : className}
+        style={popped ? overlayStyle : undefined}
+      >
       <div className="mb-1 flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="h-3.5 w-[3px] rounded-full" style={{ background: accent }} />
           <h3 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text)]">{title}</h3>
         </div>
-        {action}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {action}
+          {onToggleExpand && (
+            <ExpandButton expanded={!!expanded} title={title} onClick={onToggleExpand} />
+          )}
+        </div>
       </div>
       {/* A short note orients; a long one is an explanation, and an
           explanation belongs behind a click (see Explain.tsx). 90 characters
@@ -175,7 +256,8 @@ export function Panel({
         <div className="mb-2" />
       )}
       {children}
-    </Card>
+      </Card>
+    </>
   );
 }
 
@@ -229,6 +311,36 @@ export const inr = (n: number | null | undefined): string => {
 export const num = (n: number | null | undefined): string => {
   if (n == null || !Number.isFinite(n)) return '—';
   return Math.abs(n) >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${Math.round(n)}`;
+};
+
+/**
+ * `num` for an axis tick, where the only budget is width (D-154).
+ *
+ * `num` stops at thousands, so a million reads "1000.0K" and ten million
+ * "10000.0K" — seven characters in a 46 px gutter, which is why the log ticks
+ * on Demand by Glass Type and Demand by Value Class were cut off at the left
+ * edge when a panel was expanded. A log axis reaches those decades routinely:
+ * its top is `10 ** ceil(log10(max))`, so a 348K column puts a 1,000,000 tick
+ * on the axis.
+ *
+ * `num` itself is left alone deliberately. It also sets the KPI tiles, where
+ * the figure is read rather than scanned and "2602.4K units" carries four more
+ * significant digits than "2.6M units" would.
+ */
+export const tickNum = (n: number | null | undefined): string => {
+  if (n == null || !Number.isFinite(n)) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 1e6) {
+    const m = n / 1e6;
+    // "1M" rather than "1.0M" on an exact decade, which is every tick on a log
+    // axis and the common case here.
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+  }
+  if (abs >= 1000) {
+    const k = n / 1000;
+    return `${Number.isInteger(k) ? k : k.toFixed(1)}K`;
+  }
+  return `${Math.round(n)}`;
 };
 
 export const pct = (n: number | null | undefined, digits = 1): string =>

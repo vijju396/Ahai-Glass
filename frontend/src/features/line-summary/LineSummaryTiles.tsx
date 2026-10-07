@@ -94,34 +94,30 @@ export function LineSummaryTiles({ scopeKey }: { scopeKey: string }) {
           selected on (D-043), so the error quoted beside the model name is the
           error that chose it.
 
-          Accuracy **and** MAPE, both printed, because a reader should not have
-          to subtract to see the second one — and the MAPE is read from the
-          payload rather than computed as `100 - accuracy`. The two agree on
-          257 of this run's 261 lines, but accuracy is floored at zero, and on
-          the four that floor the subtraction would print "100.0%" against real
-          errors of 102.8%, 140.8%, 357.5% and 100.0% (D-134). */}
+          Accuracy and MAPE are **two tiles, and each reads its own field**
+          (D-160). Neither is derived from the other: accuracy is floored at
+          zero, so on a line whose error exceeds 100% `100 - accuracy` prints
+          exactly 100.0% and hides the real figure. Four lines of this run read
+          0% accuracy against measured MAPEs of 102.8%, 140.8%, 357.5% and
+          100.0%; the other 257 agree, which is exactly why the shortcut
+          survives casual testing (D-134). Both tiles show "—" when their own
+          field is absent rather than borrowing the other's. */}
       <StatTile
         label="Accuracy, six-month total"
         value={
           lineAccuracy?.horizon_accuracy_pct == null
             ? '—'
-            : `${lineAccuracy.horizon_accuracy_pct.toFixed(1)}% · ${
-                lineAccuracy.horizon_mape_pct == null
-                  ? '—'
-                  : `${lineAccuracy.horizon_mape_pct.toFixed(1)}%`
-              } MAPE`
-        }
-        sublabel={
-          lineAccuracy?.horizon_accuracy_pct == null
-            ? `out of sample · ${formatInt(metrics?.validation_points)} points`
-            : 'average miss across the six months, out of sample'
+            : `${lineAccuracy.horizon_accuracy_pct.toFixed(1)}%`
         }
         tint="teal"
       />
       <StatTile
-        label="Horizons available"
-        value={`${forecasts.filter((f) => f.point_forecast !== null).length} / ${forecasts.length}`}
-        sublabel="a horizon with no forecast says why"
+        label="MAPE, six-month total"
+        value={
+          lineAccuracy?.horizon_mape_pct == null
+            ? '—'
+            : `${lineAccuracy.horizon_mape_pct.toFixed(1)}%`
+        }
         tint="amber"
       />
     </div>

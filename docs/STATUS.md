@@ -5203,3 +5203,334 @@ Hover verified on both pages: `Jun · Average ordered : 165.6K units` and
 ```
 backend 1088 passed · frontend 268 passed (24 files) · tsc --noEmit clean
 ```
+
+## Date range restored on Overall Analysis (D-148)
+
+The month-range picker is back, at the head of the filter bar, reversing D-145
+on request. `orders_start_month` is now the picker's floor (`minMonth`) rather
+than a reason to have no picker; TO runs free to the end of the panel.
+
+Every panel of `/analytics/summary` was fingerprinted across five windows
+against the page's real baseline. All seventeen measured panels respond; the
+seven that do not — `available_grains`, `grain_note`, `panel_grain`,
+`preprocessing_run_id`, `network_coverage`, `workspace_scope`, `empty` — are
+descriptions of the dataset, not measurements of the window.
+
+Three adjacent windows sum exactly to the whole order book (2,602,392 units,
+582,324 rows, difference zero), so the filter partitions rather than resamples.
+
+The inverted-range message written in the first draft was removed: `MonthRange`
+clamps each field against the other, so it could never render. Typing 2024-06
+into FROM snaps back to 2025-04 and the proxy-only 2,279-SKU figure never
+appears.
+
+```
+tsc --noEmit clean
+```
+
+## Demand by Branch, and a log scale for the skewed charts (D-149)
+
+The branch × value-class stack is gone from Overall Analysis, replaced by a
+plain Demand by Branch in ordered units — the stack was drawn in rupees, which
+ranked SECUNDRABAD and BENGALURU in the opposite order to every other panel on
+the page. `branch_by_group` stays on the payload for the unrouted
+reference-parity page.
+
+A Log scale toggle in the filter bar, on by default, puts the skewed magnitude
+charts on a logarithmic axis. This fixed a measured defect, not a preference:
+seven panels were drawing their smallest category at **zero or one pixel**.
+Demand by Branch went from a 1 px bar for MANDI to 47 px; Demand by Glass Type
+and four others went from 0 px to 13–45 px.
+
+Log is withheld from stacked charts (segments would not add up), percentage
+charts, time series (log bends a trend's shape), and any series spanning less
+than 1.5 decades — the last enforced by `LOG_MIN_SPREAD`, which is why Value
+per Unit by Vehicle Category stays linear at 17× spread.
+
+Branch-chart filter response measured: no filter → 53 branches led by
+BENGALURU; Sidelite → 53 led by JAIPUR; Sidelite + 3W → 1 branch.
+
+```
+frontend 26 passed (targeted) · tsc --noEmit clean
+```
+
+## Realised Price per Unit reads as flat, and the cause was the baseline (D-150)
+
+The Log scale toggle correctly declines this panel: realised price spans 1.10×
+(₹3,184 to ₹3,510) and a log axis compresses orders of magnitude, of which
+there are none. The real defect was that the axis started at ₹0, leaving the
+entire series squeezed into 9% of the panel height.
+
+The axis is now fitted to the data plus a margin, with the average folded in so
+the reference line stays inside it. The line went from 9% to 65% of the plot
+height, and a real movement became visible: price is up about 10% from ₹3,194
+in February to ₹3,510 in June, with a dip through August and September.
+
+Applied to this line chart only. A line carries its value in its position, so a
+raised baseline changes nothing it says; a bar carries its value as length from
+the baseline, so the same change on a bar chart would overstate every
+difference. The panel note says "Axis starts above zero", kept under the 90
+characters at which `Panel` folds a note behind a click.
+
+```
+tsc --noEmit clean
+```
+
+## Expand-in-place on every Overall Analysis panel (D-151)
+
+All seventeen panels carry an expand control in the top-right corner. It is not
+a modal: the chosen panel stays in the page and everything around it hides, so
+the sticky filter bar remains directly above it and stays live. Changing a
+filter, a date or the log toggle updates the expanded chart without collapsing
+it — measured on Demand by Branch, which re-ranked BENGALURU → JAIPUR under
+Sidelite and dropped 53 → 50 branches when the end date moved, holding 649 px
+throughout.
+
+Expanded height is the viewport minus the filter bar, which is measured with a
+ResizeObserver because the bar wraps to three rows on narrow windows. At
+1440×900 a 186 px chart becomes 649 px.
+
+Escape closes it as well as the corner button, which shows inward arrows and
+reads "Restore <panel> to normal size" — an X read as "close this chart", the
+opposite of what it does. `expanded`/`onToggleExpand` are optional on `Panel`,
+so the pages that do not pass them are untouched.
+
+```
+frontend 268 passed (24 files) · tsc --noEmit clean
+```
+
+## Expanding a panel is a popup now, not a takeover (D-152)
+
+The first build of the expand button hid the other sixteen panels and scrolled
+to the top. That was rejected: "keeping the backround as it is and not moving
+other things and when we close it should go back to its place and the scrolled
+thngs should be in place."
+
+The panel now lifts out into a fixed box and leaves an `invisible` placeholder
+of its own measured height in the grid slot, so the layout behind it does not
+know anything moved. The box's top is the filter bar's measured bottom, so
+"below the filters" needs no scrolling — the bar is sticky, and its bottom is a
+viewport coordinate at any scroll position. The backdrop starts below the bar,
+so the filters stay clickable, not just visible. Scroll is locked with
+`overflow: hidden` plus a `body.paddingRight` gutter, because locking alone
+shifts the page sideways by the scrollbar width — which is the thing the user
+asked not to happen.
+
+Measured at 1440×900 from a page scrolled to 3200 px: scroll position, document
+height, body width, panel count and every background panel's rect are identical
+before, during and after. The popped panel returns to `979,234,577×293`, the
+slot it left. Filters, dates and the log toggle drive the chart while it is open
+(CAR & MUV took it from five bars to four; log off dropped the smallest bar to
+0 px, on restored it to 64 px) at 625 px of canvas against ~215 px resting. It
+closes four ways — corner button, Escape, backdrop click, expanding another
+panel — and each restores the locked styles and leaves no placeholder behind.
+
+```
+frontend 268 passed (24 files) · tsc --noEmit clean
+```
+
+## Per Branch & SKU: the ordered-demand tile was a third sales proxy (D-153)
+
+A question about one number — "i think 1334.97 cr is wrong" — found two defects.
+
+**₹1,334.97Cr was ₹860.04Cr of order book plus ₹474.93Cr of sales proxy.** The
+tile read `demand_value` / `demand_units`, which sum every panel row, and a
+third of the network panel's rows are the pre-Apr-2025 sales proxy with no
+order book behind them. Printed under the word "Ordered", that overstated
+ordered demand by 59% in units and 55% in value. The honest fields
+(`ordered_units_known` / `ordered_value_known`) were already on the payload and
+already used by Overall Analysis since D-121 — this page was the only one not
+reading them. It now shows **2602.4K units · ₹860.04Cr at mean MRP**, and the
+sublabel names MRP because `demand_value` is list price, not revenue. The
+"122 weeks" count went too: it described the panel's window, while the order
+book covers 70 of those weeks.
+
+**Fill rate became Unfilled rate, and deliberately not by subtraction.** Fill
+rate is net of over-despatch; the Unfilled tile beside it is the gross positive
+shortfall. `100 - 82.0 = 18.0%` would have sat next to 504.3K units, which is
+19.4% of the order book. `unfilled_rate_pct` is a new backend field dividing
+the same numerator the tile shows, so the two now reconcile.
+
+Unchanged and verified correct: 504.3K unfilled units, and 82.0% as a fill
+rate. Still carrying the same mislabel: the unrouted
+`DemandAnalyticsPage.tsx:285`, named in D-153 so it is fixed before it is ever
+routed.
+
+```
+backend  67 passed (tests/test_analytics_api.py, 5 new) · frontend 268 passed · tsc --noEmit clean
+```
+
+## Axis labels were being cut off, in six charts across two pages (D-154)
+
+A report about one expanded panel. Measuring every tick against its own SVG
+found four clipped panels on Overall Analysis and two more on Per Branch & SKU
+— the latter clipped at normal size, not only expanded.
+
+The cause was the shared `num` formatter stopping at thousands: it renders a
+million as `1000.0K`, seven characters in a 46px gutter, and a log axis reaches
+that decade routinely. A new `tickNum` adds the millions step and drops the
+`.0` on exact decades; `num` is unchanged, because it also sets the KPI tiles
+where `2602.4K units` is more precise than `2.6M units` would be. Four axes had
+no formatter at all and printed raw numbers. One clipped label was not a number
+— a rotated category name needing more band than it had.
+
+All 17 panels were re-measured expanded and at rest, plus all four charts on
+the other page: zero clipped.
+
+```
+frontend 275 passed (25 files, 6 new) · tsc --noEmit clean
+```
+
+## Volume vs Value by SKU is four blocks now, not 2,063 marks (D-155)
+
+The scatter drew one bubble per SKU and at 2,063 of them the middle was a solid
+smear — 1,715 tail SKUs obscuring the few marks that carried the reading. The
+question it answers is how much sits in each Pareto quadrant, which is four
+numbers, so it is now four shaded blocks laid out as the quadrants actually sit:
+value up, units right, both directions labelled.
+
+Clicking a block opens the SKUs behind it — totals pinned above, sticky column
+headings, the whole list scrollable — reusing the expand popup's geometry,
+backdrop and three ways out rather than a second mechanism. No expand button on
+this panel, as asked; the page has 16 now, not 17.
+
+Found while building: the per-unit column read `₹2K` and `₹7K` because `inr`
+abbreviates thousands, and shares rendered `8%` beside `72.1%`. Both fixed.
+Also worth recording — the one real bug (`const` read before its declaration)
+passed `tsc` clean and only showed in the browser.
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## The Pareto blocks sit on a drawn plot, and show two numbers each (D-156)
+
+The four blocks were an even 2×2 grid, which draws the 80% cuts in the middle
+of the box regardless of where they fall. The panel now draws real axes — log
+value up the left in rupees, log units along the bottom, decade gridlines, both
+cuts as dashed lines — and the blocks take their true positions on it: 62%
+across for units, two-thirds up for value. The unevenness is the reading.
+
+Inside each block, the fill bar and the footer line of counts are gone. Two
+figures remain — share of revenue and share of SKUs — sized to the block itself
+by container queries, so the big tail block sets its number at 58px and the
+narrow top-right one at 19.8px without clipping at any width tested. The
+exact figures are still one click away in the drawer, which is unchanged.
+
+Row counts behind the four blocks: 18 + 182 + 1,715 + 148 = 2,063, every
+ordered SKU in exactly one block.
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## The Pareto corner now holds 80% of revenue (D-157)
+
+The top-right block read 77.9%, because the two cuts were independent 80%
+Paretos and the exactly-true statement was about the whole top row, not the
+corner. The corner is the number people actually read off the panel, so the
+value line now sits where it fills that corner to 80% — 10.2% of SKUs (210 of
+2,063) earning 80% of the revenue. The units line is unchanged and still a true
+80% cut. Every other block moved with it: 3.0%, 3.7% and 13.3%.
+
+Because the row above the line now holds 83%, that line's label changed from
+"80% of value" to "value cut" — leaving the old wording on a line that had
+moved would have made the panel claim a share it no longer carried.
+
+Found and fixed in the building: 80% in the corner isn't always reachable. The
+fast-moving SKUs carry 93.7% of revenue network-wide but only 75.0% under a
+Sidelite filter, and the first version swept every SKU into the top row and
+rendered two empty blocks. It now checks that ceiling first, falls back to the
+plain 80%-of-value cut, and the note explains why the corner reads 72.1%.
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## A fourth tile: unfilled rate (D-158)
+
+Overall Analysis now shows the unfilled rate — 19.4% — beside the three tiles
+that reconcile to each other. It is a rate rather than a sum, so it sits
+outside that identity, and it divides the gross shortfall (504.3K units) rather
+than the net gap on the tile next to it (468.4K). The sublabel shows the
+division itself, "504.3K of 2602.4K units short", and the paragraph underneath
+now states plainly that the rate is not 100% minus the coverage figure beside
+it — subtracting those would be wrong on both the basis and the net/gross
+question.
+
+Its sparkline comes from a new per-period backend field rather than dividing
+two existing series in the browser, so there is still exactly one definition of
+"unfilled" in the codebase. The rate runs 14.3% → 37.0% across the window, and
+differs from the fill rate's complement in every single bucket.
+
+Also fixed while here: `unfilled_rate_pct` had been on the API since D-153 and
+was never written into the API contract.
+
+```
+backend  69 passed (tests/test_analytics_api.py)
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## Demand over time: one comparable stretch, three lines, hover for the rate (D-159)
+
+The chart now opens on the 16 months where both ordered and despatched exist,
+rather than on the full two years — two-thirds of the old view was despatch
+with nothing to compare it against. The earlier year is one click away on a
+small `‹ 12 earlier` chip at the chart's left edge, and the dashed "order book
+starts" marker appears only when it is open.
+
+The short bars are now a red line in the same colour, and the share of orders
+left unfilled is shown on hover rather than as a fourth line — so the chart
+stays at three lines and needs no second axis. The percentage divides the same
+gross shortfall the red line draws, so the figures in one hover card agree.
+
+Found by making that change: the shortfall is recorded as 0 rather than unknown
+on months with no order book, so the new red line drew flat along zero across
+the whole earlier year — twelve months reading as "everything was filled" when
+the figure cannot be measured at all. Invisible while it was a bar, because a
+zero bar draws nothing. Now nulled, so the line starts where the order book
+does.
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## Line tiles: accuracy and MAPE split, horizons dropped (D-160)
+
+"Horizons available" read 26 / 26 and has never carried news, so it is gone —
+a horizon with no forecast still explains itself in the forecast table. The
+accuracy tile used to print "98.1% · 1.9% MAPE" in one box; those are now two
+tiles, one each, with no sublabel under either.
+
+Each reads its own field rather than deriving one from the other. That matters:
+accuracy is floored at zero, so subtracting it would print 100.0% on the four
+lines of this run whose real errors are 102.8%, 140.8%, 357.5% and 100.0%. A
+standalone MAPE tile is exactly where that shortcut would be tempting later.
+
+The workspace banner is one line now. The sentence under the counts said in
+prose what the counts already said; it moved into "What is in scope?" rather
+than being deleted, so every page still names its restriction.
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```
+
+## Ordered vs Dispatched Time removed, Operations with it (D-161)
+
+The page is unrouted, not deleted — the same thing every earlier removal here
+has meant. Its code and the endpoint it reads are untouched; the nav item and
+the route line are what went. Putting it back is three lines.
+
+The Operations section held nothing else, so it would have been a heading over
+an empty list. It goes too. Index 24 is not reused — the gap in the numbering
+is the record of what was there.
+
+An old `/lead-time` link still lands somewhere real: the catch-all route sends
+it to Overall Analysis. The backend was checked first and needed no change; no
+"check this on" label pointed at the page.
+
+The sidebar is now three headings and six links.
+
+```
+frontend 275 passed (25 files) · tsc --noEmit clean
+```

@@ -153,15 +153,18 @@ Two checks worth keeping, because both catch silent rot:
 - **An OpenAI key is now configured** in `backend/.env`, so the AI Assistant
   and AI Recommendations pages make live paid calls at temperature 2.0. Every
   model path is still tested against a stub.
-- **Twelve pages are unrouted but not deleted** (D-052, D-057, D-086, D-105).
-  The UI is seven tabs; the removed components still exist under
-  `src/features/`, so the suite covers unreachable pages. **Supply Intelligence
-  was the most recent to go**, replaced in the Operations section by Ordered
-  vs Dispatched Time;
-  its page, components and endpoints are untouched under `features/supply`,
-  `/supply` falls through to `/overall`, and one nav item plus one route line
-  restore it. Scenario Planner went before it, and `POST /api/scenarios` is
-  still live and documented behind it.
+- **Thirteen pages are unrouted but not deleted** (D-052, D-057, D-086, D-105,
+  D-161). The UI is six tabs in three sections — Analysis, Modelling,
+  Assistant; the removed components still exist under `src/features/`, so the
+  suite covers unreachable pages. **Ordered vs Dispatched Time was the most
+  recent to go** (D-161), and the Operations section went with it because it
+  held nothing else. Its page and components are untouched under
+  `features/lead-time`, as is `/analytics/lead-time-observed`; `/lead-time`
+  falls through to `/overall`, and one nav block plus one route line plus index
+  24 restore it. Supply Intelligence went before it — untouched under
+  `features/supply`, `/supply` falls through the same way — and Scenario
+  Planner before that, with `POST /api/scenarios` still live and documented
+  behind it.
 - **Three pages were unrouted earlier.** Executive Command Center,
   Data & Model Monitoring and Connections & Settings were removed from the nav
   and the router on request (D-052). Their components and tests still exist
@@ -173,12 +176,13 @@ Two checks worth keeping, because both catch silent rot:
   unrestricted. It currently resolves to **BENGALURU and DELHI-1 with 136
   SKUs**, so every page hides 51 of the 53 ordering branches and all but 136 of
   the 2,063 ordered SKUs — deliberate, requested, and stated on every payload
-  as `workspace_scope` plus a note (D-049, D-127, D-128). **All seven pages
-  now render the identical banner** — `2 of 53 branches · 136 of 2063 SKUs` —
-  including AI Assistant and AI Recommendations, which had none, and Training
-  and Ordered vs Dispatched Time, which stated the restriction without its
-  denominators
-  (D-131). The data was always scoped correctly; the labels were what lied.
+  as `workspace_scope` plus a note (D-049, D-127, D-128). **Every routed page
+  renders the identical banner** — `2 of 53 branches · 136 of 2063 SKUs` —
+  which D-131 established across the seven tabs there were then: AI Assistant
+  and AI Recommendations had none, and Training and Ordered vs Dispatched Time
+  stated the restriction without its denominators. Six tabs remain (D-161), and
+  the two Analysis tabs report `full_network` instead (D-138, D-146), which is
+  the one unrestricted scope that still states itself. The data was always scoped correctly; the labels were what lied.
   The assistant's tools in particular told the model `"the whole network"` on
   any question that named no branch; they now name the workspace.
   Changing the setting is **not** enough on its own: the panel is physically
@@ -200,8 +204,10 @@ Two checks worth keeping, because both catch silent rot:
   average against the mean of Despatch Date minus Order Date and does not feed
   safety stock either: it compares, it does not correct (D-105). The rename is
   the honest one, because that difference stops at despatch and never reaches
-  receipt, so it is one leg of a lead time and not the whole of it. The route
-  is still `/lead-time` and the nav index is still 24.
+  receipt, so it is one leg of a lead time and not the whole of it. **That page
+  is now unrouted too** (D-161), along with the Operations section it was the
+  only member of; the code is intact, the route would be `/lead-time`, and the
+  index is still 24 and not reused.
 - **AI Recommendations answers at branch × SKU, and the figures are never the
   model's.** All 261 ranked lines are listed; 12 of them carry model-written
   prose and the rest carry their computed reason, labelled as such. Every
@@ -233,12 +239,15 @@ Two checks worth keeping, because both catch silent rot:
   carried on the payload (`mape_pct`, `horizon_mape_pct`, `champion_mape_pct`)
   and both screens print both (D-134). The two do agree on 257 of 261 lines,
   which is exactly why the shortcut survives casual testing.
-- **The four line tiles are one component, mounted twice.** Chosen model,
-  six-month accuracy and MAPE, next-month forecast and horizons returned are
-  rendered by `features/line-summary/LineSummaryTiles.tsx` on both Training and
-  Forecasting (D-135). Do not copy them onto a third screen — mount the
-  component. It issues its own queries under the keys Forecasting already uses,
-  so the second mount costs no request.
+- **The four line tiles are one component, mounted twice.** Next-month
+  forecast, chosen model, six-month accuracy and six-month MAPE are rendered by
+  `features/line-summary/LineSummaryTiles.tsx` on both Training and Forecasting
+  (D-135). Accuracy and MAPE are **one tile each**, and each reads its own
+  payload field — never the other minus 100 (D-134, D-160). "Horizons
+  available" was removed on request; a horizon with no forecast still says why
+  in the forecast table (D-160). Do not copy these onto a third screen — mount
+  the component. It issues its own queries under the keys Forecasting already
+  uses, so the second mount costs no request.
 - **The deployed image carries the workspace's data, not the repository's.**
   `scripts/build_scoped_bundle.py` ships one training run, its panel, its
   fitted models, a branch-restricted extract of the order durations and

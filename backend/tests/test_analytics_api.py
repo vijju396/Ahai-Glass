@@ -776,3 +776,153 @@ class TestLeadTime:
         body = response.json()
         assert body["kpis"]["median_avg_days"] == 6.0
         assert body["by_branch"][0]["branch"] == "A"
+
+
+class TestTheUnfilledRateIsGrossNotTheComplementOfFillRate:
+    """`unfilled_rate_pct` divides the figure on the tile beside it (D-153).
+
+    Per Branch & SKU shows unfilled units and an unfilled rate side by side.
+    Unfilled units is the **gross** positive shortfall; fill rate is **net** of
+    over-despatch. So `100 - fill_rate_pct` is a different quantity, and
+    printing it there would have put 18.0% next to a figure that is 19.4% of
+    the order book on the network panel.
+    """
+
+    def test_the_rate_divides_the_units_shown_beside_it(self):
+        frame = _frame([{"target": 100.0, "despatched_qty": 80.0, "shortfall_qty": 20.0}])
+        k = A.summary(frame, A.AnalyticsScope())["kpis"]
+        assert k["shortfall_units"] == 20.0
+        assert k["ordered_units_known"] == 100.0
+        assert k["unfilled_rate_pct"] == 20.0
+
+    def test_over_despatch_separates_it_from_the_fill_rate(self):
+        """One row short by 20, one over by 10.
+
+        Gross shortfall is 20 over 200 ordered = 10%. Despatched is 190, so the
+        fill rate is 95% and its complement is 5%. The over-despatch is exactly
+        the difference, and the two must not be interchanged.
+        """
+        frame = _frame(
+            [
+                {"target": 100.0, "despatched_qty": 80.0, "shortfall_qty": 20.0},
+                {"target": 100.0, "despatched_qty": 110.0, "shortfall_qty": 0.0},
+            ]
+        )
+        k = A.summary(frame, A.AnalyticsScope())["kpis"]
+        assert k["fill_rate_pct"] == 95.0
+        assert k["unfilled_rate_pct"] == 10.0
+        assert k["unfilled_rate_pct"] != 100 - k["fill_rate_pct"]
+
+    def test_a_proxy_row_cannot_inflate_the_denominator(self):
+        """The denominator is the order book, not the panel.
+
+        A sales-proxy row has no despatch figure and no shortfall; counting its
+        units as ordered would shrink the rate without any order being filled.
+        """
+        frame = _frame(
+            [
+                {"target": 100.0, "despatched_qty": 75.0, "shortfall_qty": 25.0},
+                {"target": 900.0, "despatched_qty": None, "target_source": "sales_proxy"},
+            ]
+        )
+        k = A.summary(frame, A.AnalyticsScope())["kpis"]
+        assert k["demand_units"] == 1000.0  # the panel total, proxy included
+        assert k["ordered_units_known"] == 100.0  # the order book alone
+        assert k["unfilled_rate_pct"] == 25.0
+
+
+class TestTheOrderedDemandTileReadsTheOrderBook:
+    """What the Per Branch & SKU tile is allowed to call "Ordered" (D-153).
+
+    `demand_units` / `demand_value` sum every panel row, and a third of the
+    network panel's rows are `sales_proxy`. The tile now reads the `_known`
+    fields; these assert they are the order book and nothing else.
+    """
+
+    def test_the_known_fields_exclude_the_proxy_the_demand_fields_include_it(self):
+        frame = _frame(
+            [
+                {"target": 100.0, "despatched_qty": 100.0, "mean_mrp": 10.0},
+                {"target": 400.0, "despatched_qty": None, "target_source": "sales_proxy", "mean_mrp": 10.0},
+            ]
+        )
+        k = A.summary(frame, A.AnalyticsScope())["kpis"]
+        assert k["demand_units"] == 500.0
+        assert k["demand_value"] == 5000.0
+        assert k["ordered_units_known"] == 100.0
+        assert k["ordered_value_known"] == 1000.0
+
+    def test_the_known_totals_equal_the_order_source_totals(self):
+        """The property the page relies on, asserted rather than assumed.
+
+        Measured on the network panel: both readings give 2,602,392 units and
+        Rs 862.74Cr, because every row carrying a despatch figure is an order
+        row and the order rows without one have a target of zero.
+        """
+        frame = _frame(
+            [
+                {"target": 100.0, "despatched_qty": 90.0},
+                {"target": 0.0, "despatched_qty": None},  # an order row with nothing ordered
+                {"target": 400.0, "despatched_qty": None, "target_source": "sales_proxy"},
+            ]
+        )
+        k = A.summary(frame, A.AnalyticsScope())["kpis"]
+        order_rows = frame[frame["target_source"] == "order"]
+        assert k["ordered_units_known"] == float(order_rows["target"].sum())
+        assert k["ordered_value_known"] == float(order_rows["demand_value"].sum())
+
+
+class TestTheUnfilledRateOnTheTrendMatchesTheKpi:
+    """The sparkline under the Unfilled rate tile is built server-side (D-158).
+
+    The tile on Overall Analysis draws its spark from `trend[].unfilled_rate_pct`
+    rather than dividing `shortfall_units` by `ordered_units_known` in the
+    browser. That would have put a second definition of "unfilled" in the code,
+    and the gross/net distinction D-153 exists for is exactly the kind that
+    drifts silently. These assert the per-period field is the same construction
+    as the KPI of the same name.
+    """
+
+    def test_a_bucket_divides_gross_shortfall_by_what_was_ordered(self):
+        """One line short by 20, one over by 10, both in 2025-01.
+
+        Gross shortfall 20 over 200 ordered = 10%. Despatched is 190, so the
+        fill rate is 95% and its complement is 5%. The trend must carry the
+        former, exactly as the KPI does.
+        """
+        frame = _frame(
+            [
+                {"target": 100.0, "despatched_qty": 80.0, "shortfall_qty": 20.0, "period_index": period_index("2025-01")},
+                {"target": 100.0, "despatched_qty": 110.0, "shortfall_qty": 0.0, "period_index": period_index("2025-01")},
+            ]
+        )
+        payload = A.summary(frame, A.AnalyticsScope())
+        bucket = payload["trend"][0]
+        assert bucket["fill_rate_pct"] == 95.0
+        assert bucket["unfilled_rate_pct"] == 10.0
+        assert bucket["unfilled_rate_pct"] != 100 - bucket["fill_rate_pct"]
+        # And the single-bucket trend agrees with the KPI over the same rows,
+        # which is what makes the tile and its own sparkline the same measure.
+        assert bucket["unfilled_rate_pct"] == payload["kpis"]["unfilled_rate_pct"]
+
+    def test_a_proxy_only_bucket_reports_no_rate_rather_than_zero(self):
+        """A month with no despatch figure has no denominator.
+
+        Returning 0.0 would draw a dip to the floor on the sparkline and read
+        as a month in which every order was filled.
+        """
+        frame = _frame(
+            [
+                {"target": 100.0, "despatched_qty": 75.0, "shortfall_qty": 25.0, "period_index": period_index("2025-01")},
+                {
+                    "target": 900.0,
+                    "despatched_qty": None,
+                    "target_source": "sales_proxy",
+                    "period_index": period_index("2025-02"),
+                },
+            ]
+        )
+        trend = A.summary(frame, A.AnalyticsScope())["trend"]
+        by_period = {row["period"]: row for row in trend}
+        assert by_period["2025-01"]["unfilled_rate_pct"] == 25.0
+        assert by_period["2025-02"]["unfilled_rate_pct"] is None

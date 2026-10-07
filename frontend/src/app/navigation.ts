@@ -1,5 +1,5 @@
 /**
- * Navigation: eight destinations, grouped by what a reader is trying to do.
+ * Navigation: six destinations, grouped by what a reader is trying to do.
  *
  * `index` is a stable identifier, not a position. Numbers are never reassigned
  * when a destination is removed, so gaps in the sequence are expected and are
@@ -14,6 +14,8 @@
  *   `6` Forecast Explorer (D-057) - replaced by the four analysis and
  *   modelling tabs below, which cover the same ground for the scoped
  *   workspace.
+ * - `24` Ordered vs Dispatched Time, and with it the whole Operations
+ *   section, which held nothing else (D-161).
  *
  * Every removed page's component still exists under `src/features/`; none is
  * routed or linked. This project has no git history, so unrouting is the
@@ -45,17 +47,13 @@ export const NAV_SECTIONS: NavSection[] = [
       { index: 23, label: 'Forecasting', path: '/forecasting' },
     ],
   },
-  {
-    label: 'Operations',
-    items: [
-      /* Named for what it measures. The page compares the master's stated
-         "Avg Lead Time" against Despatch Date minus Order Date — the time
-         between ordering and despatching, which is one leg of a lead time and
-         not the whole of it: it stops at despatch and never reaches receipt.
-         Calling the tab "Lead Time" claimed the whole cycle (D-133). */
-      { index: 24, label: 'Ordered vs Dispatched Time', path: '/lead-time' },
-    ],
-  },
+  /* The Operations section held exactly one destination - index 24, Ordered
+     vs Dispatched Time - and both were removed from the UI on request
+     (D-161). Removing the item empties the section, so the section goes with
+     it rather than rendering a heading over nothing. Restoring it is this
+     block, the route line, and the index: the page and its components are
+     untouched under `features/lead-time`, as is the endpoint they read,
+     `/analytics/lead-time-observed`. */
   {
     label: 'Assistant',
     items: [
@@ -71,16 +69,16 @@ export const NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap((section) => section.it
  *  they know what to filter. */
 export const LANDING_PATH = '/overall';
 
-/** The destinations a test holds the app to - all seven, listed explicitly so
+/** The destinations a test holds the app to - all six, listed explicitly so
  *  removing one is a deliberate edit here rather than a filter quietly
  *  returning a shorter array. Index 8 (Scenario Planner) and index 7 (Supply
  *  Intelligence) were removed from the UI on request; their pages, APIs and
  *  tests are untouched, so either route can be restored by putting the item
  *  and the index back. Index 24 (Ordered vs Dispatched Time) took Supply
- *  Intelligence's place in the Operations section (D-105); it kept its index
- *  and its `/lead-time` path through the rename, so no bookmark broke
- *  (D-133). */
-export const REQUIRED_NAV_INDEXES = [20, 21, 22, 23, 24, 13, 14] as const;
+ *  Intelligence's place in the Operations section (D-105) and was renamed
+ *  there (D-133); it has now gone the same way (D-161), taking the Operations
+ *  section with it, since it was the only thing in it. */
+export const REQUIRED_NAV_INDEXES = [20, 21, 22, 23, 13, 14] as const;
 
 export const REQUIRED_NAV_ITEMS: NavItem[] = NAV_ITEMS.filter((item) =>
   (REQUIRED_NAV_INDEXES as readonly number[]).includes(item.index),

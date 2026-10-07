@@ -6,7 +6,6 @@ import { OverallAnalysisPage } from '@/features/overall/pages/OverallAnalysisPag
 import { SeriesAnalysisPage } from '@/features/series-analysis/pages/SeriesAnalysisPage';
 import { TrainingPage } from '@/features/training-explained/pages/TrainingPage';
 import { ForecastingPage } from '@/features/forecasting/pages/ForecastingPage';
-import { LeadTimePage } from '@/features/lead-time/pages/LeadTimePage';
 import { AssistantPage } from '@/features/assistant/pages/AssistantPage';
 import { RecommendationsPage } from '@/features/recommendations/pages/RecommendationsPage';
 
@@ -23,9 +22,16 @@ export function AppRoutes() {
         <Route path="forecasting" element={createElement(ForecastingPage)} />
         {/* Supply Intelligence was removed from the UI on request (D-105).
             Its page, its components and its endpoints are untouched under
-            `features/supply`, so the route can be restored by putting this
-            line and its nav item back. */}
-        <Route path="lead-time" element={createElement(LeadTimePage)} />
+            `features/supply`, so the route can be restored by putting a
+            line and a nav item back.
+
+            Ordered vs Dispatched Time went the same way (D-161), and with it
+            the Operations section it was the only member of. `features/
+            lead-time` is untouched, as is the endpoint it reads,
+            `/analytics/lead-time-observed`; restoring it is this line, the
+            nav block, and index 24. The `path="*"` below means
+            an old `/lead-time` bookmark lands on Overall Analysis rather than
+            on a blank screen. */}
         <Route path="assistant" element={createElement(AssistantPage)} />
         <Route path="recommendations" element={createElement(RecommendationsPage)} />
         <Route

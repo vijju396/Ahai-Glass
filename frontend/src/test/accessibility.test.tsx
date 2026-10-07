@@ -32,13 +32,14 @@ describe('accessibility and navigation', () => {
     // request (D-052), Scenario Planner (index 8) later on request too
     // (D-086), and Supply Intelligence (index 7) after that, replaced in the
     // Operations section by Ordered vs Dispatched Time (index 24, D-105,
-    // renamed in D-133); the survivors keep
+    // renamed in D-133) - which has now been removed on request as well,
+    // emptying the Operations section (D-161); the survivors keep
     // their original numbers rather than being renumbered - the gaps are the
     // record of what went.
     // `REQUIRED_NAV_ITEMS` sorts by index; `REQUIRED_NAV_INDEXES` is in nav
     // order. Asserting on the sorted set is the meaningful check - that the
-    // seven exist exactly once each and no number was reassigned.
-    expect(REQUIRED_NAV_ITEMS.map((item) => item.index)).toEqual([13, 14, 20, 21, 22, 23, 24]);
+    // six exist exactly once each and no number was reassigned.
+    expect(REQUIRED_NAV_ITEMS.map((item) => item.index)).toEqual([13, 14, 20, 21, 22, 23]);
     expect([...REQUIRED_NAV_INDEXES].sort((a, b) => a - b)).toEqual(
       REQUIRED_NAV_ITEMS.map((item) => item.index),
     );
@@ -53,6 +54,7 @@ describe('accessibility and navigation', () => {
 
     for (const gone of [
       'Supply Intelligence',
+      'Ordered vs Dispatched Time',
       'Executive Command Center',
       'Data & Model Monitoring',
       'Connections & Settings',
@@ -75,6 +77,7 @@ describe('accessibility and navigation', () => {
       '/exceptions',
       '/leaderboard',
       '/forecasts',
+      '/lead-time',
     ]) {
       expect(NAV_ITEMS.some((item) => item.path === path)).toBe(false);
     }
@@ -95,7 +98,7 @@ describe('accessibility and navigation', () => {
     expect(new Set(NAV_ITEMS.map((item) => item.path)).size).toBe(NAV_ITEMS.length);
   });
 
-  it('exposes all eight destinations, and only those', () => {
+  it('exposes all six destinations, and only those', () => {
     vi.spyOn(healthApi, 'fetchHealth').mockReturnValue(new Promise(() => {}) as never);
     renderWithProviders(<AppShell />);
     for (const label of [
@@ -103,9 +106,6 @@ describe('accessibility and navigation', () => {
       'Per Branch & SKU',
       'Training',
       'Forecasting',
-      // Renamed from "Lead Time": the page measures Despatch Date minus Order
-      // Date, which stops at despatch and never reaches receipt (D-133).
-      'Ordered vs Dispatched Time',
       'AI Assistant',
       'AI Recommendations',
     ]) {

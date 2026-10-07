@@ -59,6 +59,7 @@ import {
   YELLOW,
   inr,
   num,
+  tickNum,
   pct,
 } from '@/components/ui/Dashboard';
 import { Card } from '@/components/ui/Card';
@@ -82,6 +83,52 @@ const SELECT =
    the two are the same number. A count the reader is asked to take literally
    gets its digits (D-145). */
 const exact = (n: number) => n.toLocaleString('en-IN');
+
+/** The hover card for the demand chart (D-159).
+ *
+ * The three lines are all unit counts, so they share an axis and a format. The
+ * unfilled share is the fourth thing a reader wants at that month and the one
+ * thing that would need a second axis to draw, so it is read on hover instead
+ * of charted — which is also why the chart is three lines and not four.
+ *
+ * It is `unfilled_rate_pct` from the payload, not `100 - fill_rate_pct`: the
+ * rate shown here divides the same gross shortfall the red line draws, so the
+ * two figures in this card agree with each other (D-153, D-158). A month
+ * before the order book has no order to measure against and the row is left
+ * out rather than printed as a zero.
+ */
+function TrendTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: Array<{ name?: string; value?: number | null; color?: string }>;
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  const rows = payload.filter((entry) => entry.value != null);
+  if (!rows.length) return null;
+  const point = (payload[0] as { payload?: { unfilled_rate_pct?: number | null } }).payload;
+  const unfilled = point?.unfilled_rate_pct;
+  return (
+    <div style={{ ...TOOLTIP, padding: '6px 8px' }}>
+      <div className="mb-1 font-semibold">{label}</div>
+      {rows.map((entry) => (
+        <div key={entry.name} className="flex items-center justify-between gap-3 tabular-nums">
+          <span style={{ color: entry.color }}>{entry.name}</span>
+          <span>{num(entry.value as number)} units</span>
+        </div>
+      ))}
+      {unfilled != null && (
+        <div className="mt-1 flex items-center justify-between gap-3 border-t border-[var(--color-border)] pt-1 tabular-nums">
+          <span className="text-[var(--color-text-muted)]">Not filled</span>
+          <span className="font-semibold">{pct(unfilled)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function splitSeries(id: string): { branch: string; sku: string } | null {
   const cut = id.indexOf('|');
@@ -194,10 +241,28 @@ export function SeriesAnalysisPage() {
           label: shortPeriod(p.period),
           ordered_units: isProxy ? null : p.demand_units,
           despatched_shown: isProxy ? p.demand_units : p.despatched_units,
+          /* Null, not the zero the payload carries. A proxy month has no order
+             book, so nothing can be short in it - the figure is unmeasurable,
+             not nil. As a bar that distinction cost nothing, because a zero
+             bar draws nothing; as a line (D-159) it drew a red rule pinned to
+             the axis across the whole earlier year, which reads as twelve
+             months in which every order was filled. */
+          shortfall_shown: isProxy ? null : p.shortfall_units,
         };
       }),
     [data],
   );
+
+  /* The chart opens on the stretch where both series exist (D-159).
+     Before Apr 2025 there is despatch and nothing to compare it against, so
+     two-thirds of the old default view carried one line, no gap and no fill
+     rate — the reader had to find the dashed marker to know which part of the
+     picture was the comparison. The earlier year is still a real record and is
+     one click away on the arrow at the left edge, not deleted. */
+  const [showHistory, setShowHistory] = useState(false);
+  const orderMonths = useMemo(() => trend.filter((p) => (p.order_share_pct ?? 0) >= 50), [trend]);
+  const historyCount = trend.length - orderMonths.length;
+  const shown = showHistory || !orderMonths.length ? trend : orderMonths;
 
   /* The four views below answer the questions worth asking about a SKU before
      any forecast of it is worth reading: does it repeat every year, is it
@@ -391,30 +456,39 @@ export function SeriesAnalysisPage() {
       {data && !data.empty && (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+            {/* `ordered_units_known` / `ordered_value_known`, not
+                `demand_units` / `demand_value` (D-153). The latter sum every
+                panel row, and a third of them are `sales_proxy` rows from
+                before the order book begins - on the network panel that is
+                1,563,117 units and Rs 483.28Cr of sales proxy added to
+                2,602,392 ordered units and Rs 862.74Cr, then printed under the
+                word "Ordered". The two `_known` fields are the order book
+                alone, measured: their totals equal the `target_source ==
+                'order'` totals exactly. The window count is gone with them -
+                it described the panel's 122 weeks, while the order book covers
+                70 of those. */}
             <StatTile
               label="Ordered demand"
-              value={`${num(data.kpis.demand_units)} units`}
-              /* The window is the panel's own, always at the panel grain - the
-                 grain picker above re-buckets the charts, it does not change
-                 what the panel is made of - so the noun comes from
-                 `panel_grain` and not from the picker. It read "122 months" on
-                 a weekly panel, which is a count of weeks wearing the wrong
-                 word. */
-              sublabel={`${inr(data.kpis.demand_value)} · ${data.window.periods} ${periodNoun(data.panel_grain)}`}
+              value={`${num(data.kpis.ordered_units_known)} units`}
+              sublabel={`${inr(data.kpis.ordered_value_known)} at mean MRP`}
               tint="blue"
               accent
             />
             <StatTile
               label="Unfilled"
               value={`${num(data.kpis.shortfall_units)} units`}
-              sublabel={`${num(data.kpis.censored_rows)} short-despatched rows`}
+              sublabel="ordered but not despatched"
               tint="amber"
             />
+            {/* Unfilled rate, and from its own backend field rather than
+                `100 - fill_rate_pct`: fill rate is net of over-despatch, the
+                tile to its left is gross, and the subtraction would print
+                18.0% beside a figure that is 19.4% of the order book. */}
             <StatTile
-              label="Fill rate"
-              value={pct(data.kpis.fill_rate_pct)}
-              sublabel="despatched ÷ ordered, where recorded"
-              tint="green"
+              label="Unfilled rate"
+              value={pct(data.kpis.unfilled_rate_pct)}
+              sublabel="unfilled ÷ ordered, where recorded"
+              tint="amber"
             />
             {/* "Series covered" was removed: it printed the same count the
                 line under the slicers already states, abbreviated - "68.6K"
@@ -425,26 +499,62 @@ export function SeriesAnalysisPage() {
           <Panel
             title={`Demand over time — ${subject}`}
             accent={BLUE}
-            note="Ordered against despatched. Despatch runs the full two years, because an invoice is a despatch: before Apr 2025 it is read from the sales file and after it from the order book, and on the months both cover they agree within a few per cent. Ordered runs only from Apr 2025, which is where the order book starts - there is no order history before it. Ordered sits above despatched in almost every month, and that gap is the point of the chart: it is demand that was recorded but not filled, so the ordered figure is a lower bound on what was really wanted."
+            note={
+              showHistory
+                ? `Ordered against despatched, over the whole record. Despatch runs the full two years, because an invoice is a despatch: before Apr 2025 it is read from the sales file and after it from the order book, and on the months both cover they agree within a few per cent. Ordered runs only from Apr 2025, which is where the order book starts - there is no order history before it, which is why the ${historyCount} months left of the dashed line carry one line and no unfilled share on hover. Both need an order to measure against. Collapse with the arrow to return to the comparable stretch.`
+                : `Ordered against despatched, over the ${orderMonths.length} ${periodNoun(grain)} the order book covers - the stretch where both figures exist and the gap between them means something. Ordered sits above despatched in almost every one, and that gap is the point of the chart: it is demand that was recorded but not filled, so the ordered figure is a lower bound on what was really wanted. Short is that gap counted only where a line fell short. Hover any point for the three figures and the share of the order book that went unfilled that month. The arrow at the left opens the ${historyCount} earlier ${periodNoun(grain)}, which hold despatch read from the sales file and no order book to compare it against.`
+            }
           >
+            {/* The arrow sits against the plot's left edge, which is the edge
+                the hidden history is behind, and points the way the axis would
+                grow. Collapsed it is the only affordance saying there is more
+                record than the chart is showing, so it carries a label as well
+                as a glyph (D-159). */}
+            <div className="relative">
+              {historyCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowHistory((open) => !open)}
+                  aria-expanded={showHistory}
+                  title={
+                    showHistory
+                      ? 'Hide the months before the order book'
+                      : `Show the ${historyCount} earlier ${periodNoun(grain)} of despatch`
+                  }
+                  aria-label={
+                    showHistory
+                      ? 'Hide the months before the order book'
+                      : `Show the ${historyCount} earlier ${periodNoun(grain)} of despatch`
+                  }
+                  className="absolute -top-2 left-0 z-10 flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1.5 py-0.5 text-[9px] text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                >
+                  <span aria-hidden="true">{showHistory ? '›' : '‹'}</span>
+                  {showHistory ? 'hide earlier' : `${historyCount} earlier`}
+                </button>
+              )}
             <ResponsiveContainer width="100%" height={280}>
-              <ComposedChart data={trend} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
+              <ComposedChart data={shown} margin={{ top: 22, right: 8, left: -10, bottom: 0 }}>
                 <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                <XAxis dataKey="label" tick={{ ...TICK, fontSize: 9 }} tickLine={false} interval={grain === 'monthly' ? 1 : 0} />
-                <YAxis tick={TICK} width={46} />
-                <Tooltip contentStyle={TOOLTIP} formatter={(v: number) => num(v)} />
+                <XAxis dataKey="label" tick={{ ...TICK, fontSize: 9 }} tickLine={false} interval={grain === 'monthly' && showHistory ? 1 : 0} />
+                <YAxis tick={TICK} width={46} tickFormatter={tickNum} />
+                <Tooltip content={<TrendTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 9 }} />
-                <ReferenceLine
-                  x={shortPeriod('2025-04')}
-                  stroke={SLATE}
-                  strokeDasharray="4 4"
-                  label={{
-                    value: 'order book starts',
-                    position: 'insideTopLeft',
-                    fontSize: 9,
-                    fill: 'var(--color-text-muted)',
-                  }}
-                />
+                {/* Only worth drawing when there is something on both sides of
+                    it. Collapsed, the order book starts at the first point and
+                    the marker would sit on the axis labelling the whole chart. */}
+                {showHistory && (
+                  <ReferenceLine
+                      x={shortPeriod('2025-04')}
+                    stroke={SLATE}
+                    strokeDasharray="4 4"
+                    label={{
+                      value: 'order book starts',
+                      position: 'insideTopLeft',
+                      fontSize: 9,
+                      fill: 'var(--color-text-muted)',
+                    }}
+                  />
+                )}
                 <Area
                   type="monotone"
                   dataKey="ordered_units"
@@ -466,9 +576,23 @@ export function SeriesAnalysisPage() {
                   connectNulls={false}
                   isAnimationActive={false}
                 />
-                <Bar dataKey="shortfall_units" name="Short" fill={RED} barSize={8} isAnimationActive={false} />
+                {/* Was a bar series. As a line it reads against the two above
+                    it on the same axis - the shortfall is the same quantity
+                    they are, so it belongs on the same kind of mark - and it
+                    keeps its red (D-159). */}
+                <Line
+                  type="monotone"
+                  dataKey="shortfall_shown"
+                  name="Short"
+                  stroke={RED}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls={false}
+                  isAnimationActive={false}
+                />
               </ComposedChart>
             </ResponsiveContainer>
+            </div>
           </Panel>
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -481,7 +605,7 @@ export function SeriesAnalysisPage() {
                 <ComposedChart data={seasonality} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
                   <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
                   <XAxis dataKey="name" tick={{ ...TICK, fontSize: 9 }} tickLine={false} />
-                  <YAxis tick={TICK} width={46} />
+                  <YAxis tick={TICK} width={46} tickFormatter={tickNum} />
                   {/* The tooltip used to append "averaged over N year(s)" to
                       every label. It said 10 on a two-year window, because the
                       count was of periods and the periods are weeks (D-147);
