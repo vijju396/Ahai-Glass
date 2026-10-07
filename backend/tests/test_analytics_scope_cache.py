@@ -58,7 +58,7 @@ def test_every_field_actually_changes_the_key():
         "start_period": "2025-01",
         "end_period": "2025-06",
         "grain": "quarterly",
-        # The three product axes Overall Analysis filters on (D-141). This
+        # The three product axes Overall Analysis filters on (D-143). This
         # test is what made adding them safe: the key is built from
         # `astuple(scope.normalised())`, so they were covered the moment they
         # were declared - and this assertion is what proves it rather than

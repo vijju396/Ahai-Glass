@@ -145,7 +145,7 @@ class AnalyticsScope:
     #: The three product axes Overall Analysis charts in its own panels. They
     #: were chartable but not filterable, so a reader could see that CAR & MUV
     #: carries the demand and had no way to ask what the rest of the page looks
-    #: like for CAR & MUV alone (D-141).
+    #: like for CAR & MUV alone (D-143).
     glass_type: str | None = None
     vehicle_category: str | None = None
     vehicle_age_category: str | None = None
@@ -245,7 +245,7 @@ def filters(panel: pd.DataFrame) -> dict[str, Any]:
     return {
         "branches": options(BRANCH_COL),
         # Every SKU in the frame, so a SKU picker with no branch chosen can
-        # offer the complete list rather than the top N of it (D-144). On the
+        # offer the complete list rather than the top N of it (D-146). On the
         # full network that is 2,315 entries - large for a payload and still
         # far smaller than the 68,597 branch x SKU pairs, which is exactly why
         # the picker asks for branches and SKUs separately rather than for
@@ -436,9 +436,23 @@ def _trend(frame: pd.DataFrame, grain: str) -> list[dict[str, Any]]:
     return out
 
 
+#: Where a row lands when the product master has no attribute for its SKU.
+#: Named on screen so the gap is visible and the bars add back to the tile.
+UNKNOWN_DIMENSION = "Not in product master"
+
+
 def _by_dimension(frame: pd.DataFrame, column: str, label: str) -> list[dict[str, Any]]:
     """Totals per level of one dimension. Vectorised, for the same reason
-    `_trend` is."""
+    `_trend` is.
+
+    A row whose attribute is unknown goes to an explicit `Not in product
+    master` bucket rather than being dropped (D-140). Dropping it made every
+    product-attribute chart fall 2,641 units short of the headline total,
+    with nothing on screen to explain the hole - two SKUs that the client
+    orders across 44 of 53 branches are absent from their own product master.
+    The branch and trend panels never had this problem because every branch is
+    in Location Master.
+    """
     if frame.empty or column not in frame.columns:
         return []
     despatched = pd.to_numeric(frame["despatched_qty"], errors="coerce")
@@ -453,7 +467,12 @@ def _by_dimension(frame: pd.DataFrame, column: str, label: str) -> list[dict[str
             "sku": frame[SKU_COL].astype("object"),
             "series": frame[SERIES_COL].astype("object"),
         }
-    ).dropna(subset=["key"])
+    )
+    # Labelled, not dropped: the units are real and belong in the total.
+    work["key"] = work["key"].where(work["key"].notna(), UNKNOWN_DIMENSION)
+    work["key"] = work["key"].mask(
+        work["key"].astype("string").str.strip() == "", UNKNOWN_DIMENSION
+    )
     if work.empty:
         return []
     agg = work.groupby("key", observed=True).agg(
@@ -496,7 +515,7 @@ def _cross_tab(
     wide and twenty rotated depot names collide into an unreadable band there.
     Overall Analysis now draws the same payload full width in a horizontal
     scroller, where all 53 fit legibly, so the truncation moved to the caller
-    that still needs it (D-140). `limit` stays in the payload as the cap a
+    that still needs it (D-142). `limit` stays in the payload as the cap a
     narrow panel should apply, and `total_branches` still says how many there
     are. 53 rows of six floats is a payload nobody notices.
     """
@@ -546,7 +565,7 @@ def _seasonality(frame: pd.DataFrame) -> list[dict[str, Any]]:
     A real seasonal profile from the months present, not a fitted curve.
 
     **This read `(period_index % 12) + 1` and was wrong on a weekly panel**
-    (D-145). `period_index` counts periods, so modulo 12 is a calendar month
+    (D-147). `period_index` counts periods, so modulo 12 is a calendar month
     only when a period *is* a month. On the weekly panel it bucketed every
     twelfth ISO week together and labelled the buckets Jan..Dec, which is not
     a month-of-year pattern at all - it is twelve arbitrary slices of roughly
@@ -1196,7 +1215,7 @@ def series_options(
     `sku` is the mirror of `branch` and exists for the same reason the picker
     on Per Branch & SKU slices both ways: asked which branches carry one SKU,
     the answer is at most 53 rows, where the unscoped list on the full network
-    is 68,597 (D-144). Scoping the question is what keeps `limit` from
+    is 68,597 (D-146). Scoping the question is what keeps `limit` from
     silently truncating the answer.
     """
     frame = panel

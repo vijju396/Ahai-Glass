@@ -11,7 +11,7 @@ export interface AnalyticsFilters {
   workspace_scope?: WorkspaceScope;
   branches: FilterOption[];
   /** Every SKU in the frame, so a SKU picker with no branch chosen offers the
-   *  whole list rather than the top N of it (D-144). Optional because older
+   *  whole list rather than the top N of it (D-146). Optional because older
    *  payloads predate it. */
   skus?: FilterOption[];
   product_groups: FilterOption[];
@@ -117,7 +117,7 @@ export interface AnalyticsSummary {
     /** Counted on the order book alone, so they share a universe with
      *  `workspace_scope.total_branches` / `total_skus`. `sku_count` above
      *  counts every SKU with a row, which on the network frame includes
-     *  sales-proxy-only ones and read "2,315 of 2,063" (D-143). Optional:
+     *  sales-proxy-only ones and read "2,315 of 2,063" (D-145). Optional:
      *  older payloads do not carry them. */
     ordered_branch_count?: number;
     ordered_sku_count?: number;
@@ -529,7 +529,7 @@ export const seriesKeys = {
  *
  *  Ask for a `branch` or a `sku`, not for everything: the full network holds
  *  68,597 pairs and no `limit` can return them, so an unscoped network call is
- *  a truncated answer wearing a complete one's clothes (D-144). The response
+ *  a truncated answer wearing a complete one's clothes (D-146). The response
  *  carries `truncated` so a caller can tell. 5,000 is above the largest
  *  complete answer either scoping can produce - a branch carries at most 2,315
  *  SKUs, a SKU at most 53 branches.

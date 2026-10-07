@@ -12,7 +12,7 @@
  * data it already had.
  *
  * **Scope: the whole client network**, the same 53 branches and 2,063 ordered
- * SKUs Overall Analysis reports (D-144). It used to read the modelling panel,
+ * SKUs Overall Analysis reports (D-146). It used to read the modelling panel,
  * which is physically cut to the workspace, so the picker offered 2 branches
  * and 136 SKUs — a page whose entire purpose is "pick any branch and SKU"
  * could not reach 51 branches of the client's own data. Nothing here is
@@ -80,7 +80,7 @@ const SELECT =
 
 /* `num` abbreviates: 68,597 reads "68.6K", and "68.6K of 68.6K" hides whether
    the two are the same number. A count the reader is asked to take literally
-   gets its digits (D-143). */
+   gets its digits (D-145). */
 const exact = (n: number) => n.toLocaleString('en-IN');
 
 function splitSeries(id: string): { branch: string; sku: string } | null {
@@ -108,7 +108,7 @@ export function SeriesAnalysisPage() {
    * complete by accident. On the network there are 68,597, and the same code
    * would have offered the busiest 1,000 as if they were everything — a
    * silent cap on the one page whose job is to let you reach any combination
-   * (D-144).
+   * (D-146).
    *
    * So each slicer asks its own question, and each answer is complete:
    * "which SKUs does this branch carry?" is at most 2,315 rows, and "which
@@ -162,7 +162,7 @@ export function SeriesAnalysisPage() {
     /* The panels render under `data && !data.empty`. Without this a slicer
        change unmounts every one of them, the document collapses and the
        reader is thrown to the top — the same defect fixed on Overall Analysis
-       in D-142, and the same fix. */
+       in D-144, and the same fix. */
     placeholderData: keepPreviousData,
   });
   const data = summary.data;
@@ -346,7 +346,7 @@ export function SeriesAnalysisPage() {
             </button>
           )}
           {/* The panels below are holding the PREVIOUS selection's figures
-              while this runs (D-142). Saying so is the price of not
+              while this runs (D-144). Saying so is the price of not
               unmounting them. */}
           {summary.isFetching && !summary.isLoading && (
             <span className="ml-auto pb-2 text-[11px] font-medium text-[var(--color-primary)]">
@@ -358,7 +358,7 @@ export function SeriesAnalysisPage() {
             total from `/filters`, both at network scope. It used to be
             `matching.length of parsed.length` over a fetched pair list, which
             only ever worked because the workspace's 272 pairs fitted inside
-            the fetch (D-144). */}
+            the fetch (D-146). */}
         <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
           Showing <strong>{subject}</strong> —{' '}
           {data && !data.empty ? exact(data.kpis.series_count) : '0'} of{' '}
@@ -484,7 +484,7 @@ export function SeriesAnalysisPage() {
                   <YAxis tick={TICK} width={46} />
                   {/* The tooltip used to append "averaged over N year(s)" to
                       every label. It said 10 on a two-year window, because the
-                      count was of periods and the periods are weeks (D-145);
+                      count was of periods and the periods are weeks (D-147);
                       and once corrected it is the same two or three on every
                       bar, which belongs in the note once rather than on each
                       hover. */}

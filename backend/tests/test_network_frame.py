@@ -154,3 +154,56 @@ class TestCoverage:
         )
         assert cov["period_range"] == ["2025-W14", "2025-W20"]
         assert cov["periods"] == 2
+
+
+class TestUnknownDimensionBucket:
+    """A row with no product attribute is labelled, never dropped (D-140).
+
+    Dropping it made every product-attribute chart fall 2,641 units short of
+    the headline total with nothing on screen explaining the hole - two SKUs
+    the client orders across 44 of 53 branches are absent from their own
+    product master.
+    """
+
+    def _frame(self) -> pd.DataFrame:
+        from app.domain.ais import analytics
+
+        frame = pd.DataFrame({
+            "canonical_branch": ["AGRA", "AGRA"],
+            "canonical_sku": ["FG.KNOWN", "FG.ABSENT"],
+            "series_id": ["AGRA|FG.KNOWN", "AGRA|FG.ABSENT"],
+            "period": ["2025-W14", "2025-W14"],
+            "target": [100.0, 40.0],
+            "despatched_qty": [100.0, 40.0],
+            "shortfall_qty": [0.0, 0.0],
+            "mean_mrp": [10.0, 10.0],
+            "value_class": ["A", None],
+            "glass_type": ["Lam", None],
+        })
+        return analytics.derive_columns(frame)
+
+    def test_the_unknown_row_is_kept_under_its_own_label(self) -> None:
+        from app.domain.ais import analytics
+
+        rows = analytics._by_dimension(self._frame(), "value_class", "value_class")
+        names = {r["name"]: r["demand_units"] for r in rows}
+        assert names["A"] == 100.0
+        assert names[analytics.UNKNOWN_DIMENSION] == 40.0
+
+    def test_the_breakdown_adds_back_to_the_total(self) -> None:
+        """The property that was broken: bars that do not sum to the tile."""
+        from app.domain.ais import analytics
+
+        frame = self._frame()
+        for column in ("value_class", "glass_type"):
+            rows = analytics._by_dimension(frame, column, column)
+            assert sum(r["demand_units"] for r in rows) == frame["target"].sum()
+
+    def test_a_blank_string_counts_as_unknown_too(self) -> None:
+        """Empty is as unknown as null, and must not become its own bar."""
+        from app.domain.ais import analytics
+
+        frame = self._frame()
+        frame.loc[1, "value_class"] = "   "
+        rows = analytics._by_dimension(frame, "value_class", "value_class")
+        assert {r["name"] for r in rows} == {"A", analytics.UNKNOWN_DIMENSION}

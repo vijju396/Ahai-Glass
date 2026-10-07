@@ -152,7 +152,7 @@ def _scope(
     grain: str,
     *,
     # Keyword-only and defaulted, so the routes that do not offer these three
-    # axes keep their existing positional calls unchanged (D-141).
+    # axes keep their existing positional calls unchanged (D-143).
     glass_type: str | None = None,
     vehicle_category: str | None = None,
     vehicle_age_category: str | None = None,
@@ -408,7 +408,7 @@ def get_series(
             "Pairs across the whole client network rather than the workspace. "
             "Paired with the same flag on `/summary` and `/filters`, so a "
             "picker cannot offer a combination its figures do not cover "
-            "(D-144). Unscoped the network holds 68,597 pairs, well past any "
+            "(D-146). Unscoped the network holds 68,597 pairs, well past any "
             "`limit`; ask with `branch` or `sku` to get a complete answer."
         ),
     ),

@@ -73,8 +73,18 @@ class MonthlyFactRow:
     shortfall_qty: float = 0.0
     over_delivered_qty: float = 0.0
     line_count: int = 0
-    mrp_sum: float = 0.0
-    mrp_count: int = 0
+    #: Quantity-weighted, not a plain average of the rates (D-139). The value
+    #: a page prints is `ordered_qty * mean_mrp`, and an unweighted mean makes
+    #: that disagree with the sum of the lines whenever a cell holds more than
+    #: one price - 19,359 of 582,324 cells do, and the network total came out
+    #: Rs 2.92Cr high. Weighting by quantity makes the product reproduce the
+    #: line-level sum exactly.
+    mrp_value_sum: float = 0.0
+    mrp_qty_sum: float = 0.0
+    #: Lines whose despatch quantity is blank. Blank is *unknown*, not zero:
+    #: counting it as nothing despatched made 246 units read as shortfall
+    #: (D-139). Carried so the absence is visible rather than absorbed.
+    despatch_unknown_lines: int = 0
 
     @property
     def is_censored(self) -> bool:
@@ -82,7 +92,7 @@ class MonthlyFactRow:
 
     @property
     def mean_mrp(self) -> float | None:
-        return self.mrp_sum / self.mrp_count if self.mrp_count else None
+        return self.mrp_value_sum / self.mrp_qty_sum if self.mrp_qty_sum else None
 
 
 @dataclass
@@ -272,20 +282,28 @@ class AisPreprocessing:
                 cells[key] = cell
 
             ordered = readers.to_float(row[qty_index]) or 0.0
-            despatched = readers.to_float(row[despatch_qty_index]) or 0.0
+            # None and 0.0 are different answers. A blank despatch quantity is
+            # unknown; treating it as nothing despatched turned the whole
+            # ordered quantity into shortfall on 44 lines (D-139).
+            despatched_raw = readers.to_float(row[despatch_qty_index])
             cell.ordered_qty += ordered
-            cell.despatched_qty += despatched
             cell.line_count += 1
-            gap = ordered - despatched
-            if gap > 0:
-                cell.shortfall_qty += gap
-            elif gap < 0:
-                cell.over_delivered_qty += -gap
+            if despatched_raw is None:
+                cell.despatch_unknown_lines += 1
+            else:
+                cell.despatched_qty += despatched_raw
+                gap = ordered - despatched_raw
+                if gap > 0:
+                    cell.shortfall_qty += gap
+                elif gap < 0:
+                    cell.over_delivered_qty += -gap
             if mrp_index is not None:
                 mrp = readers.to_float(row[mrp_index])
                 if mrp is not None and mrp > 0:
-                    cell.mrp_sum += mrp
-                    cell.mrp_count += 1
+                    # Weighted by the line's own quantity, so
+                    # `ordered_qty * mean_mrp` reproduces the sum of the lines.
+                    cell.mrp_value_sum += mrp * ordered
+                    cell.mrp_qty_sum += ordered
 
             if branch in branch_dim:
                 branch_dim[branch]["orders"] = True
@@ -311,6 +329,7 @@ class AisPreprocessing:
                 "is_censored": cell.is_censored,
                 "line_count": cell.line_count,
                 "mean_mrp": cell.mean_mrp,
+                "despatch_unknown_lines": cell.despatch_unknown_lines,
             }
             for cell in cells.values()
         ]
@@ -395,13 +414,17 @@ class AisPreprocessing:
                 if cell is None:
                     cell = MonthlyFactRow(branch=branch, sku=sku, period=key[2])
                     cells[key] = cell
-                cell.ordered_qty += readers.to_float(projected[qty_index]) or 0.0
+                invoiced = readers.to_float(projected[qty_index]) or 0.0
+                cell.ordered_qty += invoiced
                 cell.line_count += 1
                 if mrp_index is not None:
                     mrp = readers.to_float(projected[mrp_index])
                     if mrp is not None and mrp > 0:
-                        cell.mrp_sum += mrp
-                        cell.mrp_count += 1
+                        # Quantity-weighted, the same way the order fact does
+                        # it (D-139), so the proxy months are valued on the
+                        # same basis as the order months.
+                        cell.mrp_value_sum += mrp * invoiced
+                        cell.mrp_qty_sum += invoiced
 
                 if branch in branch_dim:
                     branch_dim[branch]["sells"] = True

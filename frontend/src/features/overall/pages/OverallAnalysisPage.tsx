@@ -85,7 +85,7 @@ const SELECT_CLASS =
 
 /* `num` abbreviates - 2063 becomes "2.1K". That is right on a chart axis and
    wrong on a count the reader is being asked to take literally: "2.1K of 2.1K
-   SKUs" hides whether the two are the same number (D-143). */
+   SKUs" hides whether the two are the same number (D-145). */
 const exact = (value: number) => value.toLocaleString('en-IN');
 
 /** `2026-07` → `Jul 26`; a quarterly bucket is already short enough. */
@@ -96,11 +96,11 @@ export function OverallAnalysisPage() {
   /* The three product axes the page charts in "Where the demand comes from".
      They were drawn but not selectable, so a reader could see that CAR & MUV
      carries the demand and had no way to ask what the trend, the fill rate and
-     the top SKUs look like for CAR & MUV alone (D-141). */
+     the top SKUs look like for CAR & MUV alone (D-143). */
   const [glassType, setGlassType] = useState('');
   const [vehicleCategory, setVehicleCategory] = useState('');
   const [vehicleAge, setVehicleAge] = useState('');
-  /* No start/end state any more: the month-range picker is gone (D-143) and
+  /* No start/end state any more: the month-range picker is gone (D-145) and
      the window is the order book's own extent. */
   const [grain, setGrain] = useState('monthly');
 
@@ -119,7 +119,7 @@ export function OverallAnalysisPage() {
      panel is sales proxy only - no order and no despatch - so including it
      made every total on the page disagree with the ordered-vs-despatched
      tiles (D-122). This used to be the floor under a FROM the reader could
-     move; with the picker gone (D-143) it is simply the window. */
+     move; with the picker gone (D-145) it is simply the window. */
   const effectiveStart = filters?.orders_start_month ?? '';
 
   const query: AnalyticsQuery = useMemo(
@@ -141,7 +141,7 @@ export function OverallAnalysisPage() {
      height of the filter bar and the browser drops the reader at the top —
      then the payload arrives and the page grows back under them. Holding the
      previous payload keeps the document the same height, so the scroll
-     position survives and only the numbers change (D-142). */
+     position survives and only the numbers change (D-144). */
   const summaryQuery = useQuery({
     queryKey: analyticsKeys.networkSummary(query),
     queryFn: () => fetchAnalyticsSummary(query, true),
@@ -158,7 +158,7 @@ export function OverallAnalysisPage() {
   const toggleBranch = (name: string) => setBranch((current) => (current === name ? '' : name));
   const toggleValueClass = (name: string) => setValueClass((current) => (current === name ? '' : name));
 
-  // `dimBranch` went with the branch donut (D-140): nothing on this page now
+  // `dimBranch` went with the branch donut (D-142): nothing on this page now
   // dims by branch, and the active filter shows as a clear-chip on the panel.
   const dimClass = (name: string) => (valueClass && name !== valueClass ? 0.28 : 1);
 
@@ -288,7 +288,7 @@ export function OverallAnalysisPage() {
    *  that matters for planning: a low-volume SKU can sit high on value, and it
    *  is the position off the diagonal that identifies it. This panel replaced
    *  a 2,063-bar Pareto that answered the same question by making the reader
-   *  count bars (D-139).
+   *  count bars (D-141).
    *
    *  **The cuts are Pareto, not medians.** A SKU is core *volume* if it falls
    *  inside the set making up the first 80% of ordered units, and core *value*
@@ -439,7 +439,7 @@ export function OverallAnalysisPage() {
    *  filters. Both sides of each ratio are taken on the order book:
    *  `ordered_sku_count` rather than `sku_count`, because the latter includes
    *  SKUs carried only by the pre-order sales proxy and printed "2,315 of
-   *  2,063" against the order-book denominator (D-143). Falls back to the
+   *  2,063" against the order-book denominator (D-145). Falls back to the
    *  unqualified counts if an older payload has no ordered-only figures. */
   const counts = useMemo(() => {
     if (!summary || summary.empty) return null;
@@ -455,7 +455,7 @@ export function OverallAnalysisPage() {
   const anyFilter = branch || valueClass || glassType || vehicleCategory || vehicleAge;
 
   /* How many years each Seasonality bar averages, said once under the chart
-     instead of on every hover (D-145). Always two or three on this window. */
+     instead of on every hover (D-147). Always two or three on this window. */
   const seasonSpan = useMemo(() => {
     const years = (summary?.seasonality ?? []).map((m) => m.observations).filter((n) => n > 0);
     if (!years.length) return 'Each column averages the years in the window';
@@ -493,7 +493,7 @@ export function OverallAnalysisPage() {
         </Link>
       </header>
 
-      {/* The scope banner was removed from this page (D-142). It read
+      {/* The scope banner was removed from this page (D-144). It read
           "53 of 53 branches · 2063 of 2063 SKUs · the client's whole dataset",
           and the page's own lede already says it describes every branch and
           SKU in the source data. The component is unchanged and still renders
@@ -511,7 +511,7 @@ export function OverallAnalysisPage() {
       <div className="sticky top-0 z-20 -my-2 bg-[var(--color-bg)] py-2 max-[800px]:top-[72px]">
       <Card className="!py-2.5">
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          {/* The month-range picker was removed (D-143). The window is now
+          {/* The month-range picker was removed (D-145). The window is now
               fixed at the order book's own extent — `effectiveStart` still
               pins the start to the first month holding real orders, because
               earlier months are sales-proxy rows with no order and no despatch
@@ -613,7 +613,7 @@ export function OverallAnalysisPage() {
         {/* What the page is counting, and nothing else. The grain note that
             used to sit here explained how weekly rows roll into months — true,
             but four lines of method under a control strip the reader came to
-            use (D-143). Both figures are taken on the order book, so the
+            use (D-145). Both figures are taken on the order book, so the
             numerator and the denominator count the same universe: `sku_count`
             includes SKUs carried only by the pre-order sales proxy, and
             against a 2,063 denominator it printed "2,315 of 2,063". */}
@@ -631,7 +631,7 @@ export function OverallAnalysisPage() {
       {/* `isLoading` is the FIRST load only. A refetch after a filter change is
           `isFetching`, and the panels below keep the previous payload
           (`keepPreviousData`) rather than unmounting — which is what used to
-          throw the reader back to the top of the page (D-142). */}
+          throw the reader back to the top of the page (D-144). */}
       {(filtersQuery.isLoading || summaryQuery.isLoading) && <LoadingBlock label="Aggregating the panel" />}
       {filtersQuery.isError && <ErrorState error={filtersQuery.error} />}
       {summaryQuery.isError && <ErrorState error={summaryQuery.error} />}
@@ -697,7 +697,7 @@ export function OverallAnalysisPage() {
             {/* Full width, and every branch. It absorbed a top-10 donut of the
                 same measure that sat beside it: a ring and a stack both said
                 "where the demand is by branch", and the ring could only ever
-                show ten of the 53 (D-140). */}
+                show ten of the 53 (D-142). */}
             <Panel className="lg:col-span-2 xl:col-span-4"
               title="Demand by Branch × Value Class"
               accent={VIOLET}
@@ -956,7 +956,7 @@ export function OverallAnalysisPage() {
 
             {/* Full width and last in the section. It replaced a 2,063-bar
                 Pareto that said the same thing by making the reader count bars
-                — and at this scale the bars were a solid block (D-139). */}
+                — and at this scale the bars were a solid block (D-141). */}
             <Panel
               className="lg:col-span-2 xl:col-span-4"
               title="Volume vs Value by SKU"
@@ -1203,7 +1203,7 @@ export function OverallAnalysisPage() {
                   <YAxis tick={TICK} tickFormatter={(value: number) => num(value)} />
                   {/* `observations` is a count of YEARS. It used to be a count
                       of periods, which on a weekly panel made every bar claim
-                      ten of them over a two-year window (D-145). The number is
+                      ten of them over a two-year window (D-147). The number is
                       the same two or three on nearly every bar, so it is stated
                       once below rather than on every hover. */}
                   <Tooltip

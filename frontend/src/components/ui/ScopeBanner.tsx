@@ -11,12 +11,12 @@
  * workspace is unrestricted, which is the honest output in that case.
  *
  * **One scope is unrestricted and still states itself**: `full_network`, used
- * by Overall Analysis (D-138) and Per Branch & SKU (D-144) to report the
+ * by Overall Analysis (D-138) and Per Branch & SKU (D-146) to report the
  * client's whole network while the modelling pages stay on the workspace.
  * Silence there would be the same defect read the other way round — a reader
  * moving between pages would find figures six times larger with nothing on
  * screen saying why. Overall Analysis carries the statement in its own filter
- * bar instead and so does not mount this (D-142).
+ * bar instead and so does not mount this (D-144).
  */
 import { useState } from 'react';
 import type { WorkspaceScope } from '@/api/analytics';
