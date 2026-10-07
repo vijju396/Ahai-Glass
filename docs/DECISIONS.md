@@ -5762,3 +5762,504 @@ conversion and the saving comes from `series_id` and `canonical_sku` instead —
 
 An empty order fact now raises with its remediation instead of a `KeyError` on
 a column that is absent rather than empty.
+
+---
+
+## D-139 — One scatter with named groups replaces the 2,063-bar Pareto
+
+Requested: the SKU Pareto on Overall Analysis is too cluttered, it says what the
+scatter above it already says, so drop it, make the scatter much bigger, and put
+the same information inside it as percentages — split into groups that say how
+much is driven by high-volume SKUs and how much by low-volume SKUs that still
+bring serious revenue.
+
+**Why the Pareto had to go.** It was a bar per SKU with a cumulative line over
+the top. At workspace scope that is 136 bars and legible. On this page, after
+D-138 widened it to the client's whole network, it is 2,063 bars inside roughly
+900 px — about 0.4 px each. The bars rendered as one solid block; the only thing
+still readable was the cumulative line, and a cumulative line alone is a worse
+version of the four numbers now stated in words. It also ranked on one measure
+at a time, which cannot answer the question that was actually asked.
+
+**Why a scatter answers it and a ranking cannot.** A ranking puts each SKU at
+one position on one axis. The planning question — *which SKUs earn well without
+moving much* — is about the relationship between two measures, which is a
+position off the diagonal. A units ranking buries those SKUs in its tail and a
+value ranking buries the cheap fast movers in its own; neither can show both at
+once. The scatter shows every SKU against both measures simultaneously, and the
+groups below are read straight off it.
+
+**The cuts are Pareto, not medians.** A SKU is core *volume* if it falls inside
+the set making the first 80% of ordered units, core *value* if it falls inside
+the set making the first 80% of ordered value. The two sets are computed
+independently, and the fact that they disagree is the finding. A median split
+was rejected: on a catalogue this long-tailed the median lands near zero and
+would label half the tail "high".
+
+The four groups, measured on the page's default window (2,063 ordered SKUs):
+
+| Group | SKUs | Share of revenue | Share of units |
+|---|---|---|---|
+| Most revenue and most volume | 182 (8.8%) | 77.9% — ₹669.83Cr | 65.9% |
+| Less volume, more revenue | 18 (0.9%) | 2.1% — ₹18.22Cr | 0.7% |
+| More volume, less revenue | 148 (7.2%) | 5.8% — ₹49.88Cr | 14.1% |
+| Low on both | 1,715 (83.1%) | 14.2% — ₹122.07Cr | 19.3% |
+
+The arithmetic checks itself: 77.9 + 2.1 = 80.0, which is the value cut, and
+65.9 + 14.1 = 80.0, which is the units cut. Those identities hold by
+construction, so a figure that broke one would be a bug on screen, not a
+rounding artefact.
+
+**The names say what the group does, not which set it is in.** The first naming
+was `Volume and value` / `Value without volume` / `Volume without value` / `The
+long tail`, which described the arithmetic of the two cuts and misled on sight:
+"without value" reads as a judgement that the SKU is worthless, when it means
+"outside the top 80% by revenue" — a SKU earning ₹40L a year lands there. The
+names now state the behaviour in plain words, and each one is the same sentence
+the reader needs anyway.
+
+**Eighteen SKUs are the answer to the question that was asked.** "Less volume,
+more revenue" is 0.9% of the catalogue bringing ₹18.22Cr on 0.7% of the units.
+On the old Pareto those eighteen bars were somewhere in the middle of a
+2,063-bar block with nothing marking them. They are now a named line with their
+own share, and their own colour in the plot.
+
+### Three things that had to be got right
+
+**Both axes are logarithmic, with the domain stated.** The largest SKU outsells
+the smallest by about five orders of magnitude; on a linear axis 2,000 of the
+2,063 marks collapse into one corner. Recharts' `domain="auto"` on a log axis
+rounds to the data's own extremes and clips the outermost marks in half, so the
+domain is `['dataMin', 'dataMax']` explicitly.
+
+**The ticks are decades, set by hand.** Recharts' own log ticks land on the
+data's quantiles — "2, 3, 5, 7, 12, 18, 27 …" — an axis whose gridlines mean
+nothing in particular and whose labels overlap. `skuMix` computes powers of ten
+spanning the data and passes them as `ticks`, which is what a log axis is for.
+
+**The words come before the plot, and they are only words.** Four lines of
+text sit above the chart, each one the same sentence — *this share of the
+revenue, from this share of the SKUs, moving this share of the units*. They were
+first built as four bordered summary cards with a large percentage apiece, which
+took a quarter of the panel to say what four small lines say, and turned a
+single comparable sentence into four boxes a reader has to re-read. Hunting for
+a group in a cloud of 2,063 marks is still work the page should do for the
+reader; it just does not need furniture to do it.
+
+The panel is full width (`xl:col-span-4`) at 460 px of plot, last in its
+section. Bubble size is the number of branches ordering the SKU — a third
+measure that costs no space, and which separates a SKU one branch buys heavily
+from one the whole network buys.
+
+---
+
+## D-140 — The branch donut is gone; the stacked bar is full width and holds all 53
+
+Requested: remove the "Demand by Branch" ring, since "Demand by Branch × Value
+Class" beside it already says the same thing; make that one much bigger and
+scrollable so all 53 branches are in it; move the rest down and resize so the
+section tiles evenly.
+
+**Two panels, one question.** The ring and the stack both answered *where does
+the demand sit by branch*, in the same measure (ordered value), side by side.
+The ring was also the weaker of the two: it could show ten of the 53 and said so
+in its own centre label, it carried no value-class split, and a ring is a poor
+instrument for comparing more than about five slices anyway. Nothing was lost by
+dropping it except the branch-filter entry point, which the stack already had —
+clicking a column toggles the same filter — and the clear-chip moved across with
+it.
+
+**The eight-branch cap was a width problem, so it moved to the width that has
+it.** `_cross_tab` truncated `data` to the top eight because the only panel
+drawing it was a quarter of a row wide, where twenty rotated depot names collide
+into an unreadable band. The payload now carries every branch and the cap is
+applied by the caller that still needs it — `DemandAnalyticsPage`, the
+reference-parity page, slices to `branch_by_group.limit` and renders exactly as
+before. `limit` stays in the payload as the cap a narrow panel should apply;
+`total_branches` still says how many exist. 53 rows of six floats is not a
+payload anyone notices.
+
+**The chart keeps its width and the panel scrolls.** At 53 branches inside a
+full-width panel each column gets about 20 px, and a −40° depot name needs more
+than that. So the plot is sized at `max(640, branches × 34)` — 1,802 px for 53 —
+inside an `overflow-x-auto` wrapper, with `minWidth: 100%` so a two-branch
+workspace still fills the panel instead of leaving a stub chart in a wide box.
+Height went 236 → 320 px, since the panel now has a full row to itself.
+
+**The section tiles into whole rows again.** Removing one quarter-panel left
+five of them in a four-column grid — one row of four and one orphan. Two were
+widened to `xl:col-span-2`, chosen for the two whose axis labels were already
+cramped at quarter width:
+
+```
+row 1   Branch x Value Class                                  (4)
+row 2   Value Class (2) · Glass Type (1) · Vehicle Category (1)
+row 3   Vehicle Age (2) · Value per Unit (2)
+row 4   Volume vs Value by SKU                                (4)
+```
+
+Measured in the browser at a 976 px grid: 976 / 482+235+235 / 482+482 / 976, no
+gap anywhere.
+
+**Verified:** 53 axis ticks (BENGALURU … MANDI), 265 bar rectangles — 53 × 5
+value classes — `scrollWidth` 1802 against a 1102 px viewport, and no element
+titled "Demand by Branch" left on the page. The workspace-scoped payload still
+returns its 2 branches. `backend tests/test_analytics_api.py` 62 passed,
+`ReferenceParityPages.test.tsx` 22 passed, `tsc --noEmit` clean.
+
+`dimBranch` and `branchTotal` went with the ring — nothing else on the page used
+them.
+
+---
+
+## D-141 — Overall Analysis filters on every axis it charts
+
+Requested: make the time and delivery panels — Ordered Demand Trend, Demand by
+Branch over Time, Seasonality, Realised Price per Unit, Ordered vs Despatched,
+Top SKUs by Ordered Demand — respond to branch, value class and the other
+dimensions the page charts above them, from one filter set applied once.
+
+**Those six panels were already filtered; the filter bar was the gap.** Every
+panel on the page reads one `/analytics/summary` payload, and `branch` and
+`value_class` were already in the query, so those two always reached all six.
+What was missing is that the page *charts* three more axes — glass type, vehicle
+category, vehicle age — and offered no way to select on them. A reader could see
+that CAR & MUV carries the demand and had no way to ask what the trend, the fill
+rate and the top SKUs look like for CAR & MUV alone. The fix is one filter set
+in the bar, not per-panel controls.
+
+**Backend.** `AnalyticsScope` gains `glass_type`, `vehicle_category` and
+`vehicle_age_category`; `_apply_scope` filters on each; `filters()` returns
+`glass_types`, `vehicle_categories` and `vehicle_age_categories` alongside the
+existing lists; `/summary` takes the three as query parameters. The columns were
+already in `ANALYTICS_COLUMNS` and in the network frame's `PRODUCT_ATTRIBUTES` —
+nothing new had to be carried.
+
+Two things that would have gone wrong quietly:
+
+- **The cache key needed no change**, because `_key` is `astuple(scope)` rather
+  than a hand-written field list (the comment there says why: a hand-written
+  list once served one SKU's answer for every other). Three new scope fields are
+  keyed correctly without anyone remembering to go and add them.
+- **`_scope` takes the three keyword-only and defaulted**, so `/exceptions` and
+  `/branch-scorecard` keep their existing seven positional arguments and are
+  untouched.
+
+**Filtering on a categorical column is a comparison, not a lookup.** `frame[col]
+== label` against a label that is not one of the column's categories yields
+all-False rather than raising, so an option the current data no longer holds
+empties the page honestly instead of returning a 500.
+
+**Frontend.** Three selects in the existing bar, built from one `productFilters`
+array rather than written out three times — the first draft wrote them out and
+they immediately drifted, one missing its `aria-label` and another its clear
+chip. The option lists are optional on the `AnalyticsFilters` type, so a
+frontend talking to a backend that predates them renders an empty "All …"
+select rather than throwing. `clearAll` is a single function now, used by the
+button and shared by nothing else that could forget a field.
+
+**Measured, whole-history, network scope:**
+
+```
+no filter                      4,140,507 units   Rs 1,334.97 Cr   53 branches
+vehicle_category=CAR & MUV     3,557,737 units   Rs 1,159.71 Cr   53 branches  1,903 SKUs
+vehicle_category=COMMERCIAL      414,328 units   Rs   123.55 Cr   53 branches    255 SKUs
+vehicle_category=3W              158,270 units   Rs    35.81 Cr   52 branches     14 SKUs
+vehicle_category=HIGH END          4,423 units   Rs    13.17 Cr   49 branches     49 SKUs
+glass_type=Sidelite              923,404 units   Rs    86.06 Cr
+  + CAR & MUV                    812,187 units   Rs    75.57 Cr
+  + BENGALURU                     36,334 units   Rs     3.49 Cr    1 branch
+```
+
+**The four vehicle categories sum to 4,134,758, not 4,140,507.** The 5,749-unit
+gap is 1,369 rows carrying *no* product attributes — SKUs absent from the
+product master, which have a null glass type, vehicle category and vehicle age
+alike. They were already outside the three charts on this page for the same
+reason; they are now also unreachable by the three filters. This is stated
+rather than rounded away, and it is 0.14% of ordered units.
+
+**Verified in the browser.** Selecting COMMERCIAL moved the tiles from
+Rs 860.04 Cr / 716.94 Cr / 143.10 Cr to Rs 77.24 Cr / 63.75 Cr / 13.48 Cr, and —
+the useful proof — "Demand by Branch over Time" redrew its top-six legend from
+BENGALURU · AHMEDABAD · JAIPUR · SECUNDRABAD · KARNAL · DELHI-1 to BENGALURU ·
+PUNE · COIMBATORE · CHENNAI · COCHIN · CALICUT. Commercial glass sells in
+different cities, which is a fact the page could not previously be asked for.
+"Clear all" returned every select, chip, tile and legend to its starting value.
+
+```
+backend tests/test_analytics_api.py 62 passed · frontend 268 passed (24 files) · tsc --noEmit clean
+```
+
+---
+
+## D-142 — The scope banner is off this page, the filter bar is pinned, and a filter change no longer reloads the page
+
+Requested: remove the full-network scope banner; keep the filter bar visible
+while scrolling; stop a filter change from throwing the reader back to the top;
+and check that every graph responds to every filter.
+
+**The banner was saying it twice.** It read `FULL NETWORK · 53 of 53 branches ·
+2063 of 2063 SKUs · the client's whole dataset`, directly under a lede that
+already says the page describes every branch and SKU in the source data. It was
+added in D-138 because `ScopeBanner` rendered *nothing* when `restricted` was
+false, which would have left a page of network-scale figures with no
+explanation beside the workspace pages. The lede covers that, and the banner's
+last three words were the overstatement raised separately: 2,063 is every SKU
+ever *ordered*, out of a 6,247-SKU catalogue. The component is untouched and
+still renders on the six pages where the scope genuinely is restricted.
+
+**The bar is pinned because the page is four screens tall.** 4,022 px at a
+1,280 px viewport. A reader looking at the delivery panels at the bottom had to
+scroll back up to change the branch, then scroll down again to see what it did.
+`sticky top-0` against the window, which is the scroll container on desktop —
+`.main` sets no `overflow`. Under 800 px `.topbar` itself becomes sticky at
+72 px, so the bar takes `max-[800px]:top-[72px]` to sit under it rather than
+behind it. The wrapper carries the page background with a symmetric
+`-my-2`/`py-2`, so content passing underneath disappears behind the bar instead
+of showing through the flex gap.
+
+**The jump to the top was an unmount, not a scroll.** The panels render under
+`{summary && !summary.empty && …}`. A filter change changes the query key,
+react-query drops `data` to `undefined` while it fetches, every panel unmounts,
+the document collapses from 4,022 px to the height of the filter bar — and the
+browser, having nothing left to scroll, puts the reader at the top. The payload
+then arrives and the page grows back underneath them. `placeholderData:
+keepPreviousData` holds the previous payload through the fetch, so the document
+never changes height and the scroll position is never disturbed.
+
+**Holding stale numbers obliges you to say so.** The panels are showing the
+*previous* filter's figures while the new ones load. An `Updating…` marker
+appears in the bar for exactly that window — `isFetching && !isLoading`, so it
+marks a refetch and not the first load, which still gets the full loading block.
+
+**Measured:** at `scrollTop` 2,200, changing the vehicle category left the
+scroll at 2,200 and the document at 4,022 px, through 60 samples at 80 ms. The
+`Updating…` marker was observed and then cleared. `Clear all` at `scrollTop`
+1,500 returned every select, chip and tile to its starting value and left the
+scroll at 1,500.
+
+### Every panel against every filter
+
+Seventeen panels, each fingerprinted from the payload key it renders, against a
+2025-04 baseline:
+
+```
+                                    branch  value_cl  glass_ty  vehicle_c  vehicle_a  end_period  grain
+Demand by Branch x Value Class         ok       ok        ok        ok         ok         ok        -
+Demand by Value Class                  ok       ok        ok        ok         ok         ok        -
+Demand by Glass Type                   ok       ok        ok        ok         ok         ok        -
+Demand by Vehicle Category             ok       ok        ok        ok         ok         ok        -
+Demand by Vehicle Age                  ok       ok        ok        ok         ok         ok        -
+Value per Unit by Vehicle Category     ok       ok        ok        ok         ok         ok        -
+Volume vs Value by SKU                 ok       ok        ok        ok         ok         ok        -
+Ordered Demand Trend                   ok       ok        ok        ok         ok         ok       ok
+Demand by Branch over Time             ok       ok        ok        ok         ok         ok       ok
+Seasonality                            ok       ok        ok        ok         ok         ok        -
+Realised Price per Unit                ok       ok        ok        ok         ok         ok       ok
+Ordered vs Despatched                  ok       ok        ok        ok         ok         ok       ok
+Top SKUs by Ordered Demand             ok       ok        ok        ok         ok         ok        -
+Unfilled Demand by Value Class         ok       ok        ok        ok         ok         ok        -
+Fill Rate by Glass Type                ok       ok        ok        ok         ok         ok        -
+Unfilled Share by Vehicle Age          ok       ok        ok        ok         ok         ok        -
+KPI tiles                              ok       ok        ok        ok         ok         ok        -
+```
+
+Every content filter moves every panel. **`grain` moves only the four
+time-bucketed panels, and that is correct**: it chooses a bucket width, it does
+not cut rows, so a panel that is not a time series has nothing to redraw. A
+tick in that column would have been the bug.
+
+```
+frontend 268 passed (24 files) · tsc --noEmit clean · console clean
+```
+
+## D-143 — The date filter is gone, and the method note under the bar is now a count
+
+Requested: remove the date filter, move the remaining filters up into its
+place, delete the explanation under the bar, and say instead how many branches
+and how many SKUs the page is counting.
+
+**The picker could not usefully be moved.** `MonthRange` wrote `start_period`
+and `end_period`, but the start was never really the reader's to choose: D-122
+pins it to `filters.orders_start_month`, the first month that holds a real
+order, because every earlier month is sales-proxy rows with no order and no
+despatch, and including them made every panel disagree with the tiles above
+it. So one half of the control was a display of a constant and the other half
+could only ever shorten a window the page already states. That state is gone —
+`startPeriod`, `endPeriod` and `end_period` with it — and `effectiveStart` is
+now just `filters?.orders_start_month ?? ''`. The window is still printed at
+the right of the bar, so the reader is told what they are looking at; they can
+no longer change it. The five content selects and the grain select close up
+into the space, which is what "move all other filters above" asked for.
+
+**The note under the bar explained the method, not the data.** It described how
+weekly rows roll up into monthly buckets and what a partial last bucket means —
+true, and the wrong four lines to put under a control strip the reader came to
+*use*. What belongs there is the page's own denominator.
+
+**The count had to be taken on the order book, or it would have read `2,315 of
+2,063`.** `kpis.sku_count` counts every SKU with a row in the network frame,
+and that frame carries 252 SKUs that appear only in the pre-order sales proxy.
+`workspace_scope.total_skus` is 2,063 — SKUs that were actually *ordered*. The
+same numerator-against-a-different-denominator defect D-138 fixed once in
+`ScopeBanner` recurs anywhere a count is printed beside that 2,063. So
+`summary()` now computes `ordered_branch_count` and `ordered_sku_count` under
+`frame["target_source"] == "order"`, and the line reads those. The old
+unqualified kpis are still returned and still used elsewhere; the page falls
+back to them only if an older payload has no ordered-only figures.
+
+**`num` abbreviates, so the line uses `exact`.** `num(2063)` is `"2.1K"`, which
+is right on a chart axis and wrong here: `"2.1K of 2.1K SKUs"` hides whether
+the two numbers are the same. `exact` is `toLocaleString('en-IN')`.
+
+**Measured.** Unfiltered the line reads `Covering 53 of 53 branches and 2,063
+of 2,063 SKUs`; the bar holds six selects and no `input[type=month]`; the
+grain note is absent from the document. Selecting BENGALURU moves it to
+`Covering 1 of 53 branches and 1,681 of 2,063 SKUs`, and the scroll held at
+2,200 px across 40 samples at 120 ms while it did (min 2,189.5, max 2,227 —
+the document shrank 11 px, from 6,592 to 6,581).
+
+**One thing reads oddly and is correct.** The window says `70 weeks` while the
+grain select says `By month`. `summary.window` is always the panel's own
+weekly extent — it is identical under `grain=weekly`, `monthly` and
+`quarterly` — and `periodNoun(filters.panel_grain)` labels it as such. The
+grain select sets bucket width for the four time-bucketed panels; it does not
+re-grain the source.
+
+## D-144 — Per Branch & SKU reads the whole network, like Overall Analysis
+
+Requested: "per branch sku also should cover all the scope whatever we are
+covering in overall analysis page."
+
+**The page could not reach 51 of the 53 branches.** It read the modelling
+panel, which is physically cut to the workspace at build time (D-126), so the
+Location picker offered BENGALURU and DELHI-1 and the SKU picker 136 codes. On
+a page whose entire purpose is *pick any branch and any SKU*, that is the
+restriction biting hardest. Nothing on it is model-derived — every figure comes
+from `/api/analytics/summary`, which has had a `full_network` reading since
+D-138 — so the fix is to ask the same question Overall Analysis asks. Training
+and Forecasting stay on the workspace, because a forecast exists only where a
+model was fitted; the one-scope rule (D-049) is about not mixing them on one
+screen, not about every screen being small.
+
+**The picker had to be rebuilt, because the old one was complete by accident.**
+It fetched the top 1,000 branch × SKU pairs by demand and derived *both*
+dropdowns from that single list. On the workspace there are 272 pairs, so 1,000
+covered them and the cap never showed. On the network there are **68,597**, and
+the identical code would have offered the busiest 1,000 as though they were
+everything — a silent truncation on the one page meant to reach anything.
+
+So each slicer now asks its own scoped question, and every answer is complete:
+
+| State | Location list | SKU list |
+| --- | --- | --- |
+| nothing chosen | `filters.branches` — 53 | `filters.skus` — 2,315 |
+| branch chosen | all 53 | `/series?branch=` — ≤ 2,315 |
+| SKU chosen | `/series?sku=` — ≤ 53 | all 2,315 |
+
+`enabled` on both queries is what stops the unscoped network call from ever
+being made. `/analytics/series` gained `sku` as the mirror of `branch`,
+`full_network`, a `limit` ceiling of 5,000 — above the largest complete answer
+either scoping can produce — and a `truncated` flag, so a caller can tell a cut
+answer from a whole one instead of guessing. `filters()` gained `skus`, which
+costs 18 ms of the endpoint's 2.1 s.
+
+**The "Series covered" tile is gone.** It printed the same count the line
+under the slicers already states, abbreviated — "68.6K" beside "68,597 of
+68,597" — and a tile is the wrong place for a figure about the selection
+rather than about the demand. The row is three tiles wide now.
+
+**Two things on the page were counting the old list and had to move.** The
+"N of M series in scope" line now takes its numerator from
+`kpis.series_count` on the payload for the current selection and its
+denominator from `filters.series_count`; and the no-selection subject read
+"the whole workspace", which is no longer what the page shows. `num` was
+abbreviating the count to "68.6K of 68.6K", which hides whether the two are the
+same number, so it uses `exact` as D-143 does.
+
+**`placeholderData: keepPreviousData`** on the summary query, for the reason
+given in D-142: the panels render under `data && !data.empty`, so without it a
+slicer change unmounts all of them, the document collapses and the reader is
+thrown to the top. The `Updating…` marker comes with it, because panels holding
+the previous selection's figures must say so.
+
+**`ScopeBanner` stays on this page** and now renders its FULL NETWORK variant.
+Overall Analysis dropped the banner in D-142 because its lede and its own
+filter-bar count already state the scope; this page's lede does not, and a
+reader who remembers these figures being small needs to be told why they grew.
+Its text named Per Branch & SKU among the workspace pages — true when written,
+false now, and corrected.
+
+**Measured.** Picker, unfiltered: 53 locations, 2,315 SKUs, *68,597 of 68,597
+branch × SKU combinations*. NAGPUR: the SKU list narrows to 1,591 and the line
+reads *1,591 of 68,597*. NAGPUR × FG.AA3.LFH.GYG2120R00: *1 of 68,597*, and the
+Location list narrows to the 28 branches carrying that SKU. Clearing the branch
+with the SKU held: *28 of 68,597*, SKU list back to 2,315. Branches that were
+previously unreachable now render in full — KOLKATTA 39.5K units / ₹13.55Cr /
+90.5% fill over 968 SKUs, CHENNAI 100.4K units / ₹37.27Cr / 85.4% over 1,592.
+Seven charts draw; console clean after a hard reload.
+
+```
+backend 1088 passed · frontend 268 passed (24 files) · tsc --noEmit clean
+```
+
+## D-145 — The month-of-year chart was bucketing weeks, not months
+
+Noticed from the tooltip: hovering a bar on Per Branch & SKU said *"averaged
+over 10 year(s)"* on a window that spans two.
+
+**`_seasonality` read `(period_index % 12) + 1`.** `period_index` counts
+periods, so modulo 12 is a calendar month only when a period *is* a month. On
+the monthly panel that held — the index is anchored to an absolute epoch, so
+`2025-01` lands on 1 and `2025-04` on 4, and the monthly path was correct. On
+the **weekly** panel it bucketed every twelfth ISO week together and labelled
+the twelve buckets Jan..Dec. They were not months. They were twelve arbitrary
+slices of the window, each holding about a twelfth of the demand — which is
+exactly why the chart was twelve bars of nearly equal height with no shape in
+it. A flat seasonality chart reads as "this product has no annual pattern",
+which is a finding; it was an artefact.
+
+The `observations` count went the same way. Grouping by `(bucket, period)` and
+taking `len` counted the *periods* in the bucket, and the periods are weeks:
+122 weeks over 12 buckets is about 10, printed as "10 year(s)". The tooltip
+was the only visible symptom of a wrong chart, which is the argument for
+putting a count beside every average.
+
+**The fix is the rule already written for this.** A week belongs to the month
+holding its Thursday — `period_month`, the same rule used wherever a weekly
+figure is read monthly. Totals are summed inside each calendar month that
+actually occurred, then averaged across the years that month falls in, so
+`observations` is a count of years. The grain is read from the period label's
+own shape (`"-W"` or not) rather than from `settings.panel_grain`: a monthly
+frame reaches this function on a weekly-configured deployment — every fixture
+in the test suite is one — and `period_month("2025-01", "weekly")` raises.
+
+**Before and after, full network, 2024-W14 → 2026-W31:** twelve bars within
+3% of each other and "10 years" on every one, against
+
+```
+Jan 158,746 (2y)  Feb 136,174 (2y)  Mar 131,048 (2y)  Apr 134,926 (3y)
+May 165,523 (3y)  Jun 165,580 (3y)  Jul 160,464 (3y)  Aug 157,846 (2y)
+Sep 128,762 (2y)  Oct 151,926 (2y)  Nov 139,185 (2y)  Dec 126,827 (2y)
+```
+
+— a real profile, with May–July running about 30% above September and
+December. Two or three years per bar, which is what a 2.3-year window holds.
+
+**The count moved out of the tooltip, which is what was asked.** Corrected, it
+is the same two or three on nearly every bar, so it is stated once under the
+chart — "Each column averages 2–3 years" — instead of on every hover. It is
+computed from the payload, so it tracks the window: Overall Analysis pins its
+start to the order book and correctly says *1–2 years* where Per Branch & SKU,
+which runs the full two years, says *2–3*. Dropping it entirely would have hidden
+how thin the evidence under each bar is.
+
+**A partial month is left as it falls.** A month the window only part-covers
+contributes a short total and pulls its own mean down. This does not pro-rate
+it: scaling a partial month up would invent demand. On the current window it
+does not arise — 2026-W31's Thursday is 30 July, so the data ends on a complete
+July and August never sees a partial year.
+
+```
+backend 1088 passed · frontend 268 passed (24 files) · tsc --noEmit clean
+```

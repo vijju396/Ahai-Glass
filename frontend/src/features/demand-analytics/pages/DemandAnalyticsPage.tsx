@@ -458,7 +458,11 @@ export function DemandAnalyticsPage() {
               note={`Each column is a branch, split by value class — the top ${summary.branch_by_group.limit} of ${summary.branch_by_group.total_branches} by value. Click a column to filter.`}
             >
               <ResponsiveContainer width="100%" height={236}>
-                <BarChart data={summary.branch_by_group.data} margin={{ top: 8, right: 6, left: -6, bottom: 0 }} barCategoryGap="26%">
+                {/* Capped here, not in the payload. This panel is a quarter of
+                    a row wide and twenty rotated depot names collide into an
+                    unreadable band; Overall Analysis draws the same payload
+                    full width and scrollable, so it wants all 53 (D-140). */}
+                <BarChart data={summary.branch_by_group.data.slice(0, summary.branch_by_group.limit)} margin={{ top: 8, right: 6, left: -6, bottom: 0 }} barCategoryGap="26%">
                   <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
                   <XAxis
                     dataKey="name"

@@ -150,12 +150,21 @@ def _scope(
     start_period: str | None,
     end_period: str | None,
     grain: str,
+    *,
+    # Keyword-only and defaulted, so the routes that do not offer these three
+    # axes keep their existing positional calls unchanged (D-141).
+    glass_type: str | None = None,
+    vehicle_category: str | None = None,
+    vehicle_age_category: str | None = None,
 ) -> analytics.AnalyticsScope:
     return analytics.AnalyticsScope(
         branch=branch,
         sku=sku,
         product_group=product_group,
         value_class=value_class,
+        glass_type=glass_type,
+        vehicle_category=vehicle_category,
+        vehicle_age_category=vehicle_age_category,
         start_period=start_period,
         end_period=end_period,
         grain=grain,
@@ -298,6 +307,9 @@ def get_summary(
     sku: str | None = Query(None, description="A single canonical SKU. With `branch`, one series."),
     product_group: str | None = Query(None),
     value_class: str | None = Query(None),
+    glass_type: str | None = Query(None, description="One glass type, e.g. Laminated Windscreen."),
+    vehicle_category: str | None = Query(None, description="One vehicle category, e.g. CAR & MUV."),
+    vehicle_age_category: str | None = Query(None, description="One vehicle age band."),
     start_period: str | None = Query(None, pattern=r"^\d{4}-\d{2}$"),
     end_period: str | None = Query(None, pattern=r"^\d{4}-\d{2}$"),
     grain: str = Query("monthly"),
@@ -312,7 +324,12 @@ def get_summary(
     ),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    cut = _scope(branch, sku, product_group, value_class, start_period, end_period, grain)
+    cut = _scope(
+        branch, sku, product_group, value_class, start_period, end_period, grain,
+        glass_type=glass_type,
+        vehicle_category=vehicle_category,
+        vehicle_age_category=vehicle_age_category,
+    )
     if full_network:
         frame, run, coverage = _network(db)
         payload = analytics.cached_summary(frame, f"network:{run.id}", cut)
@@ -376,12 +393,41 @@ def get_branch_scorecard(
 @router.get("/series", summary="Branch x SKU options for scope pickers")
 def get_series(
     branch: str | None = Query(None),
-    limit: int = Query(200, ge=1, le=1000),
+    sku: str | None = Query(
+        None,
+        description=(
+            "One canonical SKU. The mirror of `branch`: it answers which "
+            "branches carry this SKU, which is how a two-way picker narrows "
+            "without listing every pair."
+        ),
+    ),
+    limit: int = Query(200, ge=1, le=5000),
+    full_network: bool = Query(
+        False,
+        description=(
+            "Pairs across the whole client network rather than the workspace. "
+            "Paired with the same flag on `/summary` and `/filters`, so a "
+            "picker cannot offer a combination its figures do not cover "
+            "(D-144). Unscoped the network holds 68,597 pairs, well past any "
+            "`limit`; ask with `branch` or `sku` to get a complete answer."
+        ),
+    ),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    if full_network:
+        frame, run, coverage = _network(db)
+        payload: dict[str, Any] = {
+            "items": analytics.series_options(frame, branch=branch, sku=sku, limit=limit),
+            "preprocessing_run_id": run.id,
+            "total_series": coverage["series"],
+        }
+        # The caller has to be able to tell a complete answer from a cut one.
+        payload["truncated"] = len(payload["items"]) >= limit
+        return payload
     panel, _build, _path, scope = _panel(db)
     return _stamp(
-        {"items": analytics.series_options(panel, branch=branch, limit=limit)}, scope
+        {"items": analytics.series_options(panel, branch=branch, sku=sku, limit=limit)},
+        scope,
     )
 
 def _branch_dim(db: Session) -> "pd.DataFrame":

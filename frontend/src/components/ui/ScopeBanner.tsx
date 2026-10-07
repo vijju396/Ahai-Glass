@@ -10,11 +10,13 @@
  * sentence each page remembers to print. It renders nothing at all when the
  * workspace is unrestricted, which is the honest output in that case.
  *
- * **One scope is unrestricted and still states itself**: `full_network`, which
- * Overall Analysis uses to report the client's whole network while every other
- * page stays on the workspace (D-138). Silence there would be the same defect
- * read the other way round — a reader moving between pages would find figures
- * six times larger with nothing on screen saying why.
+ * **One scope is unrestricted and still states itself**: `full_network`, used
+ * by Overall Analysis (D-138) and Per Branch & SKU (D-144) to report the
+ * client's whole network while the modelling pages stay on the workspace.
+ * Silence there would be the same defect read the other way round — a reader
+ * moving between pages would find figures six times larger with nothing on
+ * screen saying why. Overall Analysis carries the statement in its own filter
+ * bar instead and so does not mount this (D-142).
  */
 import { useState } from 'react';
 import type { WorkspaceScope } from '@/api/analytics';
@@ -52,9 +54,9 @@ export function ScopeBanner({ scope }: { scope?: WorkspaceScope | null }) {
           </span>
         </div>
         <p className="mt-0.5 text-[10px] leading-relaxed text-[var(--color-text-muted)]">
-          This page describes every branch and SKU in the source data. Training,
-          Forecasting and Per Branch &amp; SKU report the modelled workspace instead, so
-          their totals are smaller by design.
+          This page describes every branch and SKU in the source data. Training and
+          Forecasting report the modelled workspace instead, so their totals are
+          smaller by design — a forecast exists only where a model was fitted.
         </p>
       </div>
     );

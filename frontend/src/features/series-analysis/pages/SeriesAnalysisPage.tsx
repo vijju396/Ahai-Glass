@@ -3,16 +3,25 @@
  *
  * The filters are slicers, not a cascade: Location narrows the SKU list and
  * SKU narrows the Location list, so neither can offer a value that yields an
- * empty page. Value class and glass-type filters narrow both.
+ * empty page.
  *
  * Analysis appears as the selection narrows rather than only when it reaches
  * one series. Branch alone is a real question ("how is AHMEDABAD doing?"), so
  * the page answers whatever the current combination addresses and says which
  * that is — a page that stayed blank until two dropdowns matched would hide
  * data it already had.
+ *
+ * **Scope: the whole client network**, the same 53 branches and 2,063 ordered
+ * SKUs Overall Analysis reports (D-144). It used to read the modelling panel,
+ * which is physically cut to the workspace, so the picker offered 2 branches
+ * and 136 SKUs — a page whose entire purpose is "pick any branch and SKU"
+ * could not reach 51 branches of the client's own data. Nothing here is
+ * model-derived: every figure comes from `/api/analytics/summary`, which has
+ * a `full_network` reading. Training and Forecasting stay on the workspace,
+ * because a forecast only exists where a model was fitted.
  */
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   Area,
   Bar,
@@ -69,6 +78,11 @@ const rupees = (n: number | null | undefined): string =>
 const SELECT =
   'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs text-[var(--color-text)]';
 
+/* `num` abbreviates: 68,597 reads "68.6K", and "68.6K of 68.6K" hides whether
+   the two are the same number. A count the reader is asked to take literally
+   gets its digits (D-143). */
+const exact = (n: number) => n.toLocaleString('en-IN');
+
 function splitSeries(id: string): { branch: string; sku: string } | null {
   const cut = id.indexOf('|');
   if (cut <= 0 || cut === id.length - 1) return null;
@@ -82,37 +96,58 @@ export function SeriesAnalysisPage() {
   const [grain, setGrain] = useState('monthly');
 
   const filters = useQuery({
-    queryKey: analyticsKeys.filters,
-    queryFn: () => fetchAnalyticsFilters(),
-    retry: false,
-  });
-  const series = useQuery({
-    queryKey: seriesKeys.options(),
-    queryFn: () => fetchSeriesOptions(),
+    queryKey: analyticsKeys.networkFilters,
+    queryFn: () => fetchAnalyticsFilters(true),
     retry: false,
   });
 
-  // Slicers that filter each other, both ways.
-  const parsed = useMemo(
-    () =>
-      (series.data?.items ?? []).flatMap((row) => {
-        const parts = splitSeries(row.series_id);
-        return parts ? [{ ...row, ...parts }] : [];
-      }),
-    [series.data],
+  /* Two scoped pair queries, never one unscoped list.
+   *
+   * The old page fetched the top 1,000 pairs by demand and derived both
+   * dropdowns from it. On the workspace that was all 272 pairs, so it was
+   * complete by accident. On the network there are 68,597, and the same code
+   * would have offered the busiest 1,000 as if they were everything — a
+   * silent cap on the one page whose job is to let you reach any combination
+   * (D-144).
+   *
+   * So each slicer asks its own question, and each answer is complete:
+   * "which SKUs does this branch carry?" is at most 2,315 rows, and "which
+   * branches carry this SKU?" is at most 53. With neither chosen, the lists
+   * come from `/filters`, which returns every branch and every SKU outright.
+   * `enabled` is what keeps the unscoped call from ever being made. */
+  const skusAtBranch = useQuery({
+    queryKey: seriesKeys.options(branch, undefined, true),
+    queryFn: () => fetchSeriesOptions(branch, undefined, true),
+    enabled: !!branch,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+  const branchesForSku = useQuery({
+    queryKey: seriesKeys.options(undefined, sku, true),
+    queryFn: () => fetchSeriesOptions(undefined, sku, true),
+    enabled: !!sku,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+
+  const allBranches = useMemo(
+    () => (filters.data?.branches ?? []).map((o) => o.value).sort(),
+    [filters.data],
   );
-  const branchOptions = useMemo(
-    () => [...new Set(parsed.filter((r) => !sku || r.sku === sku).map((r) => r.branch))].sort(),
-    [parsed, sku],
+  const allSkus = useMemo(
+    () => (filters.data?.skus ?? []).map((o) => o.value).sort(),
+    [filters.data],
   );
-  const skuOptions = useMemo(
-    () =>
-      [...new Set(parsed.filter((r) => !branch || r.branch === branch).map((r) => r.sku))].sort(),
-    [parsed, branch],
-  );
-  const matching = parsed.filter(
-    (r) => (!branch || r.branch === branch) && (!sku || r.sku === sku),
-  );
+  const branchOptions = useMemo(() => {
+    if (!sku) return allBranches;
+    const rows = branchesForSku.data?.items ?? [];
+    return [...new Set(rows.flatMap((r) => splitSeries(r.series_id)?.branch ?? []))].sort();
+  }, [sku, allBranches, branchesForSku.data]);
+  const skuOptions = useMemo(() => {
+    if (!branch) return allSkus;
+    const rows = skusAtBranch.data?.items ?? [];
+    return [...new Set(rows.flatMap((r) => splitSeries(r.series_id)?.sku ?? []))].sort();
+  }, [branch, allSkus, skusAtBranch.data]);
 
   const query: AnalyticsQuery = {
     branch: branch || undefined,
@@ -121,9 +156,14 @@ export function SeriesAnalysisPage() {
     grain,
   };
   const summary = useQuery({
-    queryKey: analyticsKeys.summary(query),
-    queryFn: () => fetchAnalyticsSummary(query),
+    queryKey: analyticsKeys.networkSummary(query),
+    queryFn: () => fetchAnalyticsSummary(query, true),
     retry: false,
+    /* The panels render under `data && !data.empty`. Without this a slicer
+       change unmounts every one of them, the document collapses and the
+       reader is thrown to the top — the same defect fixed on Overall Analysis
+       in D-142, and the same fix. */
+    placeholderData: keepPreviousData,
   });
   const data = summary.data;
   /* Two lines, and the proxy months belong to the despatched one.
@@ -167,6 +207,17 @@ export function SeriesAnalysisPage() {
      the period-over-period percentage change, which is a way of drawing the
      ordered column, not a second calculation of it. */
   const seasonality = data?.seasonality ?? [];
+  /* How many years each bar averages, stated once instead of on every hover.
+     The window is short enough that it is always two or three. */
+  const seasonSpan = useMemo(() => {
+    const years = seasonality.map((m) => m.observations).filter((n) => n > 0);
+    if (!years.length) return 'Each bar averages the years in the window';
+    const low = Math.min(...years);
+    const high = Math.max(...years);
+    return low === high
+      ? `Each bar averages ${low} year${low === 1 ? '' : 's'}`
+      : `Each bar averages ${low}–${high} years, depending on how many times that month falls inside the window`;
+  }, [seasonality]);
   const change = useMemo(
     () =>
       trend.slice(1).map((p, i) => {
@@ -188,8 +239,8 @@ export function SeriesAnalysisPage() {
       : branch
         ? `every SKU at ${branch}`
         : sku
-          ? `${sku} across every branch in scope`
-          : 'the whole workspace';
+          ? `${sku} across every branch that carries it`
+          : 'every branch and every SKU';
 
   return (
     <div className="flex flex-col gap-4">
@@ -294,10 +345,28 @@ export function SeriesAnalysisPage() {
               Clear
             </button>
           )}
+          {/* The panels below are holding the PREVIOUS selection's figures
+              while this runs (D-142). Saying so is the price of not
+              unmounting them. */}
+          {summary.isFetching && !summary.isLoading && (
+            <span className="ml-auto pb-2 text-[11px] font-medium text-[var(--color-primary)]">
+              Updating…
+            </span>
+          )}
         </div>
+        {/* The series count comes from the payload for this selection and the
+            total from `/filters`, both at network scope. It used to be
+            `matching.length of parsed.length` over a fetched pair list, which
+            only ever worked because the workspace's 272 pairs fitted inside
+            the fetch (D-144). */}
         <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
-          Showing <strong>{subject}</strong> — {matching.length} of {parsed.length} series in
-          scope. Only combinations present in the panel are listed.
+          Showing <strong>{subject}</strong> —{' '}
+          {data && !data.empty ? exact(data.kpis.series_count) : '0'} of{' '}
+          {exact(filters.data?.series_count ?? 0)} branch × SKU combinations
+          {filters.data?.workspace_scope?.total_branches
+            ? `, across all ${filters.data.workspace_scope.total_branches} branches in the client's data`
+            : ''}
+          . Only combinations the data actually holds are listed.
         </p>
       </Card>
 
@@ -321,7 +390,7 @@ export function SeriesAnalysisPage() {
 
       {data && !data.empty && (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             <StatTile
               label="Ordered demand"
               value={`${num(data.kpis.demand_units)} units`}
@@ -347,12 +416,10 @@ export function SeriesAnalysisPage() {
               sublabel="despatched ÷ ordered, where recorded"
               tint="green"
             />
-            <StatTile
-              label="Series covered"
-              value={num(data.kpis.series_count)}
-              sublabel={`${num(data.kpis.branch_count)} branch(es) · ${num(data.kpis.sku_count)} SKU(s)`}
-              tint="navy"
-            />
+            {/* "Series covered" was removed: it printed the same count the
+                line under the slicers already states, abbreviated - "68.6K"
+                beside "68,597 of 68,597" - and a tile is the wrong place for
+                a figure about the selection rather than about the demand. */}
           </div>
 
           <Panel
@@ -408,20 +475,22 @@ export function SeriesAnalysisPage() {
             <Panel
               title="Month-of-year pattern"
               accent={VIOLET}
-              note="The average ordered quantity for each calendar month, across every year in the window. A repeating shape here is what a seasonal model has to work with; bars of roughly equal height mean there is no annual pattern to lean on. Hover a bar to see how many years went into its average - where that is two, the average is two numbers, so treat it as a hint rather than a season."
+              note={`The average ordered quantity for each calendar month, across every year in the window. A repeating shape here is what a seasonal model has to work with; bars of roughly equal height mean there is no annual pattern to lean on. ${seasonSpan} — too few for any bar to be a season on its own, so read the shape, not the heights.`}
             >
               <ResponsiveContainer width="100%" height={230}>
                 <ComposedChart data={seasonality} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
                   <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
                   <XAxis dataKey="name" tick={{ ...TICK, fontSize: 9 }} tickLine={false} />
                   <YAxis tick={TICK} width={46} />
+                  {/* The tooltip used to append "averaged over N year(s)" to
+                      every label. It said 10 on a two-year window, because the
+                      count was of periods and the periods are weeks (D-145);
+                      and once corrected it is the same two or three on every
+                      bar, which belongs in the note once rather than on each
+                      hover. */}
                   <Tooltip
                     contentStyle={TOOLTIP}
                     formatter={(v: number) => `${num(v)} units`}
-                    labelFormatter={(label: string) => {
-                      const row = seasonality.find((m) => m.name === label);
-                      return row ? `${label} - averaged over ${row.observations} year(s)` : label;
-                    }}
                   />
                   <Bar
                     dataKey="mean_demand_units"

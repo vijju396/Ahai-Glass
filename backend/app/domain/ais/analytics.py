@@ -142,6 +142,13 @@ class AnalyticsScope:
     sku: str | None = None
     product_group: str | None = None
     value_class: str | None = None
+    #: The three product axes Overall Analysis charts in its own panels. They
+    #: were chartable but not filterable, so a reader could see that CAR & MUV
+    #: carries the demand and had no way to ask what the rest of the page looks
+    #: like for CAR & MUV alone (D-141).
+    glass_type: str | None = None
+    vehicle_category: str | None = None
+    vehicle_age_category: str | None = None
     start_period: str | None = None
     end_period: str | None = None
     grain: str = "monthly"
@@ -153,6 +160,9 @@ class AnalyticsScope:
             sku=self.sku or None,
             product_group=self.product_group or None,
             value_class=self.value_class or None,
+            glass_type=self.glass_type or None,
+            vehicle_category=self.vehicle_category or None,
+            vehicle_age_category=self.vehicle_age_category or None,
             start_period=self.start_period or None,
             end_period=self.end_period or None,
             grain=grain,
@@ -234,9 +244,22 @@ def filters(panel: pd.DataFrame) -> dict[str, Any]:
     )
     return {
         "branches": options(BRANCH_COL),
+        # Every SKU in the frame, so a SKU picker with no branch chosen can
+        # offer the complete list rather than the top N of it (D-144). On the
+        # full network that is 2,315 entries - large for a payload and still
+        # far smaller than the 68,597 branch x SKU pairs, which is exactly why
+        # the picker asks for branches and SKUs separately rather than for
+        # pairs.
+        "skus": options(SKU_COL),
         "product_groups": options(GROUP_COL),
         "value_classes": options("value_class"),
         "regions": options("region"),
+        # The three product axes Overall Analysis charts. `options` returns an
+        # empty list for a column the frame does not carry, so a caller built
+        # on a thinner frame degrades to "no choices" rather than failing.
+        "glass_types": options("glass_type"),
+        "vehicle_categories": options("vehicle_category"),
+        "vehicle_age_categories": options("vehicle_age_category"),
         "period_range": {"min": periods[0], "max": periods[-1]} if periods else None,
         "periods": periods,
         "orders_start_month": orders_start_month,
@@ -262,6 +285,17 @@ def _apply_scope(panel: pd.DataFrame, scope: AnalyticsScope) -> pd.DataFrame:
         frame = frame[frame[GROUP_COL] == scope.product_group]
     if scope.value_class:
         frame = frame[frame["value_class"] == scope.value_class]
+    # Equality on a categorical column against a label that is not one of its
+    # categories yields all-False rather than raising, which is the behaviour
+    # wanted here: an option the current data no longer holds empties the page
+    # honestly instead of 500-ing.
+    for column, chosen in (
+        ("glass_type", scope.glass_type),
+        ("vehicle_category", scope.vehicle_category),
+        ("vehicle_age_category", scope.vehicle_age_category),
+    ):
+        if chosen and column in frame.columns:
+            frame = frame[frame[column] == chosen]
     # `start_period`/`end_period` arrive month-shaped, because a planner filters
     # in months whatever the panel is built at. Convert each bound to the index
     # range that month covers at the panel's own grain rather than comparing a
@@ -457,11 +491,14 @@ def _cross_tab(
     which put an "AIS GLASS / HIGH END" legend under a "by Value Class" title -
     a chart disagreeing with its own heading.
 
-    Capped at the top `limit` branches by value, and `total_branches` is
-    returned so the panel can say what it is showing. The reference's
-    equivalent has two sites on the axis; AIS has 53, and twenty rotated depot
-    names in a quarter-width panel collide into an unreadable band. Showing
-    eight and naming the cap is honest; showing twenty illegibly is not.
+    **Every branch is returned, sorted by value.** `data` used to be truncated
+    here at `limit`, because the one panel that drew it was a quarter of a row
+    wide and twenty rotated depot names collide into an unreadable band there.
+    Overall Analysis now draws the same payload full width in a horizontal
+    scroller, where all 53 fit legibly, so the truncation moved to the caller
+    that still needs it (D-140). `limit` stays in the payload as the cap a
+    narrow panel should apply, and `total_branches` still says how many there
+    are. 53 rows of six floats is a payload nobody notices.
     """
     if frame.empty or column not in frame.columns:
         return {"groups": [], "data": [], "limit": limit, "total_branches": 0}
@@ -477,7 +514,7 @@ def _cross_tab(
     data.sort(key=lambda r: sum(v for k, v in r.items() if k != "name"), reverse=True)
     return {
         "groups": groups,
-        "data": data[:limit],
+        "data": data,
         "limit": limit,
         "total_branches": len(data),
     }
@@ -504,29 +541,61 @@ def _branch_over_time(frame: pd.DataFrame, grain: str, limit: int = 6) -> dict[s
 
 
 def _seasonality(frame: pd.DataFrame) -> list[dict[str, Any]]:
-    """Mean demand per calendar month across the window.
+    """Mean demand per calendar month, averaged across the years present.
 
-    A real seasonal profile from the months present, not a fitted curve. With
-    28 months the panel gives at most three observations per calendar month, so
-    `observations` travels with each point — a mean of one month is not a
-    seasonal estimate and the panel says so.
+    A real seasonal profile from the months present, not a fitted curve.
+
+    **This read `(period_index % 12) + 1` and was wrong on a weekly panel**
+    (D-145). `period_index` counts periods, so modulo 12 is a calendar month
+    only when a period *is* a month. On the weekly panel it bucketed every
+    twelfth ISO week together and labelled the buckets Jan..Dec, which is not
+    a month-of-year pattern at all - it is twelve arbitrary slices of roughly
+    equal size, which is exactly what the flat chart was showing. The
+    `observations` count went the same way: grouping by `(bucket, period)`
+    counted *weeks* in the bucket, so a 122-week window reported "averaged
+    over 10 years" on data that spans two.
+
+    A week belongs to the month holding its Thursday (`period_month`), the
+    same rule used everywhere else a weekly figure is read monthly. Totals are
+    summed within each calendar month that actually occurred and then averaged
+    across the years that month appears in, so `observations` is a count of
+    years - two or three on this window. A mean over one year is not a
+    seasonal estimate, which is why the count travels with each point.
+
+    A month the window only partly covers contributes a short total and pulls
+    its own mean down. The window is stated on the page; this does not try to
+    pro-rate it, because scaling a partial month up would invent demand.
     """
     if frame.empty:
         return []
-    work = frame.assign(month=(frame[PERIOD_COL] % 12) + 1)
-    by_month = work.groupby(["month", "period"], observed=True)[TARGET_COL].sum().reset_index()
-    out = []
+    # The label carries its own grain, so read it from the label rather than
+    # from the settings: a monthly frame reaches this function on a deployment
+    # whose configured panel grain is weekly (every fixture in the test suite
+    # is one), and asking `period_month` to split "2025-01" on "-W" raises.
+    # `frame` is always at panel grain here - `_trend` does its own
+    # re-bucketing - so these are the only two shapes.
+    labels = frame["period"].astype(str)
+    month_of = {
+        label: period_month(label, WEEKLY if "-W" in label else MONTHLY)
+        for label in labels.unique()
+    }
+    work = frame.assign(calendar_month=labels.map(month_of))
+    by_calendar_month = work.groupby("calendar_month", observed=True)[TARGET_COL].sum()
+
     names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    for month, group in by_month.groupby("month"):
-        out.append(
-            {
-                "month": int(month),
-                "name": names[int(month) - 1],
-                "mean_demand_units": round(float(group[TARGET_COL].mean()), 2),
-                "observations": int(len(group)),
-            }
-        )
-    return sorted(out, key=lambda r: r["month"])
+    totals: dict[int, list[float]] = {}
+    for calendar_month, total in by_calendar_month.items():
+        totals.setdefault(int(str(calendar_month)[5:7]), []).append(float(total))
+    return [
+        {
+            "month": month,
+            "name": names[month - 1],
+            "mean_demand_units": round(sum(yearly) / len(yearly), 2),
+            # Years, not periods.
+            "observations": len(yearly),
+        }
+        for month, yearly in sorted(totals.items())
+    ]
 
 
 def _concentration(frame: pd.DataFrame, top: int = 8) -> list[dict[str, Any]]:
@@ -609,7 +678,8 @@ def summary(panel: pd.DataFrame, scope: AnalyticsScope) -> dict[str, Any]:
     # the two totals would read a data gap as an unfilled order.
     ordered_value_known = float(pd.to_numeric(known["demand_value"], errors="coerce").fillna(0.0).sum())
     ordered_known = float(pd.to_numeric(known[TARGET_COL], errors="coerce").fillna(0.0).sum())
-    order_rows = int((frame["target_source"] == "order").sum())
+    order_mask = frame["target_source"] == "order"
+    order_rows = int(order_mask.sum())
     # The periods the comparable rows actually span. Ordered and despatched are
     # both recorded only over part of the window - the earlier part of this
     # panel is sales-proxy rows with no order and no despatch - so the tiles
@@ -654,6 +724,15 @@ def summary(panel: pd.DataFrame, scope: AnalyticsScope) -> dict[str, Any]:
             "series_count": int(frame[SERIES_COL].nunique()),
             "branch_count": int(frame[BRANCH_COL].nunique()),
             "sku_count": int(frame[SKU_COL].nunique()),
+            # Counted on the order book alone, so it shares a universe with the
+            # scope denominator (`_demand_universe`, which reads order_fact).
+            # `sku_count` above counts every SKU with a row, and on the network
+            # frame that includes 252 SKUs carried only by the pre-order sales
+            # proxy - printing it against the 2,063 denominator read
+            # "2,315 of 2,063", a numerator larger than its own total. The same
+            # defect D-138 fixed in the scope banner, in a second place.
+            "ordered_branch_count": int(frame.loc[order_mask, BRANCH_COL].nunique()),
+            "ordered_sku_count": int(frame.loc[order_mask, SKU_COL].nunique()),
             "rows": int(len(frame)),
             "despatch_rows_excluded_from_fill_rate": int(len(frame) - len(known)),
         },
@@ -1105,9 +1184,26 @@ def _score(value: float | None, scale: dict[str, Any]) -> int | None:
     return int(round(max(0.0, min(1.0, raw)) * 100))
 
 
-def series_options(panel: pd.DataFrame, *, branch: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-    """Branch x SKU options for the assistant and explorer scope pickers."""
-    frame = panel if not branch else panel[panel[BRANCH_COL] == branch]
+def series_options(
+    panel: pd.DataFrame,
+    *,
+    branch: str | None = None,
+    sku: str | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Branch x SKU options for the assistant and explorer scope pickers.
+
+    `sku` is the mirror of `branch` and exists for the same reason the picker
+    on Per Branch & SKU slices both ways: asked which branches carry one SKU,
+    the answer is at most 53 rows, where the unscoped list on the full network
+    is 68,597 (D-144). Scoping the question is what keeps `limit` from
+    silently truncating the answer.
+    """
+    frame = panel
+    if branch:
+        frame = frame[frame[BRANCH_COL] == branch]
+    if sku:
+        frame = frame[frame[SKU_COL] == sku]
     if frame.empty:
         return []
     totals = (
@@ -1120,11 +1216,11 @@ def series_options(panel: pd.DataFrame, *, branch: str | None = None, limit: int
         {
             "series_id": str(series_id),
             "branch": str(branch_key),
-            "sku": str(sku),
+            "sku": str(sku_key),
             "demand_units": round(float(units), 2),
-            "label": f"{branch_key} · {sku}",
+            "label": f"{branch_key} · {sku_key}",
         }
-        for (series_id, branch_key, sku), units in totals.items()
+        for (series_id, branch_key, sku_key), units in totals.items()
     ]
 
 

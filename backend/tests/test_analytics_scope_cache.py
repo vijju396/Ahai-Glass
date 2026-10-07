@@ -37,6 +37,9 @@ def test_the_key_covers_every_field_on_the_scope():
         start_period="2025-01",
         end_period="2025-06",
         grain="quarterly",
+        glass_type="Lam",
+        vehicle_category="CAR & MUV",
+        vehicle_age_category="Category A (0 -<=3 Years)",
     )
     field_count = len(dataclasses.fields(AnalyticsScope))
 
@@ -55,6 +58,14 @@ def test_every_field_actually_changes_the_key():
         "start_period": "2025-01",
         "end_period": "2025-06",
         "grain": "quarterly",
+        # The three product axes Overall Analysis filters on (D-141). This
+        # test is what made adding them safe: the key is built from
+        # `astuple(scope.normalised())`, so they were covered the moment they
+        # were declared - and this assertion is what proves it rather than
+        # assuming it.
+        "glass_type": "Lam",
+        "vehicle_category": "CAR & MUV",
+        "vehicle_age_category": "Category A (0 -<=3 Years)",
     }
     for field in dataclasses.fields(AnalyticsScope):
         assert field.name in changes, f"{field.name} is not covered by this test"

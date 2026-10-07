@@ -562,10 +562,38 @@ GET  /api/assistant/recommendations         what is worth attention, explained
 data in one payload, filtered server-side, so the panels on a page can never be
 displaying different filters. The reference does the same, for the same reason.
 
-**`available_grains` is authoritative.** It returns `["monthly", "quarterly"]`
-and `grain_note` explains the absence of daily and weekly: AIS demand history is
-monthly, and a daily split of monthly rows would be invented data. The UI
-renders only the grains this field lists.
+**`available_grains` is authoritative.** On the current panel it returns
+`["weekly", "monthly", "quarterly"]`, and `grain_note` explains the absence of
+daily: AIS demand history is weekly (one row per branch x SKU x ISO week), and
+splitting a week's units across its days would invent values the source does
+not contain. A week is reported under the month containing its Thursday, so
+month totals add back to the weekly totals exactly. The UI renders only the
+grains this field lists.
+
+**`full_network=true` reads the client's whole network instead of the
+workspace.** Accepted by `/api/analytics/filters`, `/api/analytics/summary` and
+`/api/analytics/series`. Two pages use it — Overall Analysis (D-138) and Per
+Branch & SKU (D-144) — and the three calls on a page must agree, or a picker
+offers a branch its figures do not cover. The flagged responses carry
+`network_coverage` and a `workspace_scope` with `source: "full_network"` and
+`restricted: false`.
+
+The network frame holds **observed rows only**: there are no materialised zero
+cells, so totals, shares and trends are exact while row counts are not
+comparable with the workspace pages. Two counts on it mean different things —
+`network_coverage.skus` is 2,063, every SKU that was *ordered*, and
+`skus_including_proxy_only` is 2,315, which adds those carried only by the
+pre-order sales proxy. `/summary` returns `kpis.ordered_branch_count` and
+`kpis.ordered_sku_count` for a numerator that counts the same universe as the
+2,063 denominator (D-143); plain `kpis.sku_count` does not.
+
+**`/api/analytics/series` must be asked a scoped question on the network.**
+Unscoped there are 68,597 branch x SKU pairs, past any `limit` (max 5,000), so
+the response would be the busiest N presented as the whole. Pass `branch` (at
+most 2,315 rows back) or `sku` (at most 53) and the answer is complete;
+`truncated` on the response says whether it was cut. The complete branch and
+SKU lists for an unscoped picker come from `/api/analytics/filters`, which
+returns `branches` and `skus` outright.
 
 **Where orders begin.** `/api/analytics/filters` returns `orders_start_month`, the first
 month (`YYYY-MM`) holding real orders, the same boundary as a panel period

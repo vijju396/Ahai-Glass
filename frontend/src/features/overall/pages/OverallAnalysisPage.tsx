@@ -25,10 +25,8 @@
  * computes no forecast and no metric; it selects, formats and draws.
  */
 import { useMemo, useState } from 'react';
-import { MonthRange } from '@/components/ui/MonthRange';
-import { ScopeBanner } from '@/components/ui/ScopeBanner';
 import { SampleMixCaveat } from '@/components/ui/SampleMixCaveat';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
   Area,
@@ -42,8 +40,6 @@ import {
   Legend,
   Line,
   LineChart,
-  Pie,
-  PieChart,
   ReferenceLine,
   ResponsiveContainer,
   Scatter,
@@ -87,13 +83,25 @@ import { grainOptionLabel, periodNoun, shortPeriod } from '../../../app/period';
 const SELECT_CLASS =
   'rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs text-[var(--color-text)]';
 
+/* `num` abbreviates - 2063 becomes "2.1K". That is right on a chart axis and
+   wrong on a count the reader is being asked to take literally: "2.1K of 2.1K
+   SKUs" hides whether the two are the same number (D-143). */
+const exact = (value: number) => value.toLocaleString('en-IN');
+
 /** `2026-07` → `Jul 26`; a quarterly bucket is already short enough. */
 
 export function OverallAnalysisPage() {
   const [branch, setBranch] = useState('');
   const [valueClass, setValueClass] = useState('');
-  const [startPeriod, setStartPeriod] = useState('');
-  const [endPeriod, setEndPeriod] = useState('');
+  /* The three product axes the page charts in "Where the demand comes from".
+     They were drawn but not selectable, so a reader could see that CAR & MUV
+     carries the demand and had no way to ask what the trend, the fill rate and
+     the top SKUs look like for CAR & MUV alone (D-141). */
+  const [glassType, setGlassType] = useState('');
+  const [vehicleCategory, setVehicleCategory] = useState('');
+  const [vehicleAge, setVehicleAge] = useState('');
+  /* No start/end state any more: the month-range picker is gone (D-143) and
+     the window is the order book's own extent. */
   const [grain, setGrain] = useState('monthly');
 
   /* This page reports the client's whole network - every branch, every SKU -
@@ -107,31 +115,38 @@ export function OverallAnalysisPage() {
   });
   const filters = filtersQuery.data;
 
-  /* With no FROM chosen, the page starts at the first month holding real
-     orders. Before it the panel is sales proxy only - no order and no
-     despatch - so including it made every total on the page disagree with
-     the ordered-vs-despatched tiles (docs/DECISIONS.md D-122). Picking an
-     earlier month in FROM still reaches that history. */
-  const ordersStart = filters?.orders_start_month ?? '';
-  // Never earlier than the orders window: before it there are no orders, and
-  // including those weeks made every panel total more than the tiles.
-  const effectiveStart = startPeriod && startPeriod > ordersStart ? startPeriod : ordersStart;
+  /* The page starts at the first month holding real orders. Before it the
+     panel is sales proxy only - no order and no despatch - so including it
+     made every total on the page disagree with the ordered-vs-despatched
+     tiles (D-122). This used to be the floor under a FROM the reader could
+     move; with the picker gone (D-143) it is simply the window. */
+  const effectiveStart = filters?.orders_start_month ?? '';
 
   const query: AnalyticsQuery = useMemo(
     () => ({
       branch: branch || undefined,
       value_class: valueClass || undefined,
+      glass_type: glassType || undefined,
+      vehicle_category: vehicleCategory || undefined,
+      vehicle_age_category: vehicleAge || undefined,
       start_period: effectiveStart || undefined,
-      end_period: endPeriod || undefined,
       grain,
     }),
-    [branch, valueClass, effectiveStart, endPeriod, grain],
+    [branch, valueClass, glassType, vehicleCategory, vehicleAge, effectiveStart, grain],
   );
 
+  /* `keepPreviousData` is what makes a filter change feel like a filter change
+     rather than a page load. Without it the key changes, `data` goes
+     `undefined`, every panel below unmounts, the document collapses to the
+     height of the filter bar and the browser drops the reader at the top —
+     then the payload arrives and the page grows back under them. Holding the
+     previous payload keeps the document the same height, so the scroll
+     position survives and only the numbers change (D-142). */
   const summaryQuery = useQuery({
     queryKey: analyticsKeys.networkSummary(query),
     queryFn: () => fetchAnalyticsSummary(query, true),
     enabled: !!filters,
+    placeholderData: keepPreviousData,
   });
 
   const summary = summaryQuery.data;
@@ -143,7 +158,8 @@ export function OverallAnalysisPage() {
   const toggleBranch = (name: string) => setBranch((current) => (current === name ? '' : name));
   const toggleValueClass = (name: string) => setValueClass((current) => (current === name ? '' : name));
 
-  const dimBranch = (name: string) => (branch && name !== branch ? 0.28 : 1);
+  // `dimBranch` went with the branch donut (D-140): nothing on this page now
+  // dims by branch, and the active filter shows as a clear-chip on the panel.
   const dimClass = (name: string) => (valueClass && name !== valueClass ? 0.28 : 1);
 
   const trend = useMemo(
@@ -152,10 +168,6 @@ export function OverallAnalysisPage() {
   );
   const branchOverTime = useMemo(
     () => (summary?.branch_over_time?.data ?? []).map((row) => ({ ...row, label: shortPeriod(String(row.period)) })),
-    [summary],
-  );
-  const branchTotal = useMemo(
-    () => (summary?.by_branch ?? []).reduce((sum, row) => sum + row.demand_value, 0),
     [summary],
   );
   const averagePrice = useMemo(() => {
@@ -191,46 +203,6 @@ export function OverallAnalysisPage() {
             ? Math.round((1000 * (r.shortfall_units || 0)) / (r.demand_units || 0)) / 10
             : 0,
       }));
-  }, [summary]);
-
-  /** Every SKU ranked by ordered units, with the running share of the total.
-   *  `core` marks the SKUs up to and including the one that crosses 80%. Uses
-   *  `by_sku` whole — not the top-12 cut above — because a running share of a
-   *  truncated list would never reach 100%. */
-  const pareto = useMemo(() => {
-    const ranked = [...(summary?.by_sku ?? [])]
-      .filter((r) => (r.demand_units || 0) > 0)
-      .sort((a, b) => (b.demand_units || 0) - (a.demand_units || 0));
-    const total = ranked.reduce((sum, r) => sum + (r.demand_units || 0), 0);
-    // Ordered value, so the tooltip can say what a SKU is worth as well as how
-    // many of it were ordered. The two rankings are not the same: a cheap
-    // high-volume SKU and an expensive low-volume one swap places.
-    const valueTotal = ranked.reduce((sum, r) => sum + (r.demand_value || 0), 0);
-    let running = 0;
-    let eighty = 0;
-    const rows = ranked.map((r, index) => {
-      const before = running;
-      running += r.demand_units || 0;
-      const core = total > 0 && before / total < 0.8;
-      if (core) eighty = index + 1;
-      return {
-        name: r.name,
-        short: r.name.replace(/^FG\./, '').slice(0, 22),
-        demand_units: r.demand_units,
-        cumulative_pct: total > 0 ? Math.round((1000 * running) / total) / 10 : 0,
-        // One decimal, not a whole number: at 136 SKUs most shares are under
-        // 1%, and rounding them to "0%" printed a row of zeroes along the
-        // baseline that said nothing and hid the labels that mattered.
-        share_pct: total > 0 ? Math.round((1000 * (r.demand_units || 0)) / total) / 10 : 0,
-        demand_value: r.demand_value || 0,
-        value_pct: valueTotal > 0 ? Math.round((1000 * (r.demand_value || 0)) / valueTotal) / 10 : 0,
-        core,
-      };
-    });
-    // The top group's real share: it includes the SKU that crosses 80%, so it
-    // is usually a little above 80.
-    const coreShare = eighty > 0 ? Math.round(rows[eighty - 1]?.cumulative_pct ?? 0) : 0;
-    return { rows, eighty, coreShare };
   }, [summary]);
 
   /** The product axes this workspace was actually selected on. The sample
@@ -309,24 +281,118 @@ export function OverallAnalysisPage() {
     [vehicleRows],
   );
 
-  /** Volume against value, one mark per SKU. The bar charts rank on one axis
-   *  at a time and so cannot show the thing that actually matters for
-   *  planning: a low-volume SKU can sit high on value, and it is the position
-   *  off the diagonal that identifies it. */
-  const skuScatter = useMemo(
-    () =>
-      (summary?.by_sku ?? [])
-        .filter((r) => (r.demand_units || 0) > 0 && r.demand_value > 0)
-        .map((r) => ({
-          name: r.name,
-          short: r.name.replace(/^FG\./, '').slice(0, 20),
-          demand_units: r.demand_units,
-          demand_value: r.demand_value,
-          per_unit: Math.round((r.demand_value / r.demand_units) * 100) / 100,
-          series_count: r.series_count,
-        })),
-    [summary],
-  );
+  /** Volume against value, one mark per SKU, cut into the four groups a
+   *  planner treats differently.
+   *
+   *  The bar charts rank on one axis at a time and so cannot show the thing
+   *  that matters for planning: a low-volume SKU can sit high on value, and it
+   *  is the position off the diagonal that identifies it. This panel replaced
+   *  a 2,063-bar Pareto that answered the same question by making the reader
+   *  count bars (D-139).
+   *
+   *  **The cuts are Pareto, not medians.** A SKU is core *volume* if it falls
+   *  inside the set making up the first 80% of ordered units, and core *value*
+   *  if it falls inside the set making the first 80% of ordered value. A
+   *  median split on a catalogue this long-tailed lands near zero and would
+   *  call half the tail "high". The two sets are deliberately computed
+   *  separately: that they disagree is the finding, not a rounding artefact.
+   */
+  const skuMix = useMemo(() => {
+    const rows = (summary?.by_sku ?? []).filter(
+      (r) => (r.demand_units || 0) > 0 && (r.demand_value || 0) > 0,
+    );
+    const unitTotal = rows.reduce((sum, r) => sum + (r.demand_units || 0), 0);
+    const valueTotal = rows.reduce((sum, r) => sum + (r.demand_value || 0), 0);
+
+    /** The SKUs making the first 80% of `key`, and the value of the last one
+     *  in — which is where the threshold line is drawn. */
+    const coreOf = (key: 'demand_units' | 'demand_value') => {
+      const ranked = [...rows].sort((a, b) => (b[key] || 0) - (a[key] || 0));
+      const total = ranked.reduce((sum, r) => sum + (r[key] || 0), 0);
+      const names = new Set<string>();
+      let running = 0;
+      let cut = 0;
+      for (const row of ranked) {
+        if (total > 0 && running / total >= 0.8) break;
+        running += row[key] || 0;
+        names.add(row.name);
+        cut = row[key] || 0;
+      }
+      return { names, cut };
+    };
+    const volume = coreOf('demand_units');
+    const value = coreOf('demand_value');
+
+    const marks = rows.map((r) => {
+      const bigVolume = volume.names.has(r.name);
+      const bigValue = value.names.has(r.name);
+      return {
+        name: r.name,
+        short: r.name.replace(/^FG\./, '').slice(0, 20),
+        demand_units: r.demand_units,
+        demand_value: r.demand_value,
+        per_unit: Math.round((r.demand_value / r.demand_units) * 100) / 100,
+        series_count: r.series_count,
+        segment: bigVolume && bigValue ? 'both' : bigValue ? 'value' : bigVolume ? 'volume' : 'tail',
+      };
+    });
+
+    const share = (n: number, total: number) =>
+      total > 0 ? Math.round((1000 * n) / total) / 10 : 0;
+
+    const segments = (
+      [
+        // Named by what the group does, not by which set it is in. "Value
+        // without volume" described the arithmetic and read as a judgement on
+        // the SKU; "Less volume, more revenue" says the thing itself.
+        { key: 'both', label: 'Most revenue and most volume', colour: NAVY },
+        { key: 'value', label: 'Less volume, more revenue', colour: VIOLET },
+        { key: 'volume', label: 'More volume, less revenue', colour: TEAL },
+        { key: 'tail', label: 'Low on both', colour: SLATE },
+      ] as const
+    ).map((segment) => {
+      const members = marks.filter((m) => m.segment === segment.key);
+      const units = members.reduce((sum, m) => sum + (m.demand_units || 0), 0);
+      const money = members.reduce((sum, m) => sum + (m.demand_value || 0), 0);
+      return {
+        ...segment,
+        count: members.length,
+        sku_pct: share(members.length, marks.length),
+        units,
+        unit_pct: share(units, unitTotal),
+        value: money,
+        value_pct: share(money, valueTotal),
+      };
+    });
+
+    /** Ticks on the decades. Recharts' own log ticks land on the data's
+     *  quantiles — "2, 3, 5, 7, 12, 18, 27 …" — which is a crowded axis
+     *  whose gridlines mean nothing in particular. Powers of ten are what a
+     *  log axis is for. */
+    const decades = (values: number[]) => {
+      const usable = values.filter((v) => v > 0);
+      if (!usable.length) return undefined;
+      const ticks: number[] = [];
+      for (
+        let tick = 10 ** Math.floor(Math.log10(Math.min(...usable)));
+        tick <= Math.max(...usable) * 10;
+        tick *= 10
+      ) {
+        ticks.push(tick);
+      }
+      return ticks;
+    };
+
+    return {
+      marks,
+      segments,
+      unitCut: volume.cut,
+      valueCut: value.cut,
+      total: marks.length,
+      unitTicks: decades(marks.map((m) => m.demand_units || 0)),
+      valueTicks: decades(marks.map((m) => m.demand_value || 0)),
+    };
+  }, [summary]);
 
   /** Where service failure concentrates on the age axis. Gross positive
    *  shortfall over ordered units - over-despatched lines are excluded from
@@ -348,8 +414,57 @@ export function OverallAnalysisPage() {
     [ageRows],
   );
 
-  const anyFilter = branch || valueClass || startPeriod || endPeriod;
-  const rangeInvalid = !!(effectiveStart && endPeriod && effectiveStart > endPeriod);
+  /** The product axes in the filter bar, declared once and rendered in a loop.
+   *  Written out three times they drifted apart in the first draft — one
+   *  missing its `aria-label`, another its chip. `options` is optional on the
+   *  payload, so a backend that predates these lists renders an "All …" select
+   *  with nothing in it rather than throwing. */
+  const productFilters = [
+    { key: 'glass', all: 'All glass types', aria: 'Glass type',
+      value: glassType, set: setGlassType, options: filters?.glass_types },
+    { key: 'vehicle', all: 'All vehicle categories', aria: 'Vehicle category',
+      value: vehicleCategory, set: setVehicleCategory, options: filters?.vehicle_categories },
+    { key: 'age', all: 'All vehicle ages', aria: 'Vehicle age',
+      value: vehicleAge, set: setVehicleAge, options: filters?.vehicle_age_categories },
+  ];
+  const clearAll = () => {
+    setBranch('');
+    setValueClass('');
+    setGlassType('');
+    setVehicleCategory('');
+    setVehicleAge('');
+  };
+
+  /** How much of the client's data the page is counting, under the current
+   *  filters. Both sides of each ratio are taken on the order book:
+   *  `ordered_sku_count` rather than `sku_count`, because the latter includes
+   *  SKUs carried only by the pre-order sales proxy and printed "2,315 of
+   *  2,063" against the order-book denominator (D-143). Falls back to the
+   *  unqualified counts if an older payload has no ordered-only figures. */
+  const counts = useMemo(() => {
+    if (!summary || summary.empty) return null;
+    const scope = summary.workspace_scope;
+    return {
+      branches: summary.kpis.ordered_branch_count ?? summary.kpis.branch_count,
+      skus: summary.kpis.ordered_sku_count ?? summary.kpis.sku_count,
+      totalBranches: scope?.total_branches,
+      totalSkus: scope?.total_skus,
+    };
+  }, [summary]);
+
+  const anyFilter = branch || valueClass || glassType || vehicleCategory || vehicleAge;
+
+  /* How many years each Seasonality bar averages, said once under the chart
+     instead of on every hover (D-145). Always two or three on this window. */
+  const seasonSpan = useMemo(() => {
+    const years = (summary?.seasonality ?? []).map((m) => m.observations).filter((n) => n > 0);
+    if (!years.length) return 'Each column averages the years in the window';
+    const low = Math.min(...years);
+    const high = Math.max(...years);
+    return low === high
+      ? `Each column averages ${low} year${low === 1 ? '' : 's'}`
+      : `Each column averages ${low}–${high} years`;
+  }, [summary]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -378,27 +493,32 @@ export function OverallAnalysisPage() {
         </Link>
       </header>
 
-      <ScopeBanner scope={filters?.workspace_scope} />
+      {/* The scope banner was removed from this page (D-142). It read
+          "53 of 53 branches · 2063 of 2063 SKUs · the client's whole dataset",
+          and the page's own lede already says it describes every branch and
+          SKU in the source data. The component is unchanged and still renders
+          on every page where the scope IS restricted and therefore worth
+          stating. */}
 
-      {/* Filter bar */}
+      {/* Filter bar. Sticky, because the page is four screens tall and a
+          reader looking at the delivery panels at the bottom should be able to
+          change the branch without scrolling back up for it.
+          `top-0` against the window, which is the scroll container on desktop;
+          under 800 px the topbar itself turns sticky at 72 px, so the bar
+          clears it there. The wrapper carries the page background and a
+          symmetric `-my-2`/`py-2`, so content scrolling underneath disappears
+          behind the bar instead of showing through the layout gap. */}
+      <div className="sticky top-0 z-20 -my-2 bg-[var(--color-bg)] py-2 max-[800px]:top-[72px]">
       <Card className="!py-2.5">
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          {/* Calendar pickers rather than two 28-entry dropdowns, bounded by
-              the panel's own first and last month so the calendar cannot
-              offer a month the data does not cover. Month grain, not day:
-              the panel has no day-level values to return. */}
-          <MonthRange
-            from={effectiveStart}
-            to={endPeriod}
-            onFromChange={setStartPeriod}
-            onToChange={setEndPeriod}
-            first={filters?.orders_start_period ?? filters?.period_range?.min}
-            last={filters?.period_range?.max}
-            months={filters?.orders_periods ?? filters?.periods.length}
-            minMonth={ordersStart || undefined}
-            resetLabel="Reset dates"
-            periodNoun={periodNoun(filters?.panel_grain)}
-          />
+          {/* The month-range picker was removed (D-143). The window is now
+              fixed at the order book's own extent — `effectiveStart` still
+              pins the start to the first month holding real orders, because
+              earlier months are sales-proxy rows with no order and no despatch
+              and including them made every total on the page disagree with the
+              tiles (D-122). The window is still printed on the right, so the
+              reader is told what they are looking at even though they can no
+              longer change it. */}
           <select
             value={branch}
             onChange={(event) => setBranch(event.target.value)}
@@ -425,6 +545,22 @@ export function OverallAnalysisPage() {
               </option>
             ))}
           </select>
+          {productFilters.map((filter) => (
+            <select
+              key={filter.key}
+              value={filter.value}
+              onChange={(event) => filter.set(event.target.value)}
+              className={SELECT_CLASS}
+              aria-label={filter.aria}
+            >
+              <option value="">{filter.all}</option>
+              {(filter.options ?? []).map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          ))}
           <select
             value={grain}
             onChange={(event) => setGrain(event.target.value)}
@@ -440,36 +576,62 @@ export function OverallAnalysisPage() {
 
           {branch && <ClearChip label={branch} onClear={() => setBranch('')} />}
           {valueClass && <ClearChip label={valueClass} onClear={() => setValueClass('')} />}
+          {productFilters
+            .filter((filter) => filter.value)
+            .map((filter) => (
+              <ClearChip key={filter.key} label={filter.value} onClear={() => filter.set('')} />
+            ))}
           {anyFilter && (
             <button
               type="button"
-              onClick={() => {
-                setBranch('');
-                setValueClass('');
-                setStartPeriod('');
-                setEndPeriod('');
-              }}
+              onClick={clearAll}
               className="text-[10px] font-medium text-[var(--color-text-muted)] underline"
             >
               Clear all
             </button>
           )}
 
+          {/* The panels below are holding the PREVIOUS filter's payload while
+              this runs. Saying so is the price of not unmounting them: stale
+              numbers presented in silence would read as current ones. */}
+          {summaryQuery.isFetching && !summaryQuery.isLoading && (
+            <span className="ml-auto text-[11px] font-medium text-[var(--color-primary)]">
+              Updating…
+            </span>
+          )}
           {summary && !summary.empty && (
-            <span className="ml-auto text-[11px] text-[var(--color-text-muted)]">
+            <span
+              className={`text-[11px] text-[var(--color-text-muted)] ${
+                summaryQuery.isFetching && !summaryQuery.isLoading ? '' : 'ml-auto'
+              }`}
+            >
               {summary.window.start} → {summary.window.end} · {summary.window.periods}{' '}
               {periodNoun(filters?.panel_grain)}
             </span>
           )}
         </div>
-        <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">{filters?.grain_note}</p>
-        {rangeInvalid && (
-          <p className="mt-1.5 text-[10px] font-medium text-[var(--color-danger)]">
-            The start month must be on or before the end month.
+        {/* What the page is counting, and nothing else. The grain note that
+            used to sit here explained how weekly rows roll into months — true,
+            but four lines of method under a control strip the reader came to
+            use (D-143). Both figures are taken on the order book, so the
+            numerator and the denominator count the same universe: `sku_count`
+            includes SKUs carried only by the pre-order sales proxy, and
+            against a 2,063 denominator it printed "2,315 of 2,063". */}
+        {counts && (
+          <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
+            Covering <strong className="font-semibold text-[var(--color-text)]">{exact(counts.branches)}</strong>
+            {counts.totalBranches ? ` of ${exact(counts.totalBranches)}` : ''} branches and{' '}
+            <strong className="font-semibold text-[var(--color-text)]">{exact(counts.skus)}</strong>
+            {counts.totalSkus ? ` of ${exact(counts.totalSkus)}` : ''} SKUs.
           </p>
         )}
       </Card>
+      </div>
 
+      {/* `isLoading` is the FIRST load only. A refetch after a filter change is
+          `isFetching`, and the panels below keep the previous payload
+          (`keepPreviousData`) rather than unmounting — which is what used to
+          throw the reader back to the top of the page (D-142). */}
       {(filtersQuery.isLoading || summaryQuery.isLoading) && <LoadingBlock label="Aggregating the panel" />}
       {filtersQuery.isError && <ErrorState error={filtersQuery.error} />}
       {summaryQuery.isError && <ErrorState error={summaryQuery.error} />}
@@ -532,93 +694,63 @@ export function OverallAnalysisPage() {
           <section id="sec-demand" className="flex scroll-mt-4 flex-col gap-3">
             <SectionHeader title="Where the demand comes from" question="Which branches, products and vehicles drive orders?" />
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-4">
-            <Panel className="lg:col-span-2 xl:col-span-2"
+            {/* Full width, and every branch. It absorbed a top-10 donut of the
+                same measure that sat beside it: a ring and a stack both said
+                "where the demand is by branch", and the ring could only ever
+                show ten of the 53 (D-140). */}
+            <Panel className="lg:col-span-2 xl:col-span-4"
               title="Demand by Branch × Value Class"
               accent={VIOLET}
-              note="Each column is a branch, split by value class. Click a column to filter."
-            >
-              <ResponsiveContainer width="100%" height={236}>
-                <BarChart data={summary.branch_by_group.data} margin={{ top: 8, right: 6, left: -6, bottom: 0 }} barCategoryGap="26%">
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis
-                    dataKey="name"
-                    tick={{ ...TICK, fontSize: 8 }}
-                    tickLine={false}
-                    interval={0}
-                    angle={-40}
-                    textAnchor="end"
-                    height={68}
-                  />
-                  <YAxis tick={TICK} tickFormatter={(value: number) => inr(value)} width={54} />
-                  <Tooltip formatter={(value: number) => inr(value)} contentStyle={TOOLTIP} />
-                  <Legend wrapperStyle={{ fontSize: 9, cursor: 'pointer' }} />
-                  {summary.branch_by_group.groups.map((group, index) => (
-                    <Bar
-                      key={group}
-                      dataKey={group}
-                      stackId="a"
-                      fill={SERIES_COLORS[(index + 1) % SERIES_COLORS.length]}
-                      radius={index === summary.branch_by_group.groups.length - 1 ? [5, 5, 0, 0] : undefined}
-                      isAnimationActive={false}
-                      className="cursor-pointer"
-                      onClick={(entry: { name?: string }) => entry?.name && toggleBranch(entry.name)}
-                    />
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
-            </Panel>
-
-            <Panel
-              title="Demand by Branch"
-              accent={BLUE}
-              note="Click a ring segment to filter to that branch."
+              note={`All ${summary.branch_by_group.total_branches} branches by ordered value, split by value class. Scroll sideways for the smaller ones. Click a column to filter.`}
               action={branch ? <ClearChip label="filtered" onClear={() => setBranch('')} /> : undefined}
             >
-              <div className="relative">
-                <ResponsiveContainer width="100%" height={196}>
-                  <PieChart>
-                    <Pie
-                      data={summary.by_branch.slice(0, 10)}
-                      dataKey="demand_value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="46%"
-                      innerRadius={52}
-                      outerRadius={78}
-                      paddingAngle={2}
-                      stroke="none"
-                      isAnimationActive={false}
-                      onClick={(entry: { name?: string }) => entry?.name && toggleBranch(entry.name)}
-                    >
-                      {summary.by_branch.slice(0, 10).map((row, index) => (
-                        <Cell
-                          key={row.name}
-                          fill={SERIES_COLORS[index % SERIES_COLORS.length]}
-                          opacity={dimBranch(row.name)}
+              {/* The axis holds 53 rotated depot names. At a width that fits
+                  them they are 20 px apart and unreadable, so the chart keeps
+                  its own width and the panel scrolls instead — `minWidth` so a
+                  narrow workspace still fills the panel rather than leaving a
+                  short chart in a wide box. */}
+              <div className="overflow-x-auto">
+                <div
+                  style={{
+                    minWidth: '100%',
+                    width: Math.max(640, summary.branch_by_group.data.length * 34),
+                  }}
+                >
+                  <ResponsiveContainer width="100%" height={320}>
+                    <BarChart data={summary.branch_by_group.data} margin={{ top: 8, right: 6, left: -6, bottom: 0 }} barCategoryGap="26%">
+                      <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
+                      <XAxis
+                        dataKey="name"
+                        tick={{ ...TICK, fontSize: 8 }}
+                        tickLine={false}
+                        interval={0}
+                        angle={-40}
+                        textAnchor="end"
+                        height={78}
+                      />
+                      <YAxis tick={TICK} tickFormatter={(value: number) => inr(value)} width={54} />
+                      <Tooltip formatter={(value: number) => inr(value)} contentStyle={TOOLTIP} />
+                      <Legend wrapperStyle={{ fontSize: 9, cursor: 'pointer' }} />
+                      {summary.branch_by_group.groups.map((group, index) => (
+                        <Bar
+                          key={group}
+                          dataKey={group}
+                          stackId="a"
+                          fill={SERIES_COLORS[(index + 1) % SERIES_COLORS.length]}
+                          radius={index === summary.branch_by_group.groups.length - 1 ? [5, 5, 0, 0] : undefined}
+                          isAnimationActive={false}
+                          className="cursor-pointer"
+                          onClick={(entry: { name?: string }) => entry?.name && toggleBranch(entry.name)}
                         />
                       ))}
-                    </Pie>
-                    <Tooltip formatter={(value: number) => inr(value)} contentStyle={TOOLTIP} />
-                    <Legend
-                      wrapperStyle={{ fontSize: 10, cursor: 'pointer' }}
-                      onClick={(entry: { value?: string }) => entry?.value && toggleBranch(entry.value)}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="pointer-events-none absolute inset-x-0 top-[26%] flex flex-col items-center">
-                  <span className="text-base font-bold leading-none text-[var(--color-text)]">
-                    {inr(branchTotal)}
-                  </span>
-                  <span className="text-[9px] uppercase tracking-wide text-[var(--color-text-muted)]">
-                    {summary.kpis.branch_count > 10
-                      ? `top 10 of ${summary.kpis.branch_count}`
-                      : `${summary.kpis.branch_count} branches`}
-                  </span>
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
               </div>
             </Panel>
 
             <Panel
+              className="xl:col-span-2"
               title="Demand by Value Class"
               accent={TEAL}
               note="SKU count shown under each column. Click to filter."
@@ -739,6 +871,7 @@ export function OverallAnalysisPage() {
               </Panel>
 
             <Panel
+              className="xl:col-span-2"
               title="Demand by Vehicle Age"
               accent={AMBER}
               note="Ordered units by vehicle age band."
@@ -777,7 +910,11 @@ export function OverallAnalysisPage() {
             <SampleMixCaveat axis="vehicle_age_category" />
               </Panel>
 
+            {/* Spans two so the section's five remaining quarter-panels tile
+                into whole rows: 2+1+1 then 2+2. An odd one out left a gap the
+                width of a panel at the bottom of the section. */}
             <Panel
+              className="xl:col-span-2"
               title="Value per Unit by Vehicle Category"
               accent={VIOLET}
               note="Ordered value ÷ ordered units, per segment."
@@ -817,31 +954,111 @@ export function OverallAnalysisPage() {
               </ResponsiveContainer>
             </Panel>
 
+            {/* Full width and last in the section. It replaced a 2,063-bar
+                Pareto that said the same thing by making the reader count bars
+                — and at this scale the bars were a solid block (D-139). */}
             <Panel
-              className="xl:col-span-2"
+              className="lg:col-span-2 xl:col-span-4"
               title="Volume vs Value by SKU"
               accent={BLUE}
-              note="One mark per SKU: ordered units against ordered value."
+              note={
+                skuMix.total
+                  ? `All ${num(skuMix.total)} ordered SKUs, one mark each: units across, money up, bubble size is how many branches order it. The lines are the Pareto cuts — the first 80% of units, and the first 80% of value — so the four corners are four different kinds of SKU. Both axes are logarithmic, because the largest SKU outsells the smallest by about five orders of magnitude and a linear axis stacks everything into the corner.`
+                  : 'One mark per SKU: ordered units against ordered value.'
+              }
             >
-              <ResponsiveContainer width="100%" height={215}>
-                <ScatterChart margin={{ top: 10, right: 12, left: -4, bottom: 4 }}>
+              {/* The answer in words first — one small line per group, since
+                  hunting for a group in a cloud of 2,063 marks is work the page
+                  can do for the reader. Each line is the same sentence: this
+                  share of the revenue, from this share of the catalogue, moving
+                  this share of the units. Four cards said the same thing and
+                  took a quarter of the panel to do it. */}
+              <ul className="mb-3 flex flex-col gap-1 text-[11px] text-[var(--color-text-muted)]">
+                {skuMix.segments.map((segment) => (
+                  <li key={segment.key} className="flex items-baseline gap-2">
+                    <span
+                      className="mt-[1px] h-2 w-2 shrink-0 rounded-full"
+                      style={{ background: segment.colour }}
+                    />
+                    <span>
+                      <span className="font-semibold text-[var(--color-text)]">
+                        {segment.value_pct}% of the revenue
+                      </span>{' '}
+                      comes from{' '}
+                      <span className="font-semibold text-[var(--color-text)]">
+                        {segment.sku_pct}% of the SKUs
+                      </span>{' '}
+                      ({num(segment.count)}), and they move {segment.unit_pct}% of the units —{' '}
+                      <span style={{ color: segment.colour }}>{segment.label}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+
+              <ResponsiveContainer width="100%" height={460}>
+                <ScatterChart margin={{ top: 12, right: 20, left: 8, bottom: 16 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+                  {/* Logarithmic, and `domain` is explicit: Recharts' 'auto' on
+                      a log axis rounds to the data's own extremes and clips the
+                      outermost marks in half. */}
                   <XAxis
                     type="number"
                     dataKey="demand_units"
                     name="Ordered units"
+                    scale="log"
+                    domain={['dataMin', 'dataMax']}
+                    allowDataOverflow={false}
+                    ticks={skuMix.unitTicks}
                     tick={TICK}
                     tickFormatter={(v: number) => num(v)}
+                    label={{
+                      value: 'Ordered units (log)',
+                      position: 'insideBottom',
+                      offset: -8,
+                      style: { ...LABEL, fontSize: 10 },
+                    }}
                   />
                   <YAxis
                     type="number"
                     dataKey="demand_value"
                     name="Demand value"
+                    scale="log"
+                    domain={['dataMin', 'dataMax']}
+                    allowDataOverflow={false}
+                    ticks={skuMix.valueTicks}
                     tick={TICK}
-                    width={54}
+                    width={64}
                     tickFormatter={(v: number) => inr(v)}
+                    label={{
+                      value: 'Ordered value (log)',
+                      angle: -90,
+                      position: 'insideLeft',
+                      style: { ...LABEL, fontSize: 10 },
+                    }}
                   />
-                  <ZAxis type="number" dataKey="series_count" range={[45, 190]} name="Series" />
+                  <ZAxis type="number" dataKey="series_count" range={[18, 260]} name="Series" />
+                  {/* The two Pareto cuts. Drawn rather than described, because
+                      which side of them a mark sits on is the whole reading. */}
+                  <ReferenceLine
+                    x={skuMix.unitCut}
+                    stroke="var(--color-text-muted)"
+                    strokeDasharray="4 4"
+                    label={{
+                      value: '80% of units →',
+                      position: 'insideTopLeft',
+                      style: { ...LABEL, fontSize: 9 },
+                    }}
+                  />
+                  <ReferenceLine
+                    y={skuMix.valueCut}
+                    stroke="var(--color-text-muted)"
+                    strokeDasharray="4 4"
+                    label={{
+                      value: '↑ 80% of value',
+                      position: 'insideTopRight',
+                      style: { ...LABEL, fontSize: 9 },
+                    }}
+                  />
                   <Tooltip
                     cursor={{ strokeDasharray: '3 3', stroke: 'var(--color-border)' }}
                     content={({ active, payload }) => {
@@ -852,10 +1069,20 @@ export function OverallAnalysisPage() {
                         demand_value?: number;
                         per_unit?: number;
                         series_count?: number;
+                        segment?: string;
                       };
+                      const segment = skuMix.segments.find((s) => s.key === row?.segment);
                       return (
                         <div style={TOOLTIP}>
                           <div className="text-[11px] font-semibold">{row?.name}</div>
+                          {segment ? (
+                            <div
+                              className="text-[10px] font-semibold"
+                              style={{ color: segment.colour }}
+                            >
+                              {segment.label}
+                            </div>
+                          ) : null}
                           <div className="text-[10.5px]">{num(row?.demand_units)} units ordered</div>
                           <div className="text-[10.5px]">{inr(row?.demand_value)} demand value</div>
                           <div className="text-[10.5px]">{inr(row?.per_unit)} per unit</div>
@@ -866,90 +1093,27 @@ export function OverallAnalysisPage() {
                       );
                     }}
                   />
-                  <Scatter data={skuScatter} isAnimationActive={false}>
-                    {skuScatter.map((row, i) => (
-                      <Cell
-                        key={row.name}
-                        fill={SERIES_COLORS[i % SERIES_COLORS.length]}
-                        fillOpacity={0.72}
-                      />
-                    ))}
-                  </Scatter>
+                  <Legend
+                    verticalAlign="top"
+                    align="right"
+                    iconSize={8}
+                    wrapperStyle={{ fontSize: 10, paddingBottom: 6 }}
+                  />
+                  {/* One series per group rather than per-mark `Cell`s: the
+                      colour then means the group, the legend names it, and
+                      clicking a legend entry isolates it. */}
+                  {skuMix.segments.map((segment) => (
+                    <Scatter
+                      key={segment.key}
+                      name={segment.label}
+                      data={skuMix.marks.filter((m) => m.segment === segment.key)}
+                      fill={segment.colour}
+                      fillOpacity={segment.key === 'tail' ? 0.34 : 0.72}
+                      isAnimationActive={false}
+                    />
+                  ))}
                 </ScatterChart>
               </ResponsiveContainer>
-            </Panel>
-
-            {/* Last in the section and full width: 136 SKUs cannot be read in a
-                half-width panel, and every chart above it is a summary this one
-                breaks down. */}
-            <Panel
-              className="lg:col-span-2 xl:col-span-4"
-              title="The SKUs That Carry the Demand"
-              accent={NAVY}
-              note={
-                pareto.rows.length
-                  ? `All ${pareto.rows.length} SKUs, tallest first. Navy bars are the ones that make up the first ${pareto.coreShare}% of ordered units. Labels show each SKU's share of units; shares under 1% are left off and read off the tooltip, which also gives ordered value and its share of the money.`
-                  : 'SKUs ranked by ordered units.'
-              }
-            >
-              {/* A floor width, then scroll. Below about 1,200px the 136 SKU
-                  labels start to touch each other, and an unreadable axis is
-                  worse than a scrollbar. */}
-              <div className="overflow-x-auto">
-                <div className="min-w-[1200px]">
-              <ResponsiveContainer width="100%" height={560}>
-                <ComposedChart data={pareto.rows} margin={{ top: 46, right: 8, left: 4, bottom: 0 }}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
-                  <XAxis
-                    dataKey="short"
-                    tick={{ ...TICK, fontSize: 9 }}
-                    tickLine={false}
-                    interval={0}
-                    angle={-90}
-                    textAnchor="end"
-                    height={176}
-                  />
-                  <YAxis yAxisId="units" tick={TICK} tickFormatter={(value: number) => num(value)} width={56} />
-                  {/* Written out rather than left to Recharts' "name : value"
-                      line, which put the money in the label slot and read
-                      backwards. Units and value each get their own line. */}
-                  <Tooltip
-                    cursor={{ fill: 'var(--color-surface-2)' }}
-                    content={({ active, payload }) => {
-                      const row = active ? payload?.[0]?.payload : null;
-                      if (!row) return null;
-                      return (
-                        <div style={{ ...TOOLTIP, padding: '8px 10px', lineHeight: 1.55 }}>
-                          <div style={{ fontWeight: 600, marginBottom: 4 }}>{row.name}</div>
-                          <div>
-                            {num(row.demand_units)} units · <strong>{row.share_pct}%</strong> of all ordered units
-                          </div>
-                          <div>
-                            {inr(row.demand_value)} · <strong>{row.value_pct}%</strong> of all ordered value
-                          </div>
-                        </div>
-                      );
-                    }}
-                  />
-                  <Bar yAxisId="units" dataKey="demand_units" name="Ordered units" radius={[2, 2, 0, 0]} isAnimationActive={false}>
-                    {pareto.rows.map((r) => (
-                      <Cell key={r.name} fill={r.core ? NAVY : '#cbd5e1'} />
-                    ))}
-                    {/* Rotated like the axis. Bars sit about 8px apart, so a
-                        horizontal "5.6%" overlapped its neighbours. */}
-                    <LabelList
-                      dataKey="share_pct"
-                      position="top"
-                      angle={-90}
-                      offset={18}
-                      formatter={(v: number) => (v >= 1 ? `${v}%` : '')}
-                      style={{ ...LABEL, fontSize: 9 }}
-                    />
-                  </Bar>
-                </ComposedChart>
-              </ResponsiveContainer>
-                </div>
-              </div>
             </Panel>
           </div>
           </section>
@@ -1014,7 +1178,12 @@ export function OverallAnalysisPage() {
               </ResponsiveContainer>
             </Panel>
 
-            <Panel className="xl:col-span-2" title="Seasonality" accent={GREEN} note="Mean ordered units per calendar month.">
+            <Panel
+              className="xl:col-span-2"
+              title="Seasonality"
+              accent={GREEN}
+              note="Mean ordered units per calendar month, averaged across the years in the window."
+            >
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={summary.seasonality} margin={{ top: 16, right: 6, left: -12, bottom: 0 }} barCategoryGap="22%">
                   <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-border)" />
@@ -1032,10 +1201,13 @@ export function OverallAnalysisPage() {
                     tickFormatter={(value: string) => String(value).slice(0, 1)}
                   />
                   <YAxis tick={TICK} tickFormatter={(value: number) => num(value)} />
+                  {/* `observations` is a count of YEARS. It used to be a count
+                      of periods, which on a weekly panel made every bar claim
+                      ten of them over a two-year window (D-145). The number is
+                      the same two or three on nearly every bar, so it is stated
+                      once below rather than on every hover. */}
                   <Tooltip
-                    formatter={(value: number, _name, item) =>
-                      [`${num(value)} units`, `${(item?.payload as { observations?: number })?.observations ?? 0} observation(s)`] as [string, string]
-                    }
+                    formatter={(value: number) => [`${num(value)} units`, 'Average'] as [string, string]}
                     contentStyle={TOOLTIP}
                   />
                   <Bar dataKey="mean_demand_units" radius={[4, 4, 0, 0]} isAnimationActive={false}>
@@ -1046,7 +1218,7 @@ export function OverallAnalysisPage() {
                 </BarChart>
               </ResponsiveContainer>
               <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
-                Faded columns rest on a single observation.
+                {seasonSpan}. Faded columns rest on a single year.
               </p>
             </Panel>
 

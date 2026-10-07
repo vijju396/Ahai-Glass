@@ -10,9 +10,18 @@ export interface FilterOption {
 export interface AnalyticsFilters {
   workspace_scope?: WorkspaceScope;
   branches: FilterOption[];
+  /** Every SKU in the frame, so a SKU picker with no branch chosen offers the
+   *  whole list rather than the top N of it (D-144). Optional because older
+   *  payloads predate it. */
+  skus?: FilterOption[];
   product_groups: FilterOption[];
   value_classes: FilterOption[];
   regions: FilterOption[];
+  /** The three product axes Overall Analysis both charts and filters on. Older
+   *  payloads predate them, so every reader must tolerate `undefined`. */
+  glass_types?: FilterOption[];
+  vehicle_categories?: FilterOption[];
+  vehicle_age_categories?: FilterOption[];
   period_range: { min: string; max: string } | null;
   periods: string[];
   /** First month (YYYY-MM) holding real orders; earlier rows are sales proxy
@@ -105,6 +114,13 @@ export interface AnalyticsSummary {
     series_count: number;
     branch_count: number;
     sku_count: number;
+    /** Counted on the order book alone, so they share a universe with
+     *  `workspace_scope.total_branches` / `total_skus`. `sku_count` above
+     *  counts every SKU with a row, which on the network frame includes
+     *  sales-proxy-only ones and read "2,315 of 2,063" (D-143). Optional:
+     *  older payloads do not carry them. */
+    ordered_branch_count?: number;
+    ordered_sku_count?: number;
     rows: number;
     despatch_rows_excluded_from_fill_rate: number;
   };
@@ -228,6 +244,9 @@ export interface AnalyticsQuery {
   sku?: string;
   product_group?: string;
   value_class?: string;
+  glass_type?: string;
+  vehicle_category?: string;
+  vehicle_age_category?: string;
   start_period?: string;
   end_period?: string;
   grain?: string;
@@ -502,11 +521,28 @@ export interface SeriesOption {
 }
 
 export const seriesKeys = {
-  options: (branch?: string) => ['analytics', 'series', branch ?? 'all'] as const,
+  options: (branch?: string, sku?: string, fullNetwork = false) =>
+    ['analytics', 'series', fullNetwork ? 'network' : 'workspace', branch ?? '', sku ?? ''] as const,
 };
 
-export function fetchSeriesOptions(branch?: string): Promise<{ items: SeriesOption[] }> {
-  return getJson<{ items: SeriesOption[] }>('/analytics/series', { branch, limit: 1000 });
+/** Branch x SKU pairs, scoped.
+ *
+ *  Ask for a `branch` or a `sku`, not for everything: the full network holds
+ *  68,597 pairs and no `limit` can return them, so an unscoped network call is
+ *  a truncated answer wearing a complete one's clothes (D-144). The response
+ *  carries `truncated` so a caller can tell. 5,000 is above the largest
+ *  complete answer either scoping can produce - a branch carries at most 2,315
+ *  SKUs, a SKU at most 53 branches.
+ */
+export function fetchSeriesOptions(
+  branch?: string,
+  sku?: string,
+  fullNetwork = false,
+): Promise<{ items: SeriesOption[]; truncated?: boolean; total_series?: number }> {
+  return getJson<{ items: SeriesOption[]; truncated?: boolean; total_series?: number }>(
+    '/analytics/series',
+    { branch, sku, limit: 5000, full_network: fullNetwork },
+  );
 }
 
 // ----------------------------------------------------------------------

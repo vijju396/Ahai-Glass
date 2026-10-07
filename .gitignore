@@ -46,3 +46,7 @@ desktop.ini
 runtime/backups/
 =
 =[0-9]*
+
+# Incremental typecheck cache. A stale one makes `tsc --noEmit` exit 0
+# against code the browser is already failing on.
+frontend/tsconfig.tsbuildinfo
